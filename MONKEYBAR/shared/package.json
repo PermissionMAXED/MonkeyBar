@@ -1,0 +1,19 @@
+{
+  "name": "@monkeybar/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MONKEYBAR shared contract: protocol, rules constants, deck math, RNG, and catalogs",
+  "main": "src/protocol.js",
+  "exports": {
+    ".": "./src/protocol.js",
+    "./protocol.js": "./src/protocol.js",
+    "./constants.js": "./src/constants.js",
+    "./cards.js": "./src/cards.js",
+    "./rng.js": "./src/rng.js",
+    "./monkeys.js": "./src/monkeys.js",
+    "./modes.js": "./src/modes.js",
+    "./maps.js": "./src/maps.js",
+    "./emotes.js": "./src/emotes.js"
+  }
+}

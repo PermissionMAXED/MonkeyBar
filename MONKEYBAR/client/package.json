@@ -1,0 +1,16 @@
+{
+  "name": "@monkeybar/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MONKEYBAR three.js client",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@monkeybar/shared": "*",
+    "three": "^0.170.0"
+  }
+}
