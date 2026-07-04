@@ -175,9 +175,10 @@ export function initUI(store, socket, engine) {
       emotes: p.emotes ?? [],
       quickPhrases: p.quickPhrases ?? [],
     });
-    // Push the locally persisted monkey pick to the server (outside game only).
+    // Push the locally persisted monkey pick to the server (outside game only —
+    // a resumed session may be mid-match, where setProfile is rejected).
     const profile = store.get('profile');
-    if (profile?.monkeyId) socket.send(MSG.SET_PROFILE, { monkeyId: profile.monkeyId });
+    if (profile?.monkeyId && !p.resumed) socket.send(MSG.SET_PROFILE, { monkeyId: profile.monkeyId });
     if (store.get('screen') === 'boot') ctx.go('mainMenu');
     if (p.resumed) toast('Session resumed 🐒');
   });

@@ -58,6 +58,15 @@ export function createHud(ctx) {
   let selectedIds = new Set();
   /** @type {{aid: string, kind: 'play'|'call'|'chip', cardIds?: string[]}|null} */
   let pendingAction = null;
+  /** P6 glue: aid → action for ack resolution. The real server broadcasts
+   *  `played`/`turn` BEFORE the `actionAck`, so pendingAction is already
+   *  cleared by the turnInfo handler when the ack lands — resolve by aid. */
+  const sentActions = new Map();
+  function trackAction(action) {
+    pendingAction = action;
+    sentActions.set(action.aid, action);
+    if (sentActions.size > 8) sentActions.delete(sentActions.keys().next().value);
+  }
   let visible = false;
   let rafId = 0;
   /** @type {Map<number, {plate: HTMLElement, bar: HTMLElement|null}>} */
@@ -297,7 +306,7 @@ export function createHud(ctx) {
     const cardIds = [...selectedIds];
     if (cardIds.length < MIN_PLAY || cardIds.length > MAX_PLAY) return;
     const aid = socket.nextAid();
-    pendingAction = { aid, kind: 'play', cardIds };
+    trackAction({ aid, kind: 'play', cardIds });
     socket.send(MSG.PLAY, { aid, cardIds });
     renderHand();
     renderCall();
@@ -332,7 +341,7 @@ export function createHud(ctx) {
   function onCallLiar() {
     if (pendingAction) return;
     const aid = socket.nextAid();
-    pendingAction = { aid, kind: 'call' };
+    trackAction({ aid, kind: 'call' });
     socket.send(MSG.CALL_LIAR, { aid });
     renderCall();
     renderHand();
@@ -342,9 +351,11 @@ export function createHud(ctx) {
   // actionAck (§3.3) — resolve pending actions
   // ---------------------------------------------------------------------
   store.on('actionAck', (ack) => {
-    if (!ack || !pendingAction || ack.aid !== pendingAction.aid) return;
-    const action = pendingAction;
-    pendingAction = null;
+    if (!ack) return;
+    const action = sentActions.get(ack.aid) ?? null;
+    if (!action) return;
+    sentActions.delete(ack.aid);
+    if (pendingAction?.aid === ack.aid) pendingAction = null;
     if (ack.ok) {
       if (action.kind === 'play') {
         const s = snap();
@@ -388,7 +399,9 @@ export function createHud(ctx) {
     );
   });
 
-  store.on('revealInfo', (r) => {
+  // P6 glue: fxReveal is published by game/gameClient.js when the 3D flip
+  // actually plays (the raw revealInfo store key lands ahead of choreography).
+  store.on('fxReveal', (r) => {
     if (!r || !visible) return;
     const s = snap();
     const target = s?.seats?.find((x) => x.seat === r.targetSeat);
@@ -431,7 +444,9 @@ export function createHud(ctx) {
     );
   });
 
-  store.on('cannonResult', (c) => {
+  // P6 glue: fxCannon fires at the THOOM/click inside the cannon sequence —
+  // never before the drumroll resolves (no spoilers).
+  store.on('fxCannon', (c) => {
     if (!c || !visible) return;
     const s = snap();
     const seat = s?.seats?.find((x) => x.seat === c.seat);
@@ -449,7 +464,8 @@ export function createHud(ctx) {
     );
   });
 
-  store.on('roundEndInfo', (info) => {
+  // P6 glue: fxRoundEnd carries the *remaining* intermission (queue-adjusted).
+  store.on('fxRoundEnd', (info) => {
     if (!info || !visible) return;
     showBanner(
       el('div', { className: 'phase-banner' }, [
@@ -508,7 +524,7 @@ export function createHud(ctx) {
       onClick: () => {
         if (!canChip) return;
         const aid = socket.nextAid();
-        pendingAction = { aid, kind: 'chip' };
+        trackAction({ aid, kind: 'chip' });
         socket.send(MSG.USE_CHIP, { aid });
         renderPenalty();
       },

@@ -303,6 +303,14 @@ export function createEngine(canvas) {
     getLocalSeat: () => localSeat,
     getMonkey: (seat) => monkeyAt(seat),
 
+    /** P6 glue: leave first-person (spectator/orbit cam) — un-hides the local monkey. */
+    setSpectatorView() {
+      const prev = seatEntry(localSeat);
+      if (prev) prev.monkey.root.visible = true;
+      localSeat = -1;
+      tableView.clearHand();
+    },
+
     // ------------------------------------------------- choreography
     /** Play a canned clip ('cardPlay'|'slam'|'point'|'cheer'|'sob'|'shock'|'cannonHit'|'survive'|...). */
     playClip(seat, clipName) {
@@ -357,8 +365,9 @@ export function createEngine(canvas) {
      * The full Coconut Cannon drama. Resolves when the lights come back up.
      * @param {number} seat  victim seat
      * @param {boolean} hit  true → KO, false → survival click
+     * @param {{onResolve?: () => void}} [opts]  P6 glue: onResolve fires at the THOOM/click
      */
-    async cannonSequence(seat, hit) {
+    async cannonSequence(seat, hit, opts = {}) {
       const victim = monkeyAt(seat);
       const victimPos = headPos(seat);
       const cannonPos = new THREE.Vector3(0, TABLE_TOP_Y + 0.12, 0);
@@ -402,6 +411,7 @@ export function createEngine(canvas) {
       sparkStop();
 
       // 4 — resolution
+      opts.onResolve?.();
       if (hit) {
         const muzzle = cannon ? cannon.muzzleWorldPos() : cannonPos.clone();
         const dir = victimPos.clone().sub(muzzle).normalize();

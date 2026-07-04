@@ -6,6 +6,7 @@ import { createEngine } from './three/engine.js';
 import { createStore } from './state/store.js';
 import { createSocket } from './net/socket.js';
 import { initUI } from './ui/screens.js';
+import { createGameClient } from './game/gameClient.js';
 
 const canvas = document.getElementById('scene');
 
@@ -14,6 +15,11 @@ const store = createStore();
 const socket = createSocket(store);
 
 initUI(store, socket, engine);
+
+// P6: the choreographer must subscribe AFTER initUI so the P5 store reducers
+// run first on every server event (snapshot stays ahead of the 3D drama).
+const gameClient = createGameClient(engine, store, socket);
+if (import.meta.env?.DEV && window.__mb) window.__mb.gameClient = gameClient;
 
 engine.start();
 socket.connect();

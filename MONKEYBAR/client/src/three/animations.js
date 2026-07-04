@@ -348,6 +348,11 @@ const CLIP_TABLE = {
     const startY = root.position.y;
     // launch up & back (local -z is away from the table since monkeys face the center)
     const back = 0.9;
+    const startX = root.position.x;
+    const startZ = root.position.z;
+    // world-space "away from table" for this seat (root faces the center)
+    const dirX = -Math.sin(root.rotation.y);
+    const dirZ = -Math.cos(root.rotation.y);
     await Promise.all([
       anim.to(j.armL.rotation, { x: -2.8, z: 0.9 }, 0.3, { ease: Ease.quadOut }).promise,
       anim.to(j.armR.rotation, { x: -2.8, z: -0.9 }, 0.3, { ease: Ease.quadOut }).promise,
@@ -356,7 +361,8 @@ const CLIP_TABLE = {
           duration: 0.55,
           ease: Ease.linear,
           onUpdate(k) {
-            root.position.z = -back * k * 1.1;
+            root.position.x = startX + dirX * back * k * 1.1;
+            root.position.z = startZ + dirZ * back * k * 1.1;
             root.position.y = startY + 0.55 * Math.sin(k * Math.PI) - (startY - floorY) * k * k;
             root.rotation.x = -k * Math.PI * 0.55;
           },
