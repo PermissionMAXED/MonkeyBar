@@ -386,8 +386,11 @@ test('e2e: full round with bot seats ends in a cannon shot; spectate + reconnect
           assert.equal(msg.p.ok, true, `action rejected: ${msg.p.code}`);
           break;
         case MSG.CALLED:
+          // P3 bot brains call "MONKEY LIES!" too, so the caller may be any
+          // seat that beat us to it — not necessarily ours.
           sawCalled = true;
-          assert.equal(msg.p.callerSeat, mySeat);
+          assert.equal(typeof msg.p.callerSeat, 'number');
+          assert.notEqual(msg.p.callerSeat, msg.p.targetSeat);
           assert.equal(msg.p.targetSeat, lastPlay.seat);
           break;
         case MSG.REVEAL:
@@ -468,16 +471,32 @@ test('e2e: full round with bot seats ends in a cannon shot; spectate + reconnect
     assert.equal(r2.roundNo, 2);
     const iAmAlive = r2.seats.find((s) => s.seat === mySeat).alive;
     if (iAmAlive) {
-      const hand2 = (await me2.expect(MSG.HAND)).p.cards;
-      await me2.expect(MSG.TURN, { where: (p) => p.seat === mySeat, timeout: 10000 });
-      // aid dedup: replaying the same aid returns the cached ack instead of
-      // re-running the action (a real second play would be NOT_YOUR_TURN).
-      me2.send(MSG.PLAY, { aid: 'dup-1', cardIds: [hand2[0].id] });
-      const ack1 = (await me2.expect(MSG.ACTION_ACK, { where: (p) => p.aid === 'dup-1' })).p;
-      assert.equal(ack1.ok, true);
-      me2.send(MSG.PLAY, { aid: 'dup-1', cardIds: [hand2[0].id] });
-      const ack2 = (await me2.expect(MSG.ACTION_ACK, { where: (p) => p.aid === 'dup-1' })).p;
-      assert.deepEqual(ack2, ack1);
+      // P3 bot brains may call "MONKEY LIES!" and end a round before our turn
+      // ever arrives, so scan across rounds for our next turn, tracking the
+      // freshest dealt hand (each round re-deals) and whether we can call.
+      let hand2 = (await me2.expect(MSG.HAND)).p.cards;
+      let myTurn = null;
+      const scanDeadline = Date.now() + 90000;
+      while (!myTurn && Date.now() < scanDeadline) {
+        const msg = await me2.next({ timeout: 15000 });
+        if (msg.t === MSG.HAND) hand2 = msg.p.cards;
+        else if (msg.t === MSG.ELIMINATED && msg.p.seat === mySeat) break;
+        else if (msg.t === MSG.TURN && msg.p.seat === mySeat) myTurn = msg.p;
+      }
+      if (myTurn) {
+        // aid dedup: replaying the same aid returns the cached ack instead of
+        // re-running the action (a real second action would be rejected).
+        // Call when allowed (always legal, even as the last monkey holding),
+        // else play a card from the current deal.
+        if (myTurn.canCall) me2.send(MSG.CALL_LIAR, { aid: 'dup-1' });
+        else me2.send(MSG.PLAY, { aid: 'dup-1', cardIds: [hand2[0].id] });
+        const ack1 = (await me2.expect(MSG.ACTION_ACK, { where: (p) => p.aid === 'dup-1' })).p;
+        assert.equal(ack1.ok, true);
+        if (myTurn.canCall) me2.send(MSG.CALL_LIAR, { aid: 'dup-1' });
+        else me2.send(MSG.PLAY, { aid: 'dup-1', cardIds: [hand2[0].id] });
+        const ack2 = (await me2.expect(MSG.ACTION_ACK, { where: (p) => p.aid === 'dup-1' })).p;
+        assert.deepEqual(ack2, ack1);
+      }
     }
 
     // The spectator watched everything and never received a single hand

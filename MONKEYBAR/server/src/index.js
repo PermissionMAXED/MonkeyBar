@@ -21,6 +21,7 @@ import { EMOTES, QUICK_PHRASES, getEmote, getQuickPhrase } from '@monkeybar/shar
 import { createConnection } from './net/connection.js';
 import { createSessions } from './net/sessions.js';
 import { createLobbyManager } from './lobby/lobbyManager.js';
+import { initBotManager } from './bots/botManager.js';
 import { createLogger } from './util/log.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -404,6 +405,10 @@ export function startServer({
   const log = createLogger('monkeybar', logLevel);
   const sessions = createSessions({ log: log.child('sessions') });
   const lobby = createLobbyManager({ sessions, quickFillDelayMs, log: log.child('lobby') });
+  // P3 wiring: bot brains — attaches to every gameRoom's bot seats, upgrades
+  // the §3.4 disconnect-hold auto-play to the Cautious policy, and gives
+  // seats converted from disconnected players a real brain.
+  const bots = initBotManager({ sessions, lobby, log: log.child('bots') });
   const { dispatch, handleClose } = createDispatcher(sessions, lobby, log);
 
   const httpServer = http.createServer((req, res) => {
@@ -437,6 +442,7 @@ export function startServer({
         lobby,
         close: () =>
           new Promise((resolveClose) => {
+            bots.dispose();
             lobby.shutdown();
             sessions.shutdown();
             for (const client of wss.clients) client.terminate();

@@ -22,6 +22,18 @@ import { createLogger } from '../util/log.js';
  *  Read at construction time so tests can tune it via the environment. */
 const defaultAutoDelayMs = () => Number(process.env.MONKEYBAR_BOT_DELAY_MS) || 800;
 
+// P3 wiring: bots/botManager.js registers itself here (once, at server
+// bootstrap) and gets handed every freshly created gameRoom so it can attach
+// brains to the bot seats before the match starts. Null (tests / no bots) is
+// fine — the fallback auto-play below keeps every seat moving without it.
+/** @type {((gameRoom: Object) => void)|null} */
+let gameRoomCreatedHook = null;
+
+/** @param {((gameRoom: Object) => void)|null} fn */
+export function setGameRoomCreatedHook(fn) {
+  gameRoomCreatedHook = fn;
+}
+
 const err = (code) => ({ ok: false, code });
 
 /**
@@ -349,7 +361,7 @@ export function createGameRoom({
     seatFeeds.clear();
   }
 
-  return {
+  const api = {
     roomId,
     modeId,
     mapId,
@@ -368,4 +380,15 @@ export function createGameRoom({
       return ended;
     },
   };
+
+  // P3 wiring: let the botManager claim this room's bot seats (see hook above).
+  if (gameRoomCreatedHook) {
+    try {
+      gameRoomCreatedHook(api);
+    } catch (e) {
+      log.warn('gameRoomCreated hook failed:', e.message);
+    }
+  }
+
+  return api;
 }
