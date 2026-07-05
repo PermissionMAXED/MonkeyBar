@@ -224,7 +224,9 @@ test('lobby: create/join/ready/bots/settings/host-powers/rate-limits', async () 
     host.send(MSG.START_GAME, {});
     assert.equal((await host.expect(MSG.ERROR)).p.code, ERROR_CODES.BAD_STATE);
 
-    // Stub modes are selectable but not startable.
+    // Mode switching round-trips (Wave 3 made every locked mode playable, so
+    // the old "stub modes are not startable" NOT_PLAYABLE check is retired —
+    // startability is covered by the per-mode engine + e2e tests).
     host.send(MSG.UPDATE_SETTINGS, { patch: { mode: 'bananaDice' } });
     await host.expect(MSG.ROOM_STATE, { where: (p) => p.room.mode === 'bananaDice' });
     host.send(MSG.ADD_BOT, {});
@@ -235,8 +237,6 @@ test('lobby: create/join/ready/bots/settings/host-powers/rate-limits', async () 
     await host.expect(MSG.ROOM_STATE, {
       where: (p) => p.room.members.every((m) => m.ready),
     });
-    host.send(MSG.START_GAME, {});
-    assert.equal((await host.expect(MSG.ERROR)).p.code, 'NOT_PLAYABLE');
 
     // Chat reaches the room; a second message within 1 s is rate-limited.
     host.send(MSG.CHAT, { text: 'trust no monkey' });
@@ -295,10 +295,13 @@ test('quickMatch fills with bots and auto-starts; cancelQuick backs out', async 
     assert.equal(start.snapshot.seats.filter((s) => s.isBot).length, 3);
     assert.equal(typeof start.snapshot.yourSeat, 'number');
 
-    // Non-playable modes can't be quickmatched.
-    const { c: q3 } = await helloClient(server.port, 'Wrong');
+    // Wave 3: junglePoker is live — quickmatch accepts it (cancel before the
+    // bot fill so no match auto-starts under the test).
+    const { c: q3 } = await helloClient(server.port, 'Poker');
     q3.send(MSG.QUICK_MATCH, { mode: 'junglePoker' });
-    assert.equal((await q3.expect(MSG.ERROR)).p.code, 'NOT_PLAYABLE');
+    assert.ok((await q3.expect(MSG.MATCH_FOUND)).p.roomId);
+    q3.send(MSG.CANCEL_QUICK, {});
+    assert.equal((await q3.expect(MSG.LEFT_ROOM)).p.reason, 'left');
   } finally {
     await server.close();
   }
