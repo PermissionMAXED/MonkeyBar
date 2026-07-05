@@ -27,6 +27,9 @@ import { Ease } from '../../three/animations.js';
 let bomb = null;
 /** Seat the coconut currently rests at (-1 = hidden / between rounds). */
 let atSeat = -1;
+/** engine.onFrame remover for the bomb's blink/shiver updater. */
+let offFrame = null;
+let wired = false;
 
 /** Where the coconut sits on the table in front of a seat. */
 function restPos(seat) {
@@ -43,23 +46,37 @@ const seatName = (tools, seat) =>
 
 /** Lazy prop creation + the module's only global wiring (once, ever). */
 function ensureBomb(tools) {
+  if (!wired) {
+    wired = true;
+    // Leaving the game screen (leave/kick/back to menu) must not strand a
+    // ticking coconut over the attract-mode bar — and the prop's geometries/
+    // materials are per-instance, so tear it down fully (propsBomb dispose).
+    tools.store.on('screen', (screen) => {
+      if (screen !== 'game') destroyBomb();
+    });
+  }
   if (bomb) return bomb;
-  const { engine, store } = tools;
+  const { engine } = tools;
   bomb = createBombProp();
   bomb.group.visible = false;
   engine.scene.add(bomb.group);
-  engine.onFrame((dt) => bomb.update(dt));
-  // Leaving the game screen (leave/kick/back to menu) must not strand a
-  // ticking coconut over the attract-mode bar.
-  store.on('screen', (screen) => {
-    if (screen !== 'game') hideBomb();
-  });
+  offFrame = engine.onFrame((dt) => bomb.update(dt));
   return bomb;
 }
 
 function hideBomb() {
   if (!bomb) return;
   bomb.group.visible = false;
+  atSeat = -1;
+}
+
+/** Full teardown: dispose geometries/materials + drop the frame updater. */
+function destroyBomb() {
+  if (!bomb) return;
+  offFrame?.();
+  offFrame = null;
+  bomb.dispose();
+  bomb = null;
   atSeat = -1;
 }
 

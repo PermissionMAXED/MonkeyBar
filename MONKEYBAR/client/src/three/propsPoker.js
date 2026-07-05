@@ -4,19 +4,21 @@
 // sweeps. Everything procedural, mirroring materials.js conventions.
 
 import * as THREE from 'three';
-import { makeCanvas, canvasTexture, matte } from './materials.js';
+import { makeCanvas, canvasTexture, matte, drawFruitGlyph, markShared, disposeTransientObject } from './materials.js';
 import { createCard, CARD_W, CARD_H } from './props.js';
 
 // ---------------------------------------------------------------------------
 // Suit + rank metadata (suits are the four fruit suits of shared/poker.js)
 // ---------------------------------------------------------------------------
 
-/** Per-suit face styling: corner letter, center glyph, ink color. */
+/** Per-suit face styling: corner letter + ink color (the center glyph is the
+ *  materials.js VECTOR fruit painter — never emoji, which tofu on headless
+ *  renderers and clash with the procedural art). */
 export const POKER_SUIT_META = Object.freeze({
-  banana: { letter: 'B', glyph: '🍌', color: '#b8860b' },
-  coconut: { letter: 'C', glyph: '🥥', color: '#6b4a2e' },
-  mango: { letter: 'M', glyph: '🥭', color: '#c2571d' },
-  golden: { letter: '★', glyph: '✨', color: '#a67c00' },
+  banana: { letter: 'B', color: '#b8860b' },
+  coconut: { letter: 'C', color: '#6b4a2e' },
+  mango: { letter: 'M', color: '#c2571d' },
+  golden: { letter: '★', color: '#a67c00' },
 });
 
 /** '2'…'10', J, Q, K, A (rank 14). */
@@ -28,7 +30,8 @@ export function rankLabel(rank) {
 // Card faces
 // ---------------------------------------------------------------------------
 
-/** @type {Map<string, THREE.CanvasTexture>} */
+/** @type {Map<string, THREE.CanvasTexture>} module-level SHARED cache — the
+ *  52 face textures are reused by every card instance and never disposed. */
 const faceCache = new Map();
 
 /**
@@ -42,7 +45,7 @@ export function makePokerFaceTexture(card) {
   const W = 256;
   const H = 358;
   const { canvas, ctx } = makeCanvas(W, H);
-  const meta = POKER_SUIT_META[card.suit] ?? { letter: '?', glyph: '❓', color: '#5a3a22' };
+  const meta = POKER_SUIT_META[card.suit] ?? { letter: '?', color: '#5a3a22' };
   const label = rankLabel(card.rank);
 
   // cream face + border, matching makeFruitFaceTexture's framing
@@ -74,16 +77,16 @@ export function makePokerFaceTexture(card) {
   corner(false);
   corner(true);
 
-  // big center suit glyph (emoji, like the emote bubbles) + rank echo
+  // big center suit glyph — the shared VECTOR fruit painter (golden suit
+  // reuses the golden-banana painter) + rank echo below it
+  drawFruitGlyph(ctx, card.suit, W / 2, H / 2 - 26, 62);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = '110px system-ui, "Noto Color Emoji", sans-serif';
-  ctx.fillText(meta.glyph, W / 2, H / 2 - 14);
   ctx.fillStyle = meta.color;
   ctx.font = 'bold 64px system-ui, sans-serif';
   ctx.fillText(label, W / 2, H / 2 + 86);
 
-  const tex = canvasTexture(canvas);
+  const tex = markShared(canvasTexture(canvas)); // module cache — never disposed
   faceCache.set(key, tex);
   return tex;
 }
@@ -96,6 +99,10 @@ export function makePokerFaceTexture(card) {
  */
 export function createPokerCard(card = null) {
   const mesh = createCard(null); // back-patterned both sides, shared geometry
+  // props.js caches the rounded-card geometry + back texture at module level;
+  // tag them here so disposePokerProp never frees them out from under the pile
+  markShared(mesh.geometry);
+  if (mesh.material.map) markShared(mesh.material.map);
   mesh.userData.setFace = (c) => {
     if (c) {
       mesh.material.map = makePokerFaceTexture(c);
@@ -108,6 +115,17 @@ export function createPokerCard(card = null) {
   return mesh;
 }
 
+/**
+ * Dispose a transient poker prop (a dealt card, a flown chip, a swept pot …):
+ * frees its per-instance geometries/materials/canvas textures and detaches it.
+ * Module-level caches (face textures, card geometry/back, chip geometries) are
+ * markShared-tagged and survive.
+ * @param {import('three').Object3D} prop
+ */
+export function disposePokerProp(prop) {
+  disposeTransientObject(prop);
+}
+
 // ---------------------------------------------------------------------------
 // Banana chips (betting currency — lighter than the notched Lucky chip)
 // ---------------------------------------------------------------------------
@@ -115,6 +133,7 @@ export function createPokerCard(card = null) {
 export const POKER_CHIP_R = 0.026;
 export const POKER_CHIP_H = 0.007;
 
+/** Module-level SHARED chip geometries (markShared — never disposed). */
 let chipGeo = null;
 let chipTopGeo = null;
 const chipBodyMat = () => matte('#f0c53d', { roughness: 0.45 });
@@ -124,8 +143,8 @@ const chipTopMat = () => matte('#8a6a1e', { roughness: 0.4 });
  * One banana chip — a light two-mesh cylinder (the pot can hold dozens).
  */
 export function createPokerChip() {
-  chipGeo = chipGeo ?? new THREE.CylinderGeometry(POKER_CHIP_R, POKER_CHIP_R, POKER_CHIP_H, 18);
-  chipTopGeo = chipTopGeo ?? new THREE.CircleGeometry(POKER_CHIP_R * 0.55, 14);
+  chipGeo = chipGeo ?? markShared(new THREE.CylinderGeometry(POKER_CHIP_R, POKER_CHIP_R, POKER_CHIP_H, 18));
+  chipTopGeo = chipTopGeo ?? markShared(new THREE.CircleGeometry(POKER_CHIP_R * 0.55, 14));
   const g = new THREE.Group();
   const body = new THREE.Mesh(chipGeo, chipBodyMat());
   body.castShadow = true;

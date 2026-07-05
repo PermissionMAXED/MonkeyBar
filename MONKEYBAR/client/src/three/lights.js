@@ -4,6 +4,17 @@
 
 import * as THREE from 'three';
 
+// Module-level mirror of the ACTIVE rig's dim state (one rig lives at a time —
+// map swaps dispose the old rig before building the new one). Lets map-extra
+// updaters (e.g. the Temple braziers in mapExtras.js) ride penalty dimming
+// without holding a rig reference or creating an import cycle.
+let currentDimLevel = 1;
+
+/** Current lighting dim level, 0..1 (1 = full brightness, <1 = penalty drama). */
+export function getDimLevel() {
+  return currentDimLevel;
+}
+
 /**
  * Build the lighting rig for a map.
  * @param {THREE.Scene} scene
@@ -63,6 +74,7 @@ export function createLights(scene, mapConfig) {
   let dim = 1;
   let dimTarget = 1;
   let dimSpeed = 1;
+  currentDimLevel = 1; // fresh rig starts undimmed
   const baseKey = key.intensity;
   const baseAmbient = ambient.intensity;
   const baseHemi = hemi.intensity;
@@ -84,6 +96,7 @@ export function createLights(scene, mapConfig) {
         const dir = Math.sign(dimTarget - dim);
         dim += dir * dimSpeed * dt;
         if ((dir > 0 && dim >= dimTarget) || (dir < 0 && dim <= dimTarget)) dim = dimTarget;
+        currentDimLevel = dim;
         key.intensity = baseKey * dim;
         ambient.intensity = baseAmbient * (0.35 + 0.65 * dim);
         hemi.intensity = baseHemi * dim;

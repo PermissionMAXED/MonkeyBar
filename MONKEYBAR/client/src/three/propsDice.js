@@ -4,7 +4,7 @@
 // under. Reuses materials.js helpers; no external assets.
 
 import * as THREE from 'three';
-import { makeCanvas, canvasTexture, matte } from './materials.js';
+import { makeCanvas, canvasTexture, matte, markShared, disposeTransientObject } from './materials.js';
 
 /** Die edge length (table scale: cards are 0.115×0.16). */
 export const DIE_SIZE = 0.052;
@@ -27,6 +27,8 @@ const PIP_LAYOUT = {
   6: [[0.28, 0.22], [0.72, 0.22], [0.28, 0.5], [0.72, 0.5], [0.28, 0.78], [0.72, 0.78]],
 };
 
+/** Module-level SHARED cache (markShared — never disposed): 6 pip textures
+ *  reused by every die instance. */
 const pipFaceCache = new Map();
 
 /**
@@ -84,7 +86,7 @@ export function makeDieFaceTexture(face) {
     }
   }
 
-  const tex = canvasTexture(canvas);
+  const tex = markShared(canvasTexture(canvas)); // module cache — never disposed
   pipFaceCache.set(face, tex);
   return tex;
 }
@@ -93,15 +95,17 @@ export function makeDieFaceTexture(face) {
 // Die mesh
 // ---------------------------------------------------------------------------
 
+/** Module-level SHARED die geometry (markShared — never disposed). */
 let dieGeoCache = null;
 
 /** Rounded-cube die geometry (chamfered box — cheap, no bevel pass). */
 function dieGeometry() {
   if (dieGeoCache) return dieGeoCache;
-  dieGeoCache = new THREE.BoxGeometry(DIE_SIZE, DIE_SIZE, DIE_SIZE, 1, 1, 1);
+  dieGeoCache = markShared(new THREE.BoxGeometry(DIE_SIZE, DIE_SIZE, DIE_SIZE, 1, 1, 1));
   return dieGeoCache;
 }
 
+/** Module-level SHARED face materials (markShared — never disposed). */
 let dieMaterialsCache = null;
 
 /** Six face materials in Box order [+x,−x,+y,−y,+z,−z] = faces [3,4,1,6,2,5]
@@ -111,11 +115,13 @@ function dieMaterials() {
   const BOX_FACES = [3, 4, 1, 6, 2, 5];
   dieMaterialsCache = BOX_FACES.map(
     (f) =>
-      new THREE.MeshStandardMaterial({
-        map: makeDieFaceTexture(f),
-        roughness: 0.5,
-        metalness: 0.02,
-      })
+      markShared(
+        new THREE.MeshStandardMaterial({
+          map: makeDieFaceTexture(f),
+          roughness: 0.5,
+          metalness: 0.02,
+        })
+      )
   );
   return dieMaterialsCache;
 }
@@ -166,6 +172,7 @@ export function createDie(face = 1) {
 // Coconut shell
 // ---------------------------------------------------------------------------
 
+/** Module-level SHARED husk texture (markShared — never disposed). */
 let shellTexCache = null;
 
 /** Hairy coconut-husk CanvasTexture (fibres + darker patches). */
@@ -201,7 +208,7 @@ function makeShellTexture() {
     ctx.ellipse(rnd() * S, rnd() * S, 10 + rnd() * 26, 8 + rnd() * 18, rnd() * Math.PI, 0, Math.PI * 2);
     ctx.fill();
   }
-  shellTexCache = canvasTexture(canvas, { repeat: [2, 1] });
+  shellTexCache = markShared(canvasTexture(canvas, { repeat: [2, 1] })); // module cache
   return shellTexCache;
 }
 
@@ -261,6 +268,18 @@ export function createShell(scale = 1) {
 
   g.userData.radius = r;
   return g;
+}
+
+/**
+ * Dispose a transient dice-mode prop (a coconut shell built per round, or a
+ * die when it truly leaves the scene): frees per-instance geometries /
+ * materials / canvas textures and detaches it. The module caches (pip
+ * textures, die geometry+materials, husk texture) are markShared-tagged and
+ * survive, so future rounds rebuild for free.
+ * @param {import('three').Object3D} prop
+ */
+export function disposeDiceProp(prop) {
+  disposeTransientObject(prop);
 }
 
 /**

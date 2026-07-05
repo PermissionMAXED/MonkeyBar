@@ -16,6 +16,7 @@
 
 import * as THREE from 'three';
 import { woodMaterial, neonMaterial, matte, glassMaterial, brassMaterial, makeCanvas, canvasTexture } from './materials.js';
+import { getDimLevel } from './lights.js';
 
 // Mirror of barScene constants (no import to avoid a cycle).
 const ROOM_RADIUS = 5.4;
@@ -572,17 +573,20 @@ function brazier(ctx) {
     ctx.group.add(g);
     const phase = bx; // decorrelate the two braziers
     ctx.updaters.push((dt, elapsed) => {
+      // penalty dimming (lights.js getDimLevel) douses the fire too — braziers
+      // blazing at full through a blackout broke the Temple's drama
+      const dim = getDimLevel();
       for (const f of flames) {
         f.mesh.scale.y = 1 + Math.sin(elapsed * 12 + f.phase + phase) * 0.24;
         f.mesh.scale.x = f.mesh.scale.z = 1 + Math.sin(elapsed * 9 + f.phase * 2) * 0.1;
-        f.mat.emissiveIntensity = 1.9 + Math.sin(elapsed * 15 + f.phase + phase) * 0.4;
+        f.mat.emissiveIntensity = (1.9 + Math.sin(elapsed * 15 + f.phase + phase) * 0.4) * dim;
       }
       for (const e of embers) {
         e.mesh.position.y += e.speed * dt;
         e.mesh.position.x += Math.sin(elapsed * 3 + e.wobble) * 0.0012;
         if (e.mesh.position.y > 1.65) e.mesh.position.y = 0.9;
       }
-      fireLight.intensity = 3.2 + Math.sin(elapsed * 13 + phase) * 0.7 + Math.sin(elapsed * 31 + phase) * 0.35;
+      fireLight.intensity = (3.2 + Math.sin(elapsed * 13 + phase) * 0.7 + Math.sin(elapsed * 31 + phase) * 0.35) * dim;
     });
   }
 }

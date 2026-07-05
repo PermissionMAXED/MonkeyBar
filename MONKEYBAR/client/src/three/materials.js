@@ -27,6 +27,46 @@ export function canvasTexture(canvas, { repeat = null } = {}) {
   return tex;
 }
 
+// ---------------------------------------------------------------------------
+// Shared-cache tagging + transient-prop disposal
+// ---------------------------------------------------------------------------
+
+/**
+ * Tag a module-level cached resource (geometry / material / texture) as
+ * SHARED so disposeTransientObject() never frees it. Every props module tags
+ * its caches explicitly (faceCache, chipGeo, dieGeoCache, pipFaceCache,
+ * shellTexCache, card geometry/back texture, …).
+ * @template {{userData: Object}} T
+ * @param {T} resource
+ * @returns {T}
+ */
+export function markShared(resource) {
+  resource.userData.sharedCache = true;
+  return resource;
+}
+
+/**
+ * Dispose a transient prop subtree's PER-INSTANCE geometries, materials and
+ * canvas textures, then detach it from the scene graph. Anything tagged via
+ * markShared() (module-level caches reused across instances) is skipped.
+ * @param {import('three').Object3D} root
+ */
+export function disposeTransientObject(root) {
+  root.traverse((o) => {
+    if (o.geometry && !o.geometry.userData.sharedCache) o.geometry.dispose();
+    const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
+    for (const m of mats) {
+      if (m.userData.sharedCache) continue;
+      for (const key of ['map', 'emissiveMap']) {
+        const tex = m[key];
+        if (tex && !tex.userData.sharedCache) tex.dispose();
+      }
+      m.dispose();
+    }
+  });
+  root.removeFromParent();
+}
+
 /** Tiny deterministic RNG so textures look the same every load. */
 function texRng(seed) {
   let s = seed >>> 0;
@@ -269,6 +309,34 @@ function drawMango(ctx, cx, cy, s) {
 }
 
 /**
+ * Vector fruit/suit glyph painter — the same hand-drawn fruits the ML card
+ * faces use, exported so poker faces (propsPoker.js) render WITHOUT emoji
+ * (emoji tofu on headless/CI, and clash with the procedural art style).
+ * The golden suit reuses the golden-banana painter.
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {string} fruit  'banana'|'coconut'|'mango'|'golden'
+ * @param {number} cx  glyph center x
+ * @param {number} cy  glyph center y
+ * @param {number} s   glyph size (≈ half-extent in px)
+ */
+export function drawFruitGlyph(ctx, fruit, cx, cy, s) {
+  if (fruit === 'banana') drawBanana(ctx, cx, cy, s, false);
+  else if (fruit === 'golden') drawBanana(ctx, cx, cy, s, true);
+  else if (fruit === 'coconut') drawCoconut(ctx, cx, cy, s);
+  else if (fruit === 'mango') drawMango(ctx, cx, cy, s);
+  else {
+    // unknown suit: a plain vector "?" so nothing ever falls back to emoji
+    ctx.save();
+    ctx.fillStyle = '#5a3a22';
+    ctx.font = `bold ${Math.round(s * 1.4)}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('?', cx, cy);
+    ctx.restore();
+  }
+}
+
+/**
  * CanvasTexture card-front for a fruit id ('banana'|'coconut'|'mango'|'golden').
  * Cached per fruit.
  */
@@ -308,7 +376,7 @@ export function makeFruitFaceTexture(fruit) {
   ctx.fillText(label, 0, 14);
   ctx.restore();
 
-  const tex = canvasTexture(canvas);
+  const tex = markShared(canvasTexture(canvas)); // module cache — never disposed
   fruitFaceCache.set(fruit, tex);
   return tex;
 }
@@ -368,7 +436,7 @@ export function makeCardBackTexture() {
   ctx.arc(W / 2, H / 2 + 12, 10, 0.2, Math.PI - 0.2);
   ctx.stroke();
 
-  cardBackTex = canvasTexture(canvas);
+  cardBackTex = markShared(canvasTexture(canvas)); // module cache — never disposed
   return cardBackTex;
 }
 

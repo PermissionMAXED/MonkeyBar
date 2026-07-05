@@ -29,6 +29,7 @@ import {
   createShell,
   createDie,
   diceClusterOffsets,
+  disposeDiceProp,
   DIE_SIZE,
 } from '../../three/propsDice.js';
 
@@ -75,8 +76,11 @@ function ensureBoard(tools) {
   return board;
 }
 
+// Shells rebuild their geometry every round, dice reuse the module caches —
+// disposeDiceProp frees the per-instance parts and skips markShared caches,
+// so repeated rounds don't grow renderer.info.memory.geometries.
 function removeProp(obj) {
-  obj.parent?.remove(obj);
+  disposeDiceProp(obj);
 }
 
 function clearShells() {

@@ -29,6 +29,7 @@ import {
   createPokerCard,
   createPokerChip,
   createPotStack,
+  disposePokerProp,
   HOLE_SPREAD,
   HOLE_LIE_Y,
 } from '../../three/propsPoker.js';
@@ -71,14 +72,17 @@ function ensureProps(tools) {
   return rootGroup;
 }
 
+// Cards and flown chips are per-instance props built every hand —
+// disposePokerProp frees their geometries/materials (markShared module caches
+// survive), so long sessions don't grow renderer.info.memory.geometries.
 function clearFan(tools) {
-  for (const m of myFan) m.parent?.remove(m);
+  for (const m of myFan) disposePokerProp(m);
   myFan = [];
   void tools;
 }
 
 function removeSeatCards(seat) {
-  for (const m of tableCards.get(seat) ?? []) m.parent?.remove(m);
+  for (const m of tableCards.get(seat) ?? []) disposePokerProp(m);
   tableCards.delete(seat);
 }
 
@@ -145,7 +149,7 @@ async function flyChip(tools, seat, slot) {
       chip.rotation.z = k * Math.PI * 2;
     },
   }).promise;
-  rootGroup.remove(chip);
+  disposePokerProp(chip);
 }
 
 /** Move `amount` chips seat → pot and settle the stack at `newPot`. */
@@ -273,7 +277,7 @@ async function sweepPot(tools, winners, potWon) {
               chip.position.y += Math.sin(k * Math.PI) * 0.16;
             },
           }).promise;
-          rootGroup.remove(chip);
+          disposePokerProp(chip);
         })()
       );
     }

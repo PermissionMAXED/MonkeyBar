@@ -84,7 +84,8 @@ const HAT_BUILDERS = {
       arm.position.set(s * r * 0.6, r * 0.04, -r * 0.42);
       g.add(arm);
     }
-    g.position.set(0, r * 0.14, r * 0.95);
+    // lenses at ≥ r*1.02 — IN FRONT of the face plane (headR*0.98), never inside it
+    g.position.set(0, r * 0.14, r * 1.02);
     return g;
   },
 

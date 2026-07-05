@@ -85,21 +85,36 @@ const TABLE_STYLES = {
   }),
 };
 
-/** Build a table-design topper (felt disc + trim ring) sitting on the table. */
+/**
+ * Build a table-design topper (felt disc + trim ring) as a thin RECESSED
+ * inlay. Gameplay props rest just above the stock top (pile cards at
+ * TABLE_TOP_Y+0.006, poker hole cards +0.008, dice shells +0.004, chips), so
+ * every topper surface stays at/below TABLE_TOP_Y+0.002 — face-down plays are
+ * always visible ABOVE the felt. The z-fight against the wood grain at
+ * oblique in-match camera angles (near=0.05/far=60 depth) is won with
+ * polygonOffset instead of extra height.
+ */
 function buildTableTopper(tableId) {
   const style = TABLE_STYLES[tableId]?.();
   if (!style) return null;
+  // bias the inlay materials toward the camera so they beat the base tabletop
+  // in the depth test without rising above the prop rest heights
+  for (const mat of [style.feltMat, style.trimMat]) {
+    mat.polygonOffset = true;
+    mat.polygonOffsetFactor = -1;
+    mat.polygonOffsetUnits = -1;
+  }
   const g = new THREE.Group();
   g.name = `table_design_${tableId}`;
-  // sits 8 mm proud of the stock top — thinner reads better but z-fights the
-  // wood grain at oblique in-match camera angles (near=0.05/far=60 depth)
-  const felt = new THREE.Mesh(new THREE.CylinderGeometry(TABLE_RADIUS - 0.045, TABLE_RADIUS - 0.045, 0.012, 40), style.feltMat);
-  felt.position.y = TABLE_TOP_Y + 0.008;
+  // felt disc: 4 mm thick, embedded so its top face sits 2 mm proud
+  const felt = new THREE.Mesh(new THREE.CylinderGeometry(TABLE_RADIUS - 0.045, TABLE_RADIUS - 0.045, 0.004, 40), style.feltMat);
+  felt.position.y = TABLE_TOP_Y; // top face at TABLE_TOP_Y + 0.002
   felt.receiveShadow = true;
   g.add(felt);
-  const trim = new THREE.Mesh(new THREE.TorusGeometry(TABLE_RADIUS - 0.055, 0.012, 8, 44), style.trimMat);
+  // trim ring: thin torus sunk so its crown also peaks at +0.002
+  const trim = new THREE.Mesh(new THREE.TorusGeometry(TABLE_RADIUS - 0.055, 0.006, 8, 44), style.trimMat);
   trim.rotation.x = Math.PI / 2;
-  trim.position.y = TABLE_TOP_Y + 0.014;
+  trim.position.y = TABLE_TOP_Y - 0.004; // tube top at TABLE_TOP_Y + 0.002
   g.add(trim);
   return g;
 }

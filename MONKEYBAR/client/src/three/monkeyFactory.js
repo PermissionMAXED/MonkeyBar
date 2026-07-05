@@ -221,6 +221,15 @@ function makeFacePlane(kind /* 'eyes'|'mouth' */, w, h) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Tag built-in accessory nodes that occupy the head's crown volume so R9
+ * catalog hats can hide them (applyCosmetics) instead of clipping through
+ * them. Restoring visibility on unequip is applyCosmetics' job too.
+ */
+function markHeadwear(...nodes) {
+  for (const node of nodes) node.userData.headwear = true;
+}
+
+/**
  * Each builder gets `a` = { head, torso, handL, handR, headR, torsoR, torsoLen, colors }.
  * Sizes are in the monkey's local (already scaled) space.
  */
@@ -234,6 +243,7 @@ const ACCESSORY_BUILDERS = {
       spike.rotation.x = (i - 2.5) * 0.18;
       g.add(spike);
     }
+    markHeadwear(g);
     a.head.add(g);
   },
   bandana(a) {
@@ -255,6 +265,7 @@ const ACCESSORY_BUILDERS = {
     brim.position.y = a.headR * 0.82;
     const ribbon = new THREE.Mesh(new THREE.CylinderGeometry(a.headR * 0.68, a.headR * 0.68, a.headR * 0.2, 20), matte('#8a1e1e'));
     ribbon.position.y = a.headR * 0.95;
+    markHeadwear(crown, brim, ribbon);
     a.head.add(crown, brim, ribbon);
   },
   monocle(a) {
@@ -284,11 +295,13 @@ const ACCESSORY_BUILDERS = {
   headphones(a) {
     const band = new THREE.Mesh(new THREE.TorusGeometry(a.headR * 1.02, a.headR * 0.08, 8, 20, Math.PI), matte('#222831', { roughness: 0.4 }));
     band.rotation.z = 0; // arcs over the top
+    markHeadwear(band);
     a.head.add(band);
     for (const s of [-1, 1]) {
       const cup = new THREE.Mesh(new THREE.CylinderGeometry(a.headR * 0.32, a.headR * 0.32, a.headR * 0.22, 14), matte('#39ff88', { emissive: '#39ff88', emissiveIntensity: 0.6 }));
       cup.rotation.z = Math.PI / 2;
       cup.position.set(s * a.headR * 1.02, 0, 0);
+      markHeadwear(cup); // the cups read broken without their band
       a.head.add(cup);
     }
   },
@@ -298,6 +311,7 @@ const ACCESSORY_BUILDERS = {
     const trim = new THREE.Mesh(new THREE.TorusGeometry(a.headR * 1.0, a.headR * 0.09, 8, 20), matte('#f0f0e8'));
     trim.rotation.x = Math.PI / 2.6;
     trim.position.set(0, a.headR * 0.35, a.headR * 0.45);
+    markHeadwear(hood, trim); // the robe stays — only the hood is crown volume
     a.head.add(hood, trim);
     const robe = new THREE.Mesh(new THREE.ConeGeometry(a.torsoR * 1.7, a.torsoLen * 1.5, 14, 1, true), matte('#14141a'));
     robe.position.y = a.torsoLen * 0.3;
@@ -435,6 +449,7 @@ const ACCESSORY_BUILDERS = {
     brim.position.y = a.headR * 0.8;
     const band = new THREE.Mesh(new THREE.CylinderGeometry(a.headR * 0.62, a.headR * 0.7, a.headR * 0.14, 18), matte('#1a1612'));
     band.position.y = a.headR * 0.88;
+    markHeadwear(crown, brim, band);
     a.head.add(crown, brim, band);
   },
   soda_can_crown(a) {
@@ -451,6 +466,7 @@ const ACCESSORY_BUILDERS = {
     const band = new THREE.Mesh(new THREE.CylinderGeometry(a.headR * 0.72, a.headR * 0.72, a.headR * 0.16, 16), brassMaterial());
     band.position.y = a.headR * 0.9;
     g.add(band);
+    markHeadwear(g);
     a.head.add(g);
   },
   acorn_pouch(a) {
@@ -471,6 +487,7 @@ const ACCESSORY_BUILDERS = {
     const circlet = new THREE.Mesh(new THREE.TorusGeometry(a.headR * 0.9, a.headR * 0.05, 6, 20), brassMaterial());
     circlet.rotation.x = Math.PI / 2;
     circlet.position.y = a.headR * 0.72;
+    markHeadwear(veil, circlet);
     a.head.add(veil, circlet);
   },
   crystal_ball(a) {
@@ -757,6 +774,12 @@ export function createMonkey(monkeyId, name = '') {
         hatGroup = buildHat(cosmetics.hat, headR);
         if (hatGroup) head.add(hatGroup);
       }
+      // catalog hat on → hide the built-in crown-volume headwear (top hat,
+      // mohawk, crown, veil, hood…) so the two never clip; off → restore it
+      const wearingHat = !!hatGroup;
+      head.traverse((o) => {
+        if (o.userData.headwear) o.visible = !wearingHat;
+      });
       applySkinDye(fur, cosmetics?.skin ?? null, furBase);
       return this;
     },
