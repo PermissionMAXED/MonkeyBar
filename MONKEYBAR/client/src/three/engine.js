@@ -89,9 +89,11 @@ export function createEngine(canvas) {
   let cannon = null;
   let currentMapId = null;
 
-  /** @type {Map<number, { monkey: any, idle: { stop: () => void } }>} */
+  /** @type {Map<number, { monkey: any, idle: { stop: () => void }, cosmetics: Object|null }>} */
   const seats = new Map();
   let localSeat = -1;
+  /** R9 hook state: equipped table/deco cosmetic ids (§10.3), render-inert for now. */
+  let tableCosmetics = { tableId: null, decoId: null };
 
   // ---- loop -----------------------------------------------------------------
   /** @type {Set<(dt: number, elapsed: number) => void>} */
@@ -235,11 +237,15 @@ export function createEngine(canvas) {
       return () => tickHandlers.delete(fn);
     },
 
-    /** Quality toggle: 'high' = postfx on, 'low' = postfx off + pixelRatio 1. */
+    /**
+     * Quality toggle: 'high' = postfx on + native pixelRatio (≤2),
+     * 'medium' (R3) = postfx on + pixelRatio 1, 'low' = postfx off + pixelRatio 1.
+     */
     setQuality(level) {
-      const high = level !== 'low' && level !== false;
-      postfx.setEnabled(high);
-      renderer.setPixelRatio(high ? Math.min(window.devicePixelRatio, 2) : 1);
+      const low = level === 'low' || level === false;
+      const medium = level === 'medium';
+      postfx.setEnabled(!low);
+      renderer.setPixelRatio(low || medium ? 1 : Math.min(window.devicePixelRatio, 2));
       renderer.setSize(window.innerWidth, window.innerHeight);
       postfx.setSize(window.innerWidth, window.innerHeight);
     },
@@ -270,14 +276,20 @@ export function createEngine(canvas) {
       return bar;
     },
 
-    /** Seat a monkey (replaces any existing monkey at that seat). */
-    seatMonkey(seat, monkeyId, name) {
+    /**
+     * Seat a monkey (replaces any existing monkey at that seat).
+     * `cosmetics` (§10.3, optional): equipped ids {hat?, skin?, table?, deco?}
+     * — stored per seat and forwarded to the rig; monkeyFactory implements
+     * applyCosmetics in R9, so this is a safe no-op until then.
+     */
+    seatMonkey(seat, monkeyId, name, cosmetics) {
       this.clearSeat(seat);
       const monkey = createMonkey(monkeyId, name);
+      monkey.applyCosmetics?.(cosmetics ?? null);
       placeMonkeyAtSeat(monkey, seat);
       scene.add(monkey.root);
       const idle = attachIdle(anim, monkey);
-      seats.set(seat, { monkey, idle });
+      seats.set(seat, { monkey, idle, cosmetics: cosmetics ?? null });
       const accent = monkey.def?.silhouette?.furPalette?.[2] ?? '#39ff88';
       tableView.addNameplate(seat, name || monkey.name, monkey.headWorldPos(new THREE.Vector3()), accent);
       if (seat === localSeat) this.setLocalSeat(seat); // keep local hidden
@@ -311,6 +323,17 @@ export function createEngine(canvas) {
 
     getLocalSeat: () => localSeat,
     getMonkey: (seat) => monkeyAt(seat),
+    /** Equipped cosmetics stored for a seat via seatMonkey (R9 renders them). */
+    getSeatCosmetics: (seat) => seats.get(seat)?.cosmetics ?? null,
+
+    /**
+     * R9 hook (§10.3): equip table / bar-deco cosmetics. Records the ids;
+     * rendering lands in R9 — until then this is intentionally a visual no-op.
+     */
+    applyTableCosmetics(tableId, decoId) {
+      tableCosmetics = { tableId: tableId ?? null, decoId: decoId ?? null };
+      return tableCosmetics;
+    },
 
     /** P6 glue: leave first-person (spectator/orbit cam) — un-hides the local monkey. */
     setSpectatorView() {

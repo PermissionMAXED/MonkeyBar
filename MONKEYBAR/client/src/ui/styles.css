@@ -1526,6 +1526,16 @@ input[type='range'].slider {
   min-width: 190px;
 }
 
+/* R3: generic fallback mode HUD — turn.actions rendered as plain modeAction
+   buttons for placeholder / future modes (see ui/modes/index.js). Reuses the
+   .hand-dock positioning; this just gives the bare buttons a backdrop. */
+.mode-action-dock {
+  background: rgba(8, 14, 7, 0.78);
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  padding: 12px 18px;
+}
+
 /* giant MONKEY LIES call button */
 .call-btn {
   position: absolute;

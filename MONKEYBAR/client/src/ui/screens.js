@@ -20,6 +20,9 @@ import { createHud } from './hud.js';
 import { createSettingsScreen } from './settingsScreen.js';
 import { createShopScreen } from './shopScreen.js';
 import { createResultsScreen } from './resultsScreen.js';
+import { createProfileScreen } from './profileScreen.js';
+import { createHowToPlay } from './howToPlay.js';
+import { reduceByMode } from './modes/index.js';
 
 /**
  * @param {ReturnType<import('../state/store.js').createStore>} store
@@ -75,8 +78,9 @@ export function initUI(store, socket, engine) {
       const cur = store.get('screen');
       if (cur === name) return;
       // remember where overlay-ish screens should return to
-      if (['characterSelect', 'settings', 'shop'].includes(name)) {
-        if (!['characterSelect', 'settings', 'shop'].includes(cur)) backTarget = cur;
+      const overlays = ['characterSelect', 'settings', 'shop', 'profile', 'howToPlay'];
+      if (overlays.includes(name)) {
+        if (!overlays.includes(cur)) backTarget = cur;
       }
       store.set('screen', name);
     },
@@ -107,6 +111,8 @@ export function initUI(store, socket, engine) {
     shop: createShopScreen(ctx),
     game: createHud(ctx),
     results: createResultsScreen(ctx),
+    profile: createProfileScreen(ctx),
+    howToPlay: createHowToPlay(ctx),
   };
 
   for (const s of Object.values(screens)) root.insertBefore(s.el, toastStack);
@@ -245,6 +251,9 @@ export function initUI(store, socket, engine) {
     store.set('penaltyInfo', null);
     store.set('turnInfo', null);
     store.set('roundEndInfo', null);
+    store.set('modeData', null);
+    store.set('modeEvents', []);
+    store.set('lastRewards', null);
     adoptSnapshot(p.snapshot);
     sysLine('The match begins. Trust no monkey.');
     ctx.go('game');
@@ -434,6 +443,29 @@ export function initUI(store, socket, engine) {
 
   socket.on(MSG.PONG, (p) => {
     if (typeof p.ts === 'number') store.set('latencyMs', Date.now() - p.ts);
+  });
+
+  // ---------------------------------------------------------------------
+  // 1.0 additions (§10.2) — mode-scoped events + economy payloads (R3)
+  // ---------------------------------------------------------------------
+  // modeEvent {kind, ...payload}: append to the raw log and fold into the
+  // mode-scoped state via the per-mode reducer table (ui/modes/index.js).
+  // Monkey Lies never emits these — its reducers above are untouched.
+  socket.on(MSG.MODE_EVENT, (p) => {
+    store.push('modeEvents', { ...p, ts: Date.now() });
+    const mode = store.get('snapshot')?.mode;
+    store.set('modeData', reduceByMode(mode, p.kind, p, store.get('modeData')));
+  });
+
+  // profile: server-side economy profile (coins/xp/level/unlocked/equipped…)
+  // merged over the local profile fields ({name, monkeyId} stay client-side).
+  socket.on(MSG.PROFILE, (p) => {
+    store.set('profile', { ...store.get('profile'), ...p });
+  });
+
+  // rewards: PRIVATE post-match payout — parked for the results screen (R10).
+  socket.on(MSG.REWARDS, (p) => {
+    store.set('lastRewards', { ...p, ts: Date.now() });
   });
 
   // Dev-only hook so the store/socket can be poked from the console

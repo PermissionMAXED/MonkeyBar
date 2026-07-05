@@ -6,8 +6,11 @@
 //
 // Keys used by the UI layer (P5):
 //   screen      'boot'|'mainMenu'|'lobbyBrowser'|'lobby'|'characterSelect'|
-//               'settings'|'shop'|'game'|'results'
-//   profile     { name, monkeyId }
+//               'settings'|'shop'|'game'|'results'|'profile'|'howToPlay'
+//   profile     { name, monkeyId } — local identity, merged (R3) with the
+//               server economy Profile (§10.2: coins, xp, level, xpToNext,
+//               wins, matches, unlocked, equipped, stats) once `profile`
+//               frames arrive; name/monkeyId always stay client-owned
 //   catalogs    { roster, modes, maps, emotes, quickPhrases }   (from `welcome`)
 //   playerId    string|null
 //   roomList    RoomSummary[]
@@ -16,6 +19,13 @@
 //   turnInfo    { seat, deadline, canCall }|null
 //   penaltyInfo { seat, chambers, coconuts, chipUsable, deadline }|null
 //   matchResult { winnerSeat, standings }|null
+//   lastRewards Rewards|null (§10.2) — post-match payout, private per seat;
+//               cleared on gameStart (R3; rewards screen lands in R10)
+//   modeData    Object|null — mode-scoped state folded from `modeEvent`
+//               frames by ui/modes/index.js reduceByMode (R3); reset on
+//               gameStart. Monkey Lies never writes it.
+//   modeEvents  raw `modeEvent` log [{ kind, ...payload, ts }] (R3; capped
+//               by store.push, reset on gameStart)
 //   chatLog     [{ kind, seat, name, text, glyph, ts }]
 //   connStatus  'connecting'|'open'|'reconnecting'|'closed'
 //   prefs       { muted, volume, quality }  (audio/engine flags, persisted)
@@ -63,6 +73,9 @@ export function createStore() {
   state.set('turnInfo', null);
   state.set('penaltyInfo', null);
   state.set('matchResult', null);
+  state.set('lastRewards', null);
+  state.set('modeData', null);
+  state.set('modeEvents', []);
   state.set('chatLog', []);
   state.set('connStatus', 'connecting');
   state.set('prefs', loadPrefs());

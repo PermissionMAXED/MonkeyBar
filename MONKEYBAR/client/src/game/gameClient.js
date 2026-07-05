@@ -25,6 +25,7 @@ import { MSG } from '@shared/protocol.js';
 import { START_CHAMBERS } from '@shared/constants.js';
 import { DEFAULT_MAP_ID } from '@shared/maps.js';
 import { TABLE_TOP_Y } from '../three/barScene.js';
+import { getModeChoreographer } from './modes/index.js';
 
 /** Fast-forward choreography when more events than this are waiting. */
 const FAST_MODE_BACKLOG = 10;
@@ -99,6 +100,20 @@ export function createGameClient(engine, store, socket) {
 
   const anim = engine.anim;
   const wait = (s) => (fastMode() ? Promise.resolve() : anim.wait(s));
+
+  // ------------------------------------------------------------------------
+  // Per-mode choreography (R3): non-ML modes may register a choreographer
+  // { resync(snapshot, tools), handle(kind, p, tools) } in game/modes/index.js.
+  // Monkey Lies is never registered — its paths below stay untouched.
+  // ------------------------------------------------------------------------
+  /** @type {import('./modes/index.js').ChoreoTools} */
+  const tools = { engine, store, wait, fastMode, sysFlavor };
+
+  /** Delegate an event to the active mode's choreographer (no-op for ML). */
+  async function modeHandle(kind, p) {
+    const choreo = getModeChoreographer(store.get('snapshot')?.mode);
+    if (choreo?.handle) await choreo.handle(kind, p, tools);
+  }
 
   // ------------------------------------------------------------------------
   // Scene bookkeeping
@@ -326,7 +341,8 @@ export function createGameClient(engine, store, socket) {
 
     for (let s = 0; s < SEAT_MAX; s++) engine.clearSeat(s);
     for (const seat of snapshot.seats ?? []) {
-      engine.seatMonkey(seat.seat, seat.monkeyId, seat.name);
+      // §10.3: equipped cosmetics ride on SeatPublic (R9 renders them)
+      engine.seatMonkey(seat.seat, seat.monkeyId, seat.name, seat.cosmetics);
       if (!seat.alive) ghostSeat(seat.seat);
     }
 
@@ -351,6 +367,10 @@ export function createGameClient(engine, store, socket) {
     engine.audio.music.setIntensity(snapshot.phase === 'penalty' ? 0.8 : 0.2);
     refreshHotHeads(snapshot.seats);
     armAudio();
+
+    // per-mode scene state on top of the shared base resync (no-op for ML)
+    const choreo = getModeChoreographer(snapshot.mode);
+    if (choreo?.resync) await choreo.resync(snapshot, tools);
   }
 
   // ------------------------------------------------------------------------
@@ -390,6 +410,7 @@ export function createGameClient(engine, store, socket) {
 
       case MSG.TURN: {
         engine.setTurn(p.seat); // ring + camera glance + tick
+        await modeHandle(MSG.TURN, p); // extra per-mode turn beat (no-op for ML)
         return wait(0.15);
       }
 
@@ -421,6 +442,7 @@ export function createGameClient(engine, store, socket) {
           const whose = peel.seat === p.seat ? 'my' : 'the';
           sysFlavor(`🧮 ${peel.name} adjusts his cracked glasses: “${pct}% — ${whose} odds, precisely.”`);
         }
+        await modeHandle(MSG.PENALTY, p); // extra per-mode penalty beat (no-op for ML)
         return wait(0.3);
       }
 
@@ -434,7 +456,8 @@ export function createGameClient(engine, store, socket) {
       }
 
       case MSG.CANNON:
-        return choreographCannon(p);
+        await choreographCannon(p);
+        return modeHandle(MSG.CANNON, p); // extra per-mode cannon beat (no-op for ML)
 
       case MSG.ELIMINATED: {
         ghostSeat(p.seat);
@@ -454,6 +477,11 @@ export function createGameClient(engine, store, socket) {
 
       case MSG.MATCH_END:
         return choreographMatchEnd(p);
+
+      // §10.2: mode-scoped drama — entirely the mode choreographer's show
+      // (ML emits none). screens.js already reduced it into store.modeData.
+      case MSG.MODE_EVENT:
+        return modeHandle(p.kind, p);
 
       default:
         return;
@@ -650,6 +678,7 @@ export function createGameClient(engine, store, socket) {
     MSG.CANNON,
     MSG.ELIMINATED,
     MSG.ROUND_END,
+    MSG.MODE_EVENT,
   ];
   for (const t of QUEUED) subs.push(socket.on(t, (p) => enqueue(t, p)));
 
