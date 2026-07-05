@@ -8,6 +8,7 @@ import {
   MAX_PLAYERS,
   MIN_PLAY,
   MIN_PLAYERS,
+  MODE_ACTION_MAX_LENGTH,
   NAME_MAX_LENGTH,
   TURN_SECONDS_MAX,
   TURN_SECONDS_MIN,
@@ -29,6 +30,16 @@ import {
  */
 
 /**
+ * Equipped cosmetic ids per slot (§10.3) — equipped ids only, never the
+ * full inventory. Ids come from `shared/cosmetics.js`.
+ * @typedef {Object} EquippedCosmetics
+ * @property {string} [hat]
+ * @property {string} [skin]
+ * @property {string} [table]
+ * @property {string} [deco]
+ */
+
+/**
  * @typedef {Object} MemberInfo
  * @property {string} id
  * @property {string} name
@@ -37,6 +48,7 @@ import {
  * @property {boolean} isBot
  * @property {string} [personality]
  * @property {boolean} isHost
+ * @property {EquippedCosmetics} [cosmetics]   §10.3
  */
 
 /**
@@ -54,6 +66,7 @@ import {
  * @typedef {Object} RoomSettings
  * @property {number} turnSeconds
  * @property {string} mapId
+ * @property {import('./chaos.js').ChaosKnobs} [chaos]   §10.3 — only when mode === 'customChaos'
  */
 
 /**
@@ -72,6 +85,9 @@ import {
  */
 
 /**
+ * Per-mode seat fields (§10.3): `dice` (bananaDice), `stack`/`bet`/`folded`
+ * (junglePoker). In coconutRoulette, `chips` carries roulette semantics
+ * (earn on SHAKE, pay on PASS) instead of Lucky Banana Chips.
  * @typedef {Object} SeatPublic
  * @property {number} seat
  * @property {string} playerId
@@ -83,14 +99,39 @@ import {
  * @property {number} handCount
  * @property {number} chips
  * @property {number} chambersLeft
+ * @property {EquippedCosmetics} [cosmetics]   §10.3
+ * @property {number} [dice]      bananaDice: dice left under the shell
+ * @property {number} [stack]     junglePoker: banana-chip stack
+ * @property {number} [bet]       junglePoker: chips bet this hand
+ * @property {boolean} [folded]   junglePoker
  */
 
 /**
- * @typedef {"dealing"|"playing"|"revealing"|"penalty"|"roundEnd"|"matchEnd"} GamePhase
+ * Game phase. Mode-scoped (§10.3): the listed set is Monkey Lies'; other
+ * modes define their own strings — clients must not assume the ML set.
+ * @typedef {"dealing"|"playing"|"revealing"|"penalty"|"roundEnd"|"matchEnd"|string} GamePhase
  */
 
 /**
- * Full game snapshot (spectators: yourSeat=null, yourHand=null).
+ * Snapshot base — the fields EVERY mode's snapshot carries (§10.3).
+ * Spectators: yourSeat=null. Mode-specific snapshots extend this base:
+ * {@link Snapshot} (monkeyLies), {@link BananaDiceSnapshot},
+ * {@link CoconutRouletteSnapshot}, {@link JunglePokerSnapshot},
+ * {@link KingOfTheBarSnapshot}, {@link CustomChaosSnapshot}.
+ * @typedef {Object} SnapshotBase
+ * @property {string} mode
+ * @property {string} mapId
+ * @property {GamePhase} phase
+ * @property {number} roundNo
+ * @property {SeatPublic[]} seats
+ * @property {number} turnSeat
+ * @property {number} deadline           epoch ms
+ * @property {number|null} yourSeat
+ */
+
+/**
+ * Full Monkey Lies game snapshot = SnapshotBase + the ML extension
+ * (spectators: yourSeat=null, yourHand=null).
  * `lastHolder` and `penalty` are public info: whether the current turn is a
  * pending Last-Monkey-Holding turn, and the active penalty window (if any).
  * @typedef {Object} Snapshot
@@ -108,6 +149,75 @@ import {
  * @property {number|null} yourSeat
  * @property {Card[]|null} yourHand
  * @property {boolean} chipUsedByYou
+ */
+
+/**
+ * Banana Dice snapshot extension (§10.3). Per-seat: `SeatPublic.dice`.
+ * @typedef {SnapshotBase & {
+ *   yourDice: number[]|null,
+ *   bid: {seat: number, count: number, face: number}|null,
+ *   totalDice: number,
+ *   penalty: {seat: number, chambers: number, coconuts: number, chipUsable: boolean, deadline: number}|null,
+ * }} BananaDiceSnapshot
+ */
+
+/**
+ * Coconut Roulette snapshot extension (§10.3). Per-seat: `SeatPublic.chips`
+ * carries roulette semantics.
+ * @typedef {SnapshotBase & {
+ *   bomb: {holderSeat: number, shakes: number, pExplode: number}|null,
+ * }} CoconutRouletteSnapshot
+ */
+
+/**
+ * Jungle Poker snapshot extension (§10.3). Per-seat: `SeatPublic.stack`,
+ * `.bet`, `.folded`.
+ * @typedef {SnapshotBase & {
+ *   pot: number,
+ *   toCall: number,
+ *   yourCards: import('./poker.js').PokerCard[]|null,
+ *   penalty: {seat: number, chambers: number, coconuts: number, chipUsable: boolean, deadline: number}|null,
+ * }} JunglePokerSnapshot
+ */
+
+/**
+ * King of the Bar snapshot = the full ML extension + the active Bar Rule (§10.3).
+ * @typedef {Snapshot & {
+ *   barRule: {ruleId: string, name: string, desc: string}|null,
+ * }} KingOfTheBarSnapshot
+ */
+
+/**
+ * Custom Chaos snapshot = the full ML extension + the active knobs (§10.3).
+ * @typedef {Snapshot & {
+ *   knobs: import('./chaos.js').ChaosKnobs,
+ * }} CustomChaosSnapshot
+ */
+
+/**
+ * Player profile payload (§10.2) — sent right after `welcome`, on
+ * `getProfile`, and after any buy/equip/reward.
+ * @typedef {Object} Profile
+ * @property {string} playerId
+ * @property {number} coins
+ * @property {number} xp            progress into the current level
+ * @property {number} level
+ * @property {number} xpToNext
+ * @property {number} wins
+ * @property {number} matches
+ * @property {string[]} unlocked    owned cosmetic ids
+ * @property {EquippedCosmetics} equipped
+ * @property {{perMode: Record<string, {plays: number, wins: number}>}} stats
+ */
+
+/**
+ * Match rewards payload (§10.2) — PRIVATE, per human seat, right after `matchEnd`.
+ * @typedef {Object} Rewards
+ * @property {number} coins
+ * @property {number} xp
+ * @property {number} levelUps
+ * @property {number} newLevel
+ * @property {Array<{reason: string, coins: number, xp: number}>} breakdown
  */
 
 /**
@@ -150,6 +260,11 @@ export const MSG = Object.freeze({
   SPECTATE: 'spectate',
   STOP_SPECTATE: 'stopSpectate',
   PING: 'ping',
+  // 1.0 additions (§10.1)
+  MODE_ACTION: 'modeAction',
+  GET_PROFILE: 'getProfile',
+  BUY_COSMETIC: 'buyCosmetic',
+  EQUIP_COSMETIC: 'equipCosmetic',
 
   // ---- server → client (§3.3) ----
   WELCOME: 'welcome',
@@ -176,9 +291,13 @@ export const MSG = Object.freeze({
   MATCH_END: 'matchEnd',
   CONN: 'conn',
   PONG: 'pong',
+  // 1.0 additions (§10.2)
+  MODE_EVENT: 'modeEvent',
+  PROFILE: 'profile',
+  REWARDS: 'rewards',
 });
 
-/** Error codes carried by `error` / `actionAck` messages (§3.3). */
+/** Error codes carried by `error` / `actionAck` messages (§3.3 + §10.2). */
 export const ERROR_CODES = Object.freeze({
   BAD_MSG: 'BAD_MSG',
   NOT_FOUND: 'NOT_FOUND',
@@ -190,6 +309,9 @@ export const ERROR_CODES = Object.freeze({
   RATE_LIMIT: 'RATE_LIMIT',
   NAME_INVALID: 'NAME_INVALID',
   NOT_PLAYABLE: 'NOT_PLAYABLE',
+  // 1.0 additions (§10.2) — shop/economy failures
+  CANT_AFFORD: 'CANT_AFFORD',
+  LOCKED: 'LOCKED',
 });
 
 // ---------------------------------------------------------------------------
@@ -243,6 +365,11 @@ export const ClientMsg = Object.freeze({
   spectate: (roomId) => makeMsg(MSG.SPECTATE, { roomId }),
   stopSpectate: () => makeMsg(MSG.STOP_SPECTATE, {}),
   ping: (ts = Date.now()) => makeMsg(MSG.PING, { ts }),
+  // 1.0 additions (§10.1)
+  modeAction: (aid, action, data) => makeMsg(MSG.MODE_ACTION, prune({ aid, action, data })),
+  getProfile: () => makeMsg(MSG.GET_PROFILE, {}),
+  buyCosmetic: (itemId) => makeMsg(MSG.BUY_COSMETIC, { itemId }),
+  equipCosmetic: (slot, itemId = null) => makeMsg(MSG.EQUIP_COSMETIC, { slot, itemId }),
 });
 
 /** Server→client payload factories (each returns a ready-to-send {t,p} envelope). */
@@ -260,8 +387,14 @@ export const ServerMsg = Object.freeze({
   hand: (cards) => makeMsg(MSG.HAND, { cards }),
   roundStart: ({ roundNo, tableFruit, firstSeat, seats }) =>
     makeMsg(MSG.ROUND_START, { roundNo, tableFruit, firstSeat, seats }),
-  turn: ({ seat, deadline, canCall, lastHolder }) =>
-    makeMsg(MSG.TURN, { seat, deadline, canCall, lastHolder }),
+  // `actions` (§10.3) = legal verbs this turn for modeAction modes; Monkey Lies omits it.
+  turn: ({ seat, deadline, canCall, lastHolder, actions }) =>
+    makeMsg(
+      MSG.TURN,
+      actions === undefined
+        ? { seat, deadline, canCall, lastHolder }
+        : { seat, deadline, canCall, lastHolder, actions }
+    ),
   played: ({ seat, count, handCount }) => makeMsg(MSG.PLAYED, { seat, count, handCount }),
   called: ({ callerSeat, targetSeat }) => makeMsg(MSG.CALLED, { callerSeat, targetSeat }),
   reveal: ({ targetSeat, cards, lie, loserSeat }) =>
@@ -280,6 +413,14 @@ export const ServerMsg = Object.freeze({
   emote: ({ seat, emoteId, name }) => makeMsg(MSG.EMOTE, prune({ seat, emoteId, name })),
   conn: ({ seat, connected }) => makeMsg(MSG.CONN, { seat, connected }),
   pong: (ts, serverTs = Date.now()) => makeMsg(MSG.PONG, { ts, serverTs }),
+  // 1.0 additions (§10.2)
+  modeEvent: (kind, payload = {}) => makeMsg(MSG.MODE_EVENT, { kind, ...payload }),
+  profile: ({ playerId, coins, xp, level, xpToNext, wins, matches, unlocked, equipped, stats }) =>
+    makeMsg(MSG.PROFILE, {
+      playerId, coins, xp, level, xpToNext, wins, matches, unlocked, equipped, stats,
+    }),
+  rewards: ({ coins, xp, levelUps, newLevel, breakdown }) =>
+    makeMsg(MSG.REWARDS, { coins, xp, levelUps, newLevel, breakdown }),
 });
 
 /** Drop undefined keys so payloads stay tidy on the wire. */
@@ -379,6 +520,22 @@ const CLIENT_VALIDATORS = {
   [MSG.SPECTATE]: (p) => (isStr(p.roomId) ? null : ERROR_CODES.BAD_MSG),
   [MSG.STOP_SPECTATE]: () => null,
   [MSG.PING]: (p) => (isNum(p.ts) ? null : ERROR_CODES.BAD_MSG),
+  // 1.0 additions (§10.1)
+  [MSG.MODE_ACTION]: (p) => {
+    if (!isStr(p.aid)) return ERROR_CODES.BAD_MSG;
+    if (!isStr(p.action) || p.action.length < 1 || p.action.length > MODE_ACTION_MAX_LENGTH) {
+      return ERROR_CODES.BAD_MSG;
+    }
+    if (p.data !== undefined && !isObj(p.data)) return ERROR_CODES.BAD_MSG;
+    return null;
+  },
+  [MSG.GET_PROFILE]: () => null,
+  [MSG.BUY_COSMETIC]: (p) => (isStr(p.itemId) ? null : ERROR_CODES.BAD_MSG),
+  [MSG.EQUIP_COSMETIC]: (p) => {
+    if (!isStr(p.slot)) return ERROR_CODES.BAD_MSG;
+    if (p.itemId !== null && !isStr(p.itemId)) return ERROR_CODES.BAD_MSG;
+    return null;
+  },
 };
 
 /** Set of message types a client may legitimately send. */

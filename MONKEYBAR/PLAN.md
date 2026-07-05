@@ -309,3 +309,59 @@ See coordinator. P1→P2→P3, P4∥P5 (after P1), then P6, then P7. Contracts: 
 
 - Highest-risk item is P6 choreography timing; event-queue (serialize animations vs fast bot play) is the mitigation.
 - Cut line is inside P7 only. P1–P6 are the slice and are not cuttable.
+
+---
+
+## 10. 1.0 Extensions (binding contract; RELEASE_PLAN.md §B transcribed)
+
+All changes ADDITIVE — every §3 message, payload factory, validator, and constant is untouched, so Monkey Lies keeps working at every wave boundary. `shared/` stays the single source of truth.
+
+### 10.1 New client → server messages
+
+| `t` | payload `p` | validation | notes |
+|---|---|---|---|
+| `modeAction` | `{ aid, action: string, data?: object }` | aid string; action 1–32 chars (`MODE_ACTION_MAX_LENGTH`); data plain object if present | Generic in-match verb for all new modes. Routed like `play`: gameRoom.act → engine.modeAction(seat, action, data); acked via existing `actionAck`; `aid` dedup applies. Unknown/illegal → `BAD_MSG`/`BAD_STATE`/`NOT_YOUR_TURN`. |
+| `getProfile` | `{}` | — | Server replies `profile`. |
+| `buyCosmetic` | `{ itemId: string }` | itemId string | Success → fresh `profile`; failure → `error{CANT_AFFORD\|LOCKED\|NOT_FOUND}`. |
+| `equipCosmetic` | `{ slot: string, itemId: string\|null }` | slot string; itemId string or null | Ownership validated server-side; success → fresh `profile` + `roomState` rebroadcast if in lobby. |
+
+**Mode action verbs** (fixed registry, `shared/src/modeEvents.js` → `MODE_ACTIONS`): Banana Dice `bid {count,face}`, `challenge {}`; Coconut Roulette `shake {}`, `pass {}`; Jungle Poker `fold {}`, `call {}`, `raise {amount}`; King of the Bar `pickFruit {fruit}` (Royal Decree only); Custom Chaos none (uses ML native verbs).
+
+### 10.2 New server → client messages
+
+| `t` | payload `p` | notes |
+|---|---|---|
+| `modeEvent` | `{ kind: string, ...payload }` | Mode-scoped events via the same onEvent channel, so `evt.seat` targeting gives private delivery (e.g. your dice) like `hand`. Kinds are constants in `shared/src/modeEvents.js`. |
+| `profile` | `{ playerId, coins, xp, level, xpToNext, wins, matches, unlocked: string[], equipped: {hat?,skin?,table?,deco?}, stats: {perMode: Record<modeId,{plays,wins}>} }` | Sent right after `welcome`, on `getProfile`, and after any buy/equip/reward. |
+| `rewards` | `{ coins, xp, levelUps, newLevel, breakdown: [{reason,coins,xp}] }` | PRIVATE, per human seat, right after `matchEnd`. |
+
+New ERROR_CODES: `CANT_AFFORD`, `LOCKED`.
+
+### 10.3 Shared shape extensions
+
+- `MemberInfo`/`SeatPublic` gain optional `cosmetics: {hat?,skin?,table?,deco?}` (equipped ids only, never full inventory).
+- `RoomState.settings` gains optional `chaos: ChaosKnobs` (only when mode === `customChaos`); `updateSettings` patch accepts `chaos` bounded by `shared/src/chaos.js` (`validateKnobs`).
+- `turn` event gains optional `actions: string[]` — legal verbs this turn (e.g. `['bid','challenge']`). Monkey Lies omits it (`canCall`/`lastHolder` unchanged).
+- Snapshot = Base + per-mode extension. Base (every mode): `mode, mapId, phase, roundNo, seats, turnSeat, deadline, yourSeat`. `phase` is mode-scoped (clients must not assume the ML set). Extensions:
+  - **monkeyLies**: unchanged (`tableFruit, lastPlay, lastHolder, penalty, yourHand, chipUsedByYou`)
+  - **bananaDice**: snapshot `yourDice: number[]|null, bid: {seat,count,face}|null, totalDice, penalty`; per-seat `dice: number`
+  - **coconutRoulette**: snapshot `bomb: {holderSeat, shakes, pExplode}|null`; per-seat `chips` (roulette semantics)
+  - **junglePoker**: snapshot `pot, toCall, yourCards: PokerCard[]|null, penalty`; per-seat `stack, bet, folded`
+  - **kingOfTheBar**: ML extension + `barRule: {ruleId, name, desc}|null`
+  - **customChaos**: ML extension + `knobs: ChaosKnobs`
+
+**Engine contract addendum** (server-internal, in `game/modes/index.js`): every engine exposes `start, onTimeout(kind), getTimer(), snapshotFor(seat), modeAction?(seat, action, data), phase, turnSeat, lastHolderPending (may be constant false), winnerSeat, inspect()`. Timer kind strings are engine-owned; `gameRoom.syncTimer` passes them verbatim. Engines emit only §3.3 types plus `modeEvent`.
+
+### 10.4 New shared modules (dependency-free, unit-tested)
+
+- `shared/src/modeEvents.js` — per-mode `modeEvent` kind constants + the modeAction verb registry (`MODE_ACTIONS`, `isModeAction`).
+- `shared/src/dice.js` — `rollDice(n, rng)`, `bidBeats(a, b)` (raise count, or same count + higher face), `countMatching(allDice, face)` (1s wild, count toward every face), `DICE_FACES`.
+- `shared/src/poker.js` — 52 cards = 4 fruit suits × ranks 2–14; `buildPokerDeck()`, `evaluateHand(cards3)` → `{rankClass, tiebreak, name}`, class order Trio > Straight Flush > Straight > Flush > Pair > High Card, deterministic/comparable (`compareHands`; A-2-3 plays ace-low).
+- `shared/src/chaos.js` — knob schema/bounds/defaults: handSize 3–7 (5), maxPlay 1–4 (3, ≤ handSize), startChambers 2–8 (4), startCoconuts 1–3 (1), chipsPerMatch 0–3 (1), chipBonus 1–4 (2), goldenPerPlayer 0–2; `validateKnobs(patch)` clamps every bound.
+- `shared/src/cosmetics.js` — 1.0 catalog (22 items, 4 slots): hat (8: banana_pin, neon_shades, crown_of_the_bar, party_cone, pirate_hat, gold_monocle, chef_toque, propeller_cap), skin (6 fur dyes: midnight, albino, neon_lime, royal_purple, gilded, cherry), table (4 incl. legacy vip_stool re-slotted), deco (4: disco_ball, parrot_perch, golden_cannon, lava_lamp_rail). Each `{id, name, glyph, desc, slot, price, minLevel}`. Prices 50–500, minLevel 1–10.
+- `shared/src/constants.js` additions — economy: `COIN_REWARDS = {1:60, 2:35, 3:25, other:15}`, `COIN_PER_GOOD_CALL = 2`, `COIN_PER_SURVIVED_SHOT = 2`, `XP_BASE = 40`, `XP_PER_PLACE_STEP = 15`, `xpToNext(level) = 100 + 50×level`, `LEVEL_CAP = 50`, `REWARD_MIN_ROUNDS = 2`; modes: `DICE_START = 5`, `ROULETTE_START_CHIPS = 3`, `ROULETTE_BASE_P = 0.08`, `ROULETTE_STEP_P = 0.06`, `POKER_START_STACK = 10`, `POKER_ANTE = 1`, `POKER_MAX_RAISES = 2`, `POKER_BUST_REFUND = 3`; misc: `MODE_ACTION_MAX_LENGTH = 32`. No existing constant value changed.
+
+### 10.5 Architecture rulings
+
+1. **Persistence** = server-side JSON file store `server/data/profiles.json` (gitignored; atomic temp+rename, debounced 2 s, load at boot, in-memory fallback). Identity = existing session token→playerId. Losing the token = fresh profile (documented). Bots never earn/persist.
+2. **Playability truth** = server registry. `welcome` modes decorated `playable: isModePlayable(id)`. Maps gated by `shared/maps.js` flags (flipped by R8).

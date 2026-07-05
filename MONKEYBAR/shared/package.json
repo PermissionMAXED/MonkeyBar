@@ -14,6 +14,11 @@
     "./monkeys.js": "./src/monkeys.js",
     "./modes.js": "./src/modes.js",
     "./maps.js": "./src/maps.js",
-    "./emotes.js": "./src/emotes.js"
+    "./emotes.js": "./src/emotes.js",
+    "./modeEvents.js": "./src/modeEvents.js",
+    "./dice.js": "./src/dice.js",
+    "./poker.js": "./src/poker.js",
+    "./chaos.js": "./src/chaos.js",
+    "./cosmetics.js": "./src/cosmetics.js"
   }
 }
