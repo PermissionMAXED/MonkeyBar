@@ -18,7 +18,8 @@
 // env knob P2 introduced scales bots down for tests). Personality-keyed
 // emote/quickPhrase reactions are broadcast through the lobby room.
 
-import { MSG, ServerMsg } from '@monkeybar/shared/protocol.js';
+import { ERROR_CODES, MSG, ServerMsg } from '@monkeybar/shared/protocol.js';
+import { PENALTY_WINDOW_MS } from '@monkeybar/shared/constants.js';
 
 import { setGameRoomCreatedHook } from '../game/gameRoom.js';
 import { createAutoPlayPolicy, createBotBrain } from './botBrain.js';
@@ -31,7 +32,9 @@ const DEFAULT_DELAY_BASE_MS = 1200;
 const JITTER_FACTOR = 2.5;
 /** Self-imposed social cooldowns (server-side bots bypass the wire rate limits). */
 const REACTION_GAP_MS = 2200;
-const SPAM_REACTION_GAP_MS = 1200; // Trollish emote spam still breathes a little
+const SPAM_REACTION_GAP_MS = 2000; // Trollish emote spam still breathes a little
+/** Big-moment reaction keys that bypass the self-throttle gap entirely. */
+const HIGH_PRIORITY_REACTIONS = new Set(['gotShot', 'surviveShot', 'bigWin']);
 
 /** Read lazily so tests that set the env var after import still win. */
 function delayBaseMs() {
@@ -139,27 +142,63 @@ export function createBotManager({
 
   // ---- decisions ---------------------------------------------------------------------
 
+  /**
+   * Re-prime a brain from the same reconnect snapshot a client at that seat
+   * would receive (gameRoom.snapshotFor is public info + own hand — NOT a
+   * cheat). Used to repair own-hand desync after server auto-plays.
+   */
+  function rePrimeFromSnapshot(gameRoom, bot) {
+    const playerId = gameRoom.table.get(bot.seat).playerId;
+    bot.brain.primeFromSnapshot(gameRoom.snapshotFor(playerId));
+  }
+
   function scheduleTurnDecision(gameRoom, rec, bot) {
     if (bot.pendingTimer) clearTimeout(bot.pendingTimer);
-    bot.pendingTimer = schedule(rec, decisionDelayMs(bot.personality), () => {
+    let retried = false; // per-schedule guard: at most ONE re-prime + retry
+    const attempt = () => {
       bot.pendingTimer = null;
       if (gameRoom.ended) return;
       const action = bot.brain.decideTurn(); // null ⇒ stale (turn already moved on)
       if (!action) return;
+      // Engine events fire synchronously inside actForSeat — BEFORE the
+      // commit below. Flag the window so the own-`played` desync check knows
+      // this play is ours (about to be committed), not a server auto-play.
+      bot.acting = true;
       let res;
-      if (action.type === 'call') {
-        res = gameRoom.actForSeat(bot.seat, MSG.CALL_LIAR);
-      } else {
-        res = gameRoom.actForSeat(bot.seat, MSG.PLAY, { cardIds: action.cardIds });
+      try {
+        if (action.type === 'call') {
+          res = gameRoom.actForSeat(bot.seat, MSG.CALL_LIAR);
+        } else {
+          res = gameRoom.actForSeat(bot.seat, MSG.PLAY, { cardIds: action.cardIds });
+        }
+      } finally {
+        bot.acting = false;
       }
-      if (res.ok) bot.brain.onOwnActionApplied(action);
-      else log.debug(`seat ${bot.seat} ${action.type} rejected (${res.code}) — raced, skipping`);
-    });
+      if (res.ok) {
+        bot.brain.onOwnActionApplied(action);
+        return;
+      }
+      if (res.code === ERROR_CODES.INVALID_CARDS && !retried) {
+        // The tracked hand desynced from the server's (e.g. a deadline
+        // auto-play consumed cards the brain still counts). Re-prime from the
+        // reconnect snapshot and retry the decision once — never loop.
+        retried = true;
+        log.debug(`seat ${bot.seat} play invalid — re-priming from snapshot and retrying once`);
+        rePrimeFromSnapshot(gameRoom, bot);
+        attempt();
+        return;
+      }
+      log.debug(`seat ${bot.seat} ${action.type} rejected (${res.code}) — raced, skipping`);
+    };
+    bot.pendingTimer = schedule(rec, decisionDelayMs(bot.personality), attempt);
   }
 
   function schedulePenaltyDecision(gameRoom, rec, bot) {
     if (bot.pendingTimer) clearTimeout(bot.pendingTimer);
-    bot.pendingTimer = schedule(rec, decisionDelayMs(bot.personality), () => {
+    // Decide comfortably before the penalty window slams shut (the env-scaled
+    // base keeps tests' tiny delays intact; the clamp only caps the ceiling).
+    const delay = Math.min(decisionDelayMs(bot.personality), PENALTY_WINDOW_MS - 1200);
+    bot.pendingTimer = schedule(rec, delay, () => {
       bot.pendingTimer = null;
       if (gameRoom.ended) return;
       const decision = bot.brain.decidePenalty(); // null ⇒ stale
@@ -169,8 +208,8 @@ export function createBotManager({
         if (res.ok) return; // chip lights the fuse itself
       }
       // Decline (or chip raced away): fire now instead of dragging out the
-      // full 5 s window — the same early resolution P2's fallback performs.
-      gameRoom.engine.resolvePenalty();
+      // full 5 s window. Seat-validated route — a stale window is a no-op.
+      gameRoom.resolvePenalty(bot.seat);
     });
   }
 
@@ -179,9 +218,11 @@ export function createBotManager({
   function scheduleReaction(gameRoom, rec, bot, reaction) {
     const now = Date.now();
     const gap = bot.personality.emoteSpam ? SPAM_REACTION_GAP_MS : REACTION_GAP_MS;
-    if (now - bot.lastReactionAt < gap) return; // self-throttle
-    bot.lastReactionAt = now;
+    // Big moments (own shot, survival, match win) always land — the gap only
+    // throttles ambient chatter.
+    if (!HIGH_PRIORITY_REACTIONS.has(reaction.key) && now - bot.lastReactionAt < gap) return;
     schedule(rec, 250 + Math.floor(rng() * 1200), () => {
+      bot.lastReactionAt = Date.now(); // stamped when the reaction FIRES, not at schedule time
       if (reaction.emoteId) emitSocial(gameRoom, ServerMsg.emote({ seat: bot.seat, emoteId: reaction.emoteId }));
       if (reaction.phraseId) {
         emitSocial(gameRoom, ServerMsg.quickPhrase({ seat: bot.seat, phraseId: reaction.phraseId }));
@@ -212,6 +253,7 @@ export function createBotManager({
       personality: getPersonality(personalityId),
       pendingTimer: null,
       lastReactionAt: 0,
+      acting: false, // true while this bot's own action is inside actForSeat
       unsubscribe: null,
     };
     rec.bots.set(seat, bot);
@@ -220,6 +262,13 @@ export function createBotManager({
       const reaction = brain.observe(envelope);
       if (reaction) scheduleReaction(gameRoom, rec, bot, reaction);
       const { t, p } = envelope;
+      if (t === MSG.PLAYED && p.seat === seat && !bot.acting && bot.brain.inspect().handSize !== p.handCount) {
+        // The server acted for this seat (deadline auto-play race): the
+        // brain's tracked hand no longer matches the authoritative count.
+        // Repair from the reconnect snapshot so the next decision stays legal.
+        log.debug(`seat ${seat} hand desynced (server auto-play) — re-primed from snapshot`);
+        rePrimeFromSnapshot(gameRoom, bot);
+      }
       if (t === MSG.TURN && p.seat === seat) {
         scheduleTurnDecision(gameRoom, rec, bot);
       } else if (t === MSG.PENALTY && p.seat === seat) {

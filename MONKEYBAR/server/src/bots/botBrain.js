@@ -17,7 +17,9 @@
 //       Bananas can still be out there given the bot's own hand, its own
 //       plays, and any reveals this round (hard bound: k > remaining ⇒ lie);
 //   (b) a play-size prior (3-card plays skew toward lies);
-//   (c) a per-opponent bluff prior updated on observed reveals.
+//   (c) a per-opponent bluff prior updated on observed reveals;
+//   (d) escape pressure — the fewer cards kept AFTER the play, the more the
+//       player looks like they're dumping their way to the empty-hand exit.
 // Call iff P(lie) + noise(±0.15 × sloppiness) > callThreshold. Counted facts
 // are corrupted with probability memErr (imperfect memory).
 
@@ -31,8 +33,18 @@ import { getPersonality } from './personalities.js';
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-/** Play-size prior (§5): 3-card plays skew toward lies, singles toward truth. */
-const SIZE_PRIOR = Object.freeze({ 1: -0.05, 2: 0.05, 3: 0.15 });
+/** Play-size prior (§5): 3-card plays skew toward lies, singles are neutral.
+ *  Balance-tunable band (botBrain.test.js 200-match spread): SIZE_PRIOR[3] ∈ [0.15, 0.20]. */
+const SIZE_PRIOR = Object.freeze({ 1: 0.0, 2: 0.1, 3: 0.18 });
+/** Escape-pressure weight: shedding toward an empty hand smells like a run for
+ *  the exit. Balance-tunable band: [0.10, 0.15]. */
+const ESCAPE_PRESSURE_WEIGHT = 0.15;
+/** Uninformed per-opponent bluff prior (smoothed (lies+1)/(reveals+2) with no
+ *  reveals). The blend uses the prior CENTERED here so a bot with no book on
+ *  an opponent adds zero bias — without centering, the constant +0.15 offset
+ *  overheats every call read and low-threshold archetypes (Aggressive,
+ *  Trollish) call themselves to death (win-rate spread blows past 35pp). */
+const BLUFF_PRIOR_BASELINE = 0.5;
 
 /**
  * §4.1 deck math for the current round's survivor count (public knowledge).
@@ -64,11 +76,11 @@ export function createBotBrain({ seat, personalityId = 'cautious', rng = Math.ra
   let deck = deckInfo(4);
   /** @type {Map<number, {alive: boolean, handCount: number}>} public seat facts */
   const seats = new Map();
-  /** @type {{seat: number, count: number, emptied: boolean}|null} unresolved play */
+  /** @type {{seat: number, count: number, handAfter: number}|null} unresolved play (handAfter = player's hand count AFTER the play) */
   let lastPlay = null;
   /** @type {{callerSeat: number, targetSeat: number}|null} */
   let lastCalled = null;
-  /** @type {{canCall: boolean}|null} set while it is this bot's turn */
+  /** @type {{canCall: boolean, lastHolder: boolean}|null} set while it is this bot's turn */
   let pendingTurn = null;
   /** @type {{chambers: number, coconuts: number, chipUsable: boolean}|null} */
   let pendingPenalty = null;
@@ -170,9 +182,16 @@ export function createBotBrain({ seat, personalityId = 'cautious', rng = Math.ra
     // Players pick truths deliberately, not at random — boost small random-draw
     // probabilities, more for bigger plays (they were chosen, not dealt).
     const pTruth = clamp01(Math.pow(pAllRandom, 0.45 / Math.sqrt(k)));
-    const sizePrior = SIZE_PRIOR[k] ?? 0.15;
-    const emptied = lastPlay.emptied ? 0.08 : 0; // dumping the last cards smells like an escape
-    return clamp01(0.4 * (1 - pTruth) + 0.2 * bluffPriorOf(lastPlay.seat) + sizePrior + emptied);
+    const sizePrior = SIZE_PRIOR[k] ?? SIZE_PRIOR[3];
+    // Escape pressure: the fewer cards the player kept AFTER the play, the
+    // harder they're racing for the empty-hand exit — bluff-heavy territory
+    // (subsumes the old flat `emptied` bonus).
+    return clamp01(
+      0.55 * (1 - pTruth) +
+        0.3 * (bluffPriorOf(lastPlay.seat) - BLUFF_PRIOR_BASELINE) +
+        sizePrior +
+        ESCAPE_PRESSURE_WEIGHT * (1 - lastPlay.handAfter / HAND_SIZE)
+    );
   }
 
   // ---- play selection helpers ---------------------------------------------------------
@@ -273,7 +292,9 @@ export function createBotBrain({ seat, personalityId = 'cautious', rng = Math.ra
   function decideTurn() {
     if (!pendingTurn || hand.length === 0) return null;
     const { canCall } = pendingTurn;
-    if (isSoleHolder()) {
+    // Prefer the server's authoritative lastHolder flag; the local seat-count
+    // reconstruction backs it up when the flag is absent (e.g. old snapshots).
+    if (pendingTurn.lastHolder === true || isSoleHolder()) {
       // Last Monkey Holding: playing is forbidden. Calling the pending play is
       // the only escape hatch — and it weakly dominates the certain self-shot
       // (worst case is the same cannon), so every archetype takes it.
@@ -370,19 +391,21 @@ export function createBotBrain({ seat, personalityId = 'cautious', rng = Math.ra
       }
 
       case MSG.TURN:
-        pendingTurn = p.seat === seat ? { canCall: !!p.canCall } : null;
+        pendingTurn = p.seat === seat ? { canCall: !!p.canCall, lastHolder: !!p.lastHolder } : null;
         return null;
 
       case MSG.PLAYED: {
         const info = seats.get(p.seat);
         if (info) info.handCount = p.handCount;
-        lastPlay = { seat: p.seat, count: p.count, emptied: p.handCount === 0 };
+        lastPlay = { seat: p.seat, count: p.count, handAfter: p.handCount };
         if (p.seat === seat) {
           // Normally our commit already moved the cards. If the server acted
           // for us (timeout race), reconcile what we can — identities of the
           // consumed cards are unknowable until the next deal fixes it.
           if (lastCommittedIds) lastCommittedIds = null;
-        } else if (params.emoteSpam && p.count === 3) {
+        } else if (p.count === 3) {
+          // The chatty scalar in react() keeps Quiet/Mathematical (chatty 0)
+          // silent and rate-limits everyone else.
           return react('bigPlay');
         }
         return null;
@@ -478,9 +501,20 @@ export function createBotBrain({ seat, personalityId = 'cautious', rng = Math.ra
       if (s.alive) alive++;
     }
     deck = deckInfo(Math.max(2, alive));
-    lastPlay = snap.lastPlay ? { seat: snap.lastPlay.seat, count: snap.lastPlay.count, emptied: false } : null;
+    if (snap.lastPlay) {
+      // The snapshot's public seat facts already reflect the play — the
+      // player's current handCount IS their hand count after the play.
+      const playerNow = snap.seats.find((s) => s.seat === snap.lastPlay.seat);
+      const handAfter = playerNow ? playerNow.handCount : HAND_SIZE;
+      lastPlay = { seat: snap.lastPlay.seat, count: snap.lastPlay.count, handAfter };
+    } else {
+      lastPlay = null;
+    }
     if (snap.phase === 'playing' && snap.turnSeat === seat) {
-      pendingTurn = { canCall: lastPlay !== null && lastPlay.seat !== seat };
+      pendingTurn = {
+        canCall: lastPlay !== null && lastPlay.seat !== seat,
+        lastHolder: !!snap.lastHolder,
+      };
     }
     rerollForRound();
   }

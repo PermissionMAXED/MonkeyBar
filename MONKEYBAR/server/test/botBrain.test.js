@@ -593,6 +593,107 @@ test('botManager: seats converted from disconnected players get real brains (ses
   }
 });
 
+test('botManager: repairs own-hand desync after a server auto-play (re-prime + legal next play)', async () => {
+  const prevEnv = process.env.MONKEYBAR_BOT_DELAY_MS;
+  process.env.MONKEYBAR_BOT_DELAY_MS = '9999999'; // park scheduled decisions — the test drives turns itself
+  const log = collectLog();
+  const manager = createBotManager({ socialBroadcast: () => {}, rng: () => 0.99, log }).install();
+  let gr;
+  try {
+    gr = createGameRoom({
+      roomId: 'desync',
+      modeId: 'monkeyLies',
+      mapId: 'peeling_parrot',
+      turnSeconds: 15,
+      seatMetas: [0, 1, 2, 3].map((i) => ({
+        playerId: `bot-${i}`,
+        name: `cautious ${i}`,
+        isBot: true,
+        personality: 'cautious',
+      })),
+      send: () => {},
+      seed: 99,
+      engineOverrides: { intermissionMs: 25, penaltyWindowMs: 150 },
+    });
+    gr.start();
+
+    const firstSeat = gr.engine.turnSeat;
+    const bot = manager.attachSeat(gr, firstSeat); // the already-attached record
+    assert.equal(bot.brain.inspect().handSize, 5);
+
+    // The server auto-plays for the seat (deadline race): the brain never
+    // committed this play, so its tracked hand is stale until the manager
+    // re-primes it from the reconnect snapshot on the own `played` event.
+    gr.engine.onTimeout('turn');
+    assert.equal(gr.table.get(firstSeat).hand.length, 4);
+    assert.equal(bot.brain.inspect().handSize, 4, 'manager must re-prime the desynced brain');
+
+    // Cycle the other seats via the same server auto-play until the turn
+    // returns to the repaired bot, then let it decide.
+    while (gr.engine.turnSeat !== firstSeat) gr.engine.onTimeout('turn');
+    const action = bot.brain.decideTurn();
+    assert.equal(action.type, 'play');
+    const trueHand = new Set(gr.table.get(firstSeat).hand.map((c) => c.id));
+    for (const id of action.cardIds) {
+      assert.ok(trueHand.has(id), `re-primed brain played '${id}' — not in its real hand`);
+    }
+    // …and the engine accepts it: the bot keeps playing legally after the auto-play.
+    assert.equal(gr.actForSeat(firstSeat, MSG.PLAY, { cardIds: action.cardIds }).ok, true);
+  } finally {
+    manager.dispose();
+    setGameRoomCreatedHook(null);
+    gr?.destroy();
+    if (prevEnv === undefined) delete process.env.MONKEYBAR_BOT_DELAY_MS;
+    else process.env.MONKEYBAR_BOT_DELAY_MS = prevEnv;
+  }
+});
+
+test('botManager: high-priority reactions bypass the reaction throttle', async () => {
+  const social = [];
+  const manager = createBotManager({
+    socialBroadcast: (gameRoom, envelope) => social.push(envelope),
+    rng: () => 0, // reactions always roll; dispatch delay is exactly 250 ms
+    log: collectLog(),
+  });
+  // Minimal gameRoom stand-in: attachSeat needs the seat meta, a seat feed to
+  // push envelopes through, and a snapshot (null = nothing to prime).
+  let feed;
+  const fakeRoom = {
+    roomId: 'throttle',
+    ended: false,
+    table: {
+      get: () => ({ seat: 0, playerId: 'bot-0', name: 'troll', isBot: true, personality: 'trollish' }),
+      seats: [],
+    },
+    subscribeSeat: (_seat, fn) => {
+      feed = fn;
+      return () => {};
+    },
+    setSeatDriven: () => {},
+    snapshotFor: () => null,
+  };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  try {
+    manager.attachSeat(fakeRoom, 0);
+
+    // A low-priority reaction fires first and stamps lastReactionAt.
+    feed({ t: MSG.PENALTY, p: { seat: 2, chambers: 4, coconuts: 1, chipUsable: true, deadline: 0 } });
+    await sleep(600);
+    assert.equal(social.filter((e) => e.t === MSG.EMOTE).length, 1, "'othersPenalty' emote must land");
+
+    // <2.2 s after it fired: another low-priority reaction is throttled…
+    feed({ t: MSG.PENALTY, p: { seat: 2, chambers: 4, coconuts: 1, chipUsable: true, deadline: 0 } });
+    // …but the high-priority own-survival reaction bypasses the gap entirely.
+    feed({ t: MSG.CANNON, p: { seat: 0, hit: false } });
+    await sleep(600);
+
+    const emotes = social.filter((e) => e.t === MSG.EMOTE).map((e) => e.p.emoteId);
+    assert.deepEqual(emotes, ['laugh', 'taunt'], 'surviveShot must fire; second othersPenalty must not');
+  } finally {
+    manager.dispose();
+  }
+});
+
 test('botManager: humanized delays follow §5 (1.2 s + difficulty × U(0,3 s); Mathematical is even)', () => {
   const prevEnv = process.env.MONKEYBAR_BOT_DELAY_MS;
   delete process.env.MONKEYBAR_BOT_DELAY_MS; // production timing
