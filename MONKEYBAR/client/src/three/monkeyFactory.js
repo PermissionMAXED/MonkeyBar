@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { getMonkey } from '@shared/monkeys.js';
 import { makeCanvas, matte, glassMaterial, neonMaterial, brassMaterial } from './materials.js';
 import { capturePose } from './animations.js';
+import { buildHat, applySkinDye } from './cosmeticsRig.js';
 
 export const EXPRESSIONS = ['neutral', 'blink', 'grin', 'shock', 'sweat', 'rage', 'ko'];
 
@@ -696,6 +697,12 @@ export function createMonkey(monkeyId, name = '') {
   const state = { busy: 0, baseExpression: 'neutral', twitchy: 1 };
   let flashTimer = null;
 
+  // R9 cosmetics state: the fur material's stock values (skin dyes override
+  // furPalette[0] on this shared instance) + the currently worn hat group.
+  const furBase = { color: furHex, roughness: fur.roughness, metalness: fur.metalness };
+  /** @type {THREE.Group|null} */
+  let hatGroup = null;
+
   function applyExpression(exprName) {
     const i = Math.max(0, EXPRESSIONS.indexOf(exprName));
     eyes.tex.offset.x = i / EXPRESSIONS.length;
@@ -728,6 +735,30 @@ export function createMonkey(monkeyId, name = '') {
     /** World position of the head (into `target`). */
     headWorldPos(target = new THREE.Vector3()) {
       return head.getWorldPosition(target);
+    },
+    /**
+     * R9 (§10.3): wear equipped cosmetics — engine.seatMonkey forwards the
+     * seat's `cosmetics` here right after creation. Re-callable/idempotent
+     * (the character-select preview re-applies on equip changes):
+     *   hat  — a cosmeticsRig primitive build anchored to the head group
+     *   skin — a fur dye overriding furPalette[0] on the shared fur material
+     * table/deco ids are venue-scoped and handled by tableView, not the rig.
+     * @param {{hat?: string, skin?: string}|null} cosmetics
+     */
+    applyCosmetics(cosmetics) {
+      if (hatGroup) {
+        hatGroup.traverse((o) => {
+          if (o.geometry) o.geometry.dispose();
+        });
+        hatGroup.removeFromParent();
+        hatGroup = null;
+      }
+      if (cosmetics?.hat) {
+        hatGroup = buildHat(cosmetics.hat, headR);
+        if (hatGroup) head.add(hatGroup);
+      }
+      applySkinDye(fur, cosmetics?.skin ?? null, furBase);
+      return this;
     },
     dispose() {
       if (flashTimer) clearTimeout(flashTimer);

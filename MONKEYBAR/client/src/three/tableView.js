@@ -1,12 +1,19 @@
 // Table view — PLAN.md §2 (client/src/three/tableView.js).
 // 8 seat anchors around the table, your-hand fan layout, played-pile position,
 // per-seat nameplate sprites (CanvasTexture), turn highlight ring.
+//
+// R9: also the venue-cosmetics renderer ("host sets the venue", §10.3).
+// setVenue(tableId, decoId) lays a felt/wood table design over the round
+// table and hangs a cosmeticsRig deco build from bar.decorAnchor; update()
+// re-attaches the deco after map swaps (the anchor lives in bar.group and is
+// torn down with it) and keeps the golden_cannon tint on the live cannon.
 
 import * as THREE from 'three';
-import { makeCanvas, neonMaterial } from './materials.js';
+import { makeCanvas, neonMaterial, woodMaterial, matte, brassMaterial } from './materials.js';
 import { createCard } from './props.js';
 import { SEAT_RADIUS, TABLE_TOP_Y, STOOL_SEAT_H, TABLE_RADIUS } from './barScene.js';
 import { Ease } from './animations.js';
+import { buildDeco, tintCannonGold, untintCannon } from './cosmeticsRig.js';
 
 export const SEAT_COUNT = 8;
 
@@ -55,6 +62,72 @@ function makeNameplateTexture(name, accent = '#39ff88') {
 }
 
 // ---------------------------------------------------------------------------
+// Table designs (R9) — felt/wood toppers for the 4 catalog `table` ids.
+// Each style returns { feltMat, trimMat } for the shared topper shape.
+// ---------------------------------------------------------------------------
+
+const TABLE_STYLES = {
+  barrel_throne: () => ({
+    feltMat: woodMaterial('#4a2c14', { seed: 61, roughness: 0.6 }),
+    trimMat: matte('#3a3a3a', { metalness: 0.85, roughness: 0.35 }),
+  }),
+  tiki_bench: () => ({
+    feltMat: woodMaterial('#a87c4f', { seed: 62, roughness: 0.7 }),
+    trimMat: matte('#39b054', { roughness: 0.6, emissive: '#124a22', emissiveIntensity: 0.4 }),
+  }),
+  vip_stool: () => ({
+    feltMat: matte('#7a1226', { roughness: 1 }),
+    trimMat: brassMaterial(),
+  }),
+  velvet_booth: () => ({
+    feltMat: matte('#43156b', { roughness: 1 }),
+    trimMat: matte('#e8b23a', { metalness: 0.95, roughness: 0.22, emissive: '#5a3c0a', emissiveIntensity: 0.3 }),
+  }),
+};
+
+/** Build a table-design topper (felt disc + trim ring) sitting on the table. */
+function buildTableTopper(tableId) {
+  const style = TABLE_STYLES[tableId]?.();
+  if (!style) return null;
+  const g = new THREE.Group();
+  g.name = `table_design_${tableId}`;
+  // sits 8 mm proud of the stock top — thinner reads better but z-fights the
+  // wood grain at oblique in-match camera angles (near=0.05/far=60 depth)
+  const felt = new THREE.Mesh(new THREE.CylinderGeometry(TABLE_RADIUS - 0.045, TABLE_RADIUS - 0.045, 0.012, 40), style.feltMat);
+  felt.position.y = TABLE_TOP_Y + 0.008;
+  felt.receiveShadow = true;
+  g.add(felt);
+  const trim = new THREE.Mesh(new THREE.TorusGeometry(TABLE_RADIUS - 0.055, 0.012, 8, 44), style.trimMat);
+  trim.rotation.x = Math.PI / 2;
+  trim.position.y = TABLE_TOP_Y + 0.014;
+  g.add(trim);
+  return g;
+}
+
+/** Dispose a topper/deco group's geometries + locally created materials. */
+function disposeGroup(g) {
+  g.traverse((o) => {
+    if (o.geometry) o.geometry.dispose();
+    const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
+    for (const m of mats) {
+      if (m.map) m.map.dispose();
+      m.dispose();
+    }
+  });
+  g.removeFromParent();
+}
+
+/** True while `obj` is still attached to the live scene graph. */
+function connectedToScene(obj, scene) {
+  let node = obj;
+  while (node) {
+    if (node === scene) return true;
+    node = node.parent;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // createTableView
 // ---------------------------------------------------------------------------
 
@@ -88,6 +161,44 @@ export function createTableView(scene, camera, anim) {
   const handGroup = new THREE.Group();
   handGroup.position.set(0, -0.34, -0.72);
   camera.add(handGroup);
+
+  // ---- venue cosmetics (R9: host's table design + bar deco) ----
+  const venue = { tableId: null, decoId: null };
+  /** @type {THREE.Group|null} felt/wood topper — lives in `group`, survives map swaps */
+  let topper = null;
+  /** @type {THREE.Group|null} deco build — parented to bar.decorAnchor (dies with the map) */
+  let decoGroup = null;
+  /** @type {THREE.Object3D|null} the cannon group currently tinted gold */
+  let gildedCannon = null;
+
+  /** (Re)hang the deco from the current map's decor anchor, if it exists yet. */
+  function mountDeco() {
+    if (decoGroup) {
+      disposeGroup(decoGroup);
+      decoGroup = null;
+    }
+    if (!venue.decoId) return;
+    const anchor = scene.getObjectByName('decor_anchor');
+    if (!anchor) return; // no bar built yet — update() retries next frame
+    decoGroup = buildDeco(venue.decoId);
+    if (decoGroup) anchor.add(decoGroup);
+  }
+
+  /** Keep the live cannon gilded iff golden_cannon is the equipped deco. */
+  function upkeepCannonTint() {
+    const wantGold = venue.decoId === 'golden_cannon';
+    if (!wantGold) {
+      if (gildedCannon) {
+        untintCannon(gildedCannon);
+        gildedCannon = null;
+      }
+      return;
+    }
+    // map swaps rebuild the cannon — re-tint whenever our reference went stale
+    if (!gildedCannon || !connectedToScene(gildedCannon, scene)) {
+      gildedCannon = tintCannonGold(scene);
+    }
+  }
 
   function layoutHand() {
     const n = handCards.length;
@@ -131,6 +242,41 @@ export function createTableView(scene, camera, anim) {
         nameplates.delete(seat);
       }
     },
+
+    // ------------------------------------------------------------------
+    // Venue cosmetics (R9) — engine.applyTableCosmetics records the ids;
+    // this renders them. ui/cosmetics.js wires both from store changes.
+    // ------------------------------------------------------------------
+
+    /**
+     * Equip the venue: a table design over the round table + a deco build on
+     * bar.decorAnchor (null clears a slot). Safe to call repeatedly.
+     * @param {string|null} tableId  catalog `table` id
+     * @param {string|null} decoId   catalog `deco` id
+     */
+    setVenue(tableId, decoId) {
+      const nextTable = tableId ?? null;
+      const nextDeco = decoId ?? null;
+      if (venue.tableId !== nextTable) {
+        venue.tableId = nextTable;
+        if (topper) {
+          disposeGroup(topper);
+          topper = null;
+        }
+        if (nextTable) {
+          topper = buildTableTopper(nextTable);
+          if (topper) group.add(topper);
+        }
+      }
+      if (venue.decoId !== nextDeco) {
+        venue.decoId = nextDeco;
+        mountDeco();
+        upkeepCannonTint();
+      }
+      return { ...venue };
+    },
+    /** Currently rendered venue ids (test/debug aid). */
+    getVenue: () => ({ ...venue }),
 
     /** Move the glowing turn ring to a seat (or hide with null). */
     setTurn(seat) {
@@ -341,11 +487,19 @@ export function createTableView(scene, camera, anim) {
         ring.scale.setScalar(pulse);
         ring.material.emissiveIntensity = 1.5 + Math.sin(ringT * 5) * 0.7;
       }
+      // venue upkeep: a map swap tears down bar.group (taking the decor
+      // anchor + our deco with it) and rebuilds the cannon — re-mount/re-tint
+      // whenever our references fall off the live scene graph.
+      if (venue.decoId) {
+        if (!decoGroup || !connectedToScene(decoGroup, scene)) mountDeco();
+        upkeepCannonTint();
+      }
     },
 
     dispose() {
       for (const seat of [...nameplates.keys()]) this.removeNameplate(seat);
       this.clearHand();
+      this.setVenue(null, null);
       camera.remove(handGroup);
       group.removeFromParent();
     },

@@ -1,11 +1,12 @@
-// Results screen (P5) — winner podium + standings from matchEnd (§3.3),
-// play-again back to the lobby. (The local win counter is incremented once
-// in screens.js when matchEnd arrives; here we only render.)
+// Results screen (R9) — winner podium + standings from matchEnd (§3.3) plus
+// the night's take: coins/XP breakdown lines from store.lastRewards (§10.2
+// `rewards`, private per seat) with an animated coin count-up and a LEVEL UP
+// banner on level-ups. Play-again goes back to the lobby.
 
 import { MSG } from '@shared/protocol.js';
 import { el, clear, shortName } from './dom.js';
 import { portraitCanvas } from './portraits.js';
-import { getWins } from './cosmetics.js';
+import { injectCosmeticsStyles } from './cosmetics.js';
 
 /**
  * @param {{store, socket, toast, go, back}} ctx
@@ -13,11 +14,75 @@ import { getWins } from './cosmetics.js';
  */
 export function createResultsScreen(ctx) {
   const { store, socket, go } = ctx;
+  injectCosmeticsStyles();
 
   const content = el('div', { className: 'panel results-panel' });
 
+  /** rewards payload ts already animated (count-up runs once per payout) */
+  let animatedTs = 0;
+  let countRaf = 0;
+
   function seatInfo(seatNo) {
     return store.get('snapshot')?.seats?.find((s) => s.seat === seatNo) ?? null;
+  }
+
+  // ------------------------------------------------------------------
+  // Rewards block (R9): breakdown lines + coin count-up + LEVEL UP banner
+  // ------------------------------------------------------------------
+  function renderRewards() {
+    const rewards = store.get('lastRewards');
+    if (!rewards) return null;
+
+    const block = el('div', { className: 'r9-rewards' });
+    block.append(el('div', { className: 'r9-rw-title', text: '🍌 The Night\u2019s Take' }));
+
+    for (const line of rewards.breakdown ?? []) {
+      const bits = [];
+      if (line.coins) bits.push(`+${line.coins} 🍌`);
+      if (line.xp) bits.push(`+${line.xp} XP`);
+      block.append(
+        el('div', { className: 'r9-rw-row' }, [
+          el('span', { text: line.reason ?? '' }),
+          el('span', { className: 'amounts', text: bits.join('  ') }),
+        ])
+      );
+    }
+
+    const coinEl = el('span', { text: '🍌 0' });
+    const totalRow = el('div', { className: 'r9-rw-total' }, [
+      coinEl,
+      el('span', { className: 'xp', text: `+${rewards.xp ?? 0} XP` }),
+    ]);
+    block.append(totalRow);
+
+    // animated coin count-up (once per rewards payload)
+    const total = rewards.coins ?? 0;
+    if (rewards.ts !== animatedTs) {
+      animatedTs = rewards.ts ?? Date.now();
+      if (countRaf) cancelAnimationFrame(countRaf);
+      const start = performance.now();
+      const dur = Math.min(2000, 650 + total * 12);
+      const tick = (now) => {
+        const k = Math.min(1, (now - start) / dur);
+        const eased = 1 - Math.pow(1 - k, 3);
+        coinEl.textContent = `🍌 +${Math.round(total * eased)}`;
+        if (k < 1) countRaf = requestAnimationFrame(tick);
+      };
+      countRaf = requestAnimationFrame(tick);
+    } else {
+      coinEl.textContent = `🍌 +${total}`;
+    }
+
+    const wrap = el('div', {}, [block]);
+    if ((rewards.levelUps ?? 0) > 0) {
+      wrap.append(
+        el('div', {
+          className: 'r9-levelup',
+          text: `⭐ LEVEL UP! ${rewards.levelUps > 1 ? `×${rewards.levelUps} → ` : ''}Level ${rewards.newLevel}`,
+        })
+      );
+    }
+    return wrap;
   }
 
   function render() {
@@ -39,6 +104,7 @@ export function createResultsScreen(ctx) {
     const winnerSeat = seatInfo(result.winnerSeat);
     const winnerMonkey = roster.find((m) => m.id === winnerSeat?.monkeyId);
     const youWon = snap?.yourSeat != null && snap.yourSeat === result.winnerSeat;
+    const profile = store.get('profile') ?? {};
 
     content.append(
       el('div', { className: 'winner-crown', text: '👑' }),
@@ -47,7 +113,7 @@ export function createResultsScreen(ctx) {
       el('div', {
         className: 'winner-tag',
         text: youWon
-          ? `last monkey standing — that's you! 🏆 (${getWins()} win${getWins() === 1 ? '' : 's'})`
+          ? `last monkey standing — that's you! 🏆${profile.wins != null ? ` (${profile.wins} career win${profile.wins === 1 ? '' : 's'})` : ''}`
           : 'last monkey standing',
       })
     );
@@ -88,6 +154,10 @@ export function createResultsScreen(ctx) {
       );
     }
 
+    // R9: your private payout (rewards frame lands right after matchEnd)
+    const rewardsBlock = renderRewards();
+    if (rewardsBlock) content.append(rewardsBlock);
+
     content.append(
       el('div', { className: 'results-actions' }, [
         el('button', {
@@ -117,6 +187,10 @@ export function createResultsScreen(ctx) {
   }
 
   store.on('matchResult', () => {
+    if (store.get('screen') === 'results') render();
+  });
+  // the private `rewards` frame can trail matchEnd — fold it in live
+  store.on('lastRewards', () => {
     if (store.get('screen') === 'results') render();
   });
 
