@@ -22,6 +22,7 @@
 // minutes behind.
 
 import { MSG } from '@shared/protocol.js';
+import { START_CHAMBERS } from '@shared/constants.js';
 import { DEFAULT_MAP_ID } from '@shared/maps.js';
 import { TABLE_TOP_Y } from '../three/barScene.js';
 
@@ -131,7 +132,10 @@ export function createGameClient(engine, store, socket) {
     for (const s of seats ?? []) {
       if (!s.alive || passiveOf(s.seat) !== 'hotHead') continue;
       const monkey = engine.getMonkey(s.seat);
-      if (monkey) monkey.state.twitchy = 1 + Math.max(0, 6 - (s.chambersLeft ?? 6)) * 0.35;
+      if (monkey) {
+        monkey.state.twitchy =
+          1 + Math.max(0, START_CHAMBERS - (s.chambersLeft ?? START_CHAMBERS)) * 0.35;
+      }
     }
   }
 
@@ -280,6 +284,7 @@ export function createGameClient(engine, store, socket) {
       audioArmed = true;
       engine.audio.unlock({ withMusic: true });
       engine.audio.setMuted(!!store.get('prefs')?.muted);
+      engine.audio.setVolume?.(store.get('prefs')?.volume ?? 0.8);
       window.removeEventListener('pointerdown', unlock);
       window.removeEventListener('keydown', unlock);
     };
@@ -294,10 +299,12 @@ export function createGameClient(engine, store, socket) {
   subs.push(
     store.on('prefs', (prefs, prev) => {
       engine.audio.setMuted(!!prefs?.muted);
+      engine.audio.setVolume?.(prefs?.volume ?? 0.8);
       if (prefs?.quality !== prev?.quality) engine.setQuality(prefs?.quality ?? 'high');
     })
   );
   engine.setQuality(store.get('prefs')?.quality ?? 'high');
+  engine.audio.setVolume?.(store.get('prefs')?.volume ?? 0.8);
 
   // ------------------------------------------------------------------------
   // Resync: rebuild the whole scene from an authoritative snapshot
@@ -410,7 +417,7 @@ export function createGameClient(engine, store, socket) {
         // Professor Peel "Calculated": announces the exact odds to the bar.
         const peel = aliveSeats().find((s) => passiveOf(s.seat) === 'calculated');
         if (peel && !fastMode()) {
-          const pct = (((p.coconuts ?? 1) / Math.max(1, p.chambers ?? 6)) * 100).toFixed(1);
+          const pct = (((p.coconuts ?? 1) / Math.max(1, p.chambers ?? START_CHAMBERS)) * 100).toFixed(1);
           const whose = peel.seat === p.seat ? 'my' : 'the';
           sysFlavor(`🧮 ${peel.name} adjusts his cracked glasses: “${pct}% — ${whose} odds, precisely.”`);
         }

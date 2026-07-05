@@ -9,6 +9,7 @@
 import './styles.css';
 
 import { MSG } from '@shared/protocol.js';
+import { START_CHAMBERS } from '@shared/constants.js';
 import { el } from './dom.js';
 import { incrementWins } from './cosmetics.js';
 import { createMainMenu } from './mainMenu.js';
@@ -251,6 +252,21 @@ export function initUI(store, socket, engine) {
 
   socket.on(MSG.STATE, (p) => {
     adoptSnapshot(p.snapshot);
+    // Reconnect/spectate resync: rebuild the transient timer/overlay store
+    // keys from the snapshot (same shapes as the `turn`/`penalty` handlers) —
+    // otherwise countdowns, the call button, and the penalty overlay stay stale.
+    if (p.snapshot?.phase === 'penalty' && p.snapshot.penalty) {
+      store.set('penaltyInfo', { ...p.snapshot.penalty, ts: Date.now() });
+    }
+    if (p.snapshot?.phase === 'playing') {
+      store.set('turnInfo', {
+        seat: p.snapshot.turnSeat,
+        deadline: p.snapshot.deadline,
+        canCall: !!p.snapshot.lastPlay && p.snapshot.lastPlay.seat !== p.snapshot.turnSeat,
+        lastHolder: !!p.snapshot.lastHolder,
+        ts: Date.now(),
+      });
+    }
     if (p.snapshot && p.snapshot.phase !== 'matchEnd' && store.get('screen') !== 'game') {
       ctx.go('game');
     }
@@ -336,7 +352,7 @@ export function initUI(store, socket, engine) {
     if (!p.hit) {
       const seat = store.get('snapshot')?.seats?.find((s) => s.seat === p.seat);
       if (seat) {
-        patchSeat(p.seat, { chambersLeft: Math.max(1, (seat.chambersLeft ?? 6) - 1) });
+        patchSeat(p.seat, { chambersLeft: Math.max(1, (seat.chambersLeft ?? START_CHAMBERS) - 1) });
       }
     }
     sysLine(
@@ -388,7 +404,8 @@ export function initUI(store, socket, engine) {
     store.push('chatLog', {
       kind: 'phrase',
       seat: p.seat,
-      name: seatName(p.seat),
+      // outside a match there is no snapshot — the broadcast carries the name
+      name: p.name ?? seatName(p.seat),
       text: phrase?.text ?? p.phraseId,
       ts: Date.now(),
     });
@@ -399,7 +416,7 @@ export function initUI(store, socket, engine) {
     store.push('chatLog', {
       kind: 'emote',
       seat: p.seat,
-      name: seatName(p.seat),
+      name: p.name ?? seatName(p.seat),
       glyph: emote?.glyph ?? '❓',
       ts: Date.now(),
     });

@@ -2,6 +2,7 @@
 // play-again back to the lobby. (The local win counter is incremented once
 // in screens.js when matchEnd arrives; here we only render.)
 
+import { MSG } from '@shared/protocol.js';
 import { el, clear, shortName } from './dom.js';
 import { portraitCanvas } from './portraits.js';
 import { getWins } from './cosmetics.js';
@@ -11,7 +12,7 @@ import { getWins } from './cosmetics.js';
  * @returns {{el: HTMLElement, onShow: () => void}}
  */
 export function createResultsScreen(ctx) {
-  const { store, go } = ctx;
+  const { store, socket, go } = ctx;
 
   const content = el('div', { className: 'panel results-panel' });
 
@@ -105,6 +106,9 @@ export function createResultsScreen(ctx) {
           text: 'Main menu',
           onClick: () => {
             store.set('matchResult', null);
+            // Actually leave the (post-match lobby) room — otherwise the next
+            // quickMatch/createRoom is rejected with BAD_STATE.
+            if (store.get('roomState')) socket.send(MSG.LEAVE_ROOM, {});
             go('mainMenu');
           },
         }),

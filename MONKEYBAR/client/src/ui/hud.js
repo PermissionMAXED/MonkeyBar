@@ -3,11 +3,11 @@
 // pips, alive/ghost, connected) with a countdown driven by `deadline`, your
 // clickable hand (multi-select 1–3) + PLAY, the giant "MONKEY LIES!" call
 // button, penalty overlay (chip + fuse), phase/reveal banners, chat dock.
-// Sends play/callLiar/useChip with generated `aid`; reflects actionAck.
+// Sends play/callLiar/useChip/fireCannon with generated `aid`; reflects actionAck.
 // 3D choreography is P6's job (game/gameClient.js) — none of that here.
 
 import { MSG } from '@shared/protocol.js';
-import { MAX_PLAY, MIN_PLAY } from '@shared/constants.js';
+import { MAX_PLAY, MIN_PLAY, START_CHAMBERS } from '@shared/constants.js';
 import { getMonkey } from '@shared/monkeys.js';
 import { el, clear, FRUIT_META, shortName } from './dom.js';
 import { portraitCanvas } from './portraits.js';
@@ -38,15 +38,53 @@ export function createHud(ctx) {
   const penaltyLayer = el('div', {});
   const chat = createChatPanel(ctx, { compact: true });
   const chatDock = el('div', { className: 'chat-dock' }, [chat.el]);
+  // Persistent Last-Monkey-Holding warning (C1) — stays up for the whole
+  // last-holder turn, unlike the transient bannerLayer banners.
+  const lastHolderBanner = el('div', {
+    className: 'last-play-tag',
+    style: {
+      display: 'none',
+      right: 'auto',
+      bottom: 'auto',
+      left: '50%',
+      top: '64px',
+      transform: 'translateX(-50%)',
+      maxWidth: 'min(440px, 86vw)',
+      textAlign: 'center',
+      color: 'var(--danger)',
+      borderColor: 'rgba(255, 77, 94, 0.6)',
+      boxShadow: '0 0 26px rgba(255, 77, 94, 0.35)',
+      zIndex: '18',
+    },
+    text: '🃏 LAST MONKEY HOLDING — call the last play, or the cannon turns on YOU.',
+  });
+  // Small always-visible escape hatch (C2): leave the table / stop spectating.
+  const leaveBtn = el('button', {
+    className: 'btn ghost small',
+    type: 'button',
+    text: '🚪 Leave table',
+    title: 'Leave the table and return to the room browser',
+    style: {
+      position: 'absolute',
+      top: '14px',
+      left: '16px',
+      zIndex: '30',
+      pointerEvents: 'auto',
+      background: 'rgba(8, 14, 7, 0.75)',
+    },
+    onClick: onLeave,
+  });
 
   const screen = el('div', { className: 'mb-screen' }, [
     el('div', { className: 'hud' }, [
       seatLayer,
       tfBanner,
+      lastHolderBanner,
       lastPlayTag,
       callBtn,
       handDock,
       chatDock,
+      leaveBtn,
       bannerLayer,
       penaltyLayer,
     ]),
@@ -57,7 +95,7 @@ export function createHud(ctx) {
   // ---------------------------------------------------------------------
   /** @type {Set<string>} */
   let selectedIds = new Set();
-  /** @type {{aid: string, kind: 'play'|'call'|'chip', cardIds?: string[]}|null} */
+  /** @type {{aid: string, kind: 'play'|'call'|'chip'|'fire', cardIds?: string[]}|null} */
   let pendingAction = null;
   /** P6 glue: aid → action for ack resolution. The real server broadcasts
    *  `played`/`turn` BEFORE the `actionAck`, so pendingAction is already
@@ -78,6 +116,15 @@ export function createHud(ctx) {
     const s = snap();
     return !!s && s.yourSeat != null && s.turnSeat === s.yourSeat && s.phase === 'playing';
   };
+  /** C1: my turn is a pending Last-Monkey-Holding turn (no plays — call or fire). */
+  const isMyLastHolderTurn = () => isMyTurn() && !!store.get('turnInfo')?.lastHolder;
+
+  // C2: leave the table (players) / stop spectating (spectators). The server
+  // replies leftRoom, which screens.js routes back to the lobby browser.
+  function onLeave() {
+    if (snap()?.yourSeat == null) socket.send(MSG.STOP_SPECTATE, {});
+    else socket.send(MSG.LEAVE_ROOM, {});
+  }
 
   // ---------------------------------------------------------------------
   // Table-fruit banner
@@ -134,7 +181,7 @@ export function createHud(ctx) {
       const pips = el(
         'div',
         { className: 'chamber-pips', title: `${seat.chambersLeft} chambers left` },
-        Array.from({ length: 6 }, (_, i) =>
+        Array.from({ length: START_CHAMBERS }, (_, i) =>
           el('i', { className: i < (seat.chambersLeft ?? 0) ? 'full' : '' })
         )
       );
@@ -241,7 +288,10 @@ export function createHud(ctx) {
     }
 
     const myTurn = isMyTurn();
-    const canInteract = myTurn && !pendingAction;
+    const lastHolder = isMyLastHolderTurn();
+    // Last Monkey Holding: playing cards is no longer possible — the hand is
+    // frozen, and the PLAY button becomes FACE THE CANNON (call stays live).
+    const canInteract = myTurn && !pendingAction && !lastHolder;
 
     // prune selections that no longer exist in hand
     selectedIds = new Set([...selectedIds].filter((id) => hand.some((c) => c.id === id)));
@@ -273,17 +323,25 @@ export function createHud(ctx) {
     );
 
     const count = selectedIds.size;
-    const playBtn = el('button', {
-      className: 'btn primary play-btn',
-      type: 'button',
-      disabled: canInteract && count >= MIN_PLAY && count <= MAX_PLAY ? undefined : 'true',
-      text: pendingAction?.kind === 'play'
-        ? '…'
-        : count > 0
-          ? `PLAY ${count} CARD${count > 1 ? 'S' : ''} 🍌`
-          : 'PLAY (pick 1–3)',
-      onClick: onPlay,
-    });
+    const playBtn = lastHolder
+      ? el('button', {
+          className: 'btn danger big play-btn',
+          type: 'button',
+          disabled: pendingAction ? 'true' : undefined,
+          text: pendingAction?.kind === 'fire' ? '…' : '🔥 FACE THE CANNON',
+          onClick: onFireCannon,
+        })
+      : el('button', {
+          className: 'btn primary play-btn',
+          type: 'button',
+          disabled: canInteract && count >= MIN_PLAY && count <= MAX_PLAY ? undefined : 'true',
+          text: pendingAction?.kind === 'play'
+            ? '…'
+            : count > 0
+              ? `PLAY ${count} CARD${count > 1 ? 'S' : ''} 🍌`
+              : 'PLAY (pick 1–3)',
+          onClick: onPlay,
+        });
 
     const turnTag = myTurn
       ? el('span', {
@@ -303,7 +361,7 @@ export function createHud(ctx) {
 
   function onPlay() {
     const s = snap();
-    if (!isMyTurn() || pendingAction) return;
+    if (!isMyTurn() || pendingAction || isMyLastHolderTurn()) return;
     const cardIds = [...selectedIds];
     if (cardIds.length < MIN_PLAY || cardIds.length > MAX_PLAY) return;
     const aid = socket.nextAid();
@@ -312,6 +370,17 @@ export function createHud(ctx) {
     renderHand();
     renderCall();
     void s;
+  }
+
+  // C1: Last Monkey Holding — fire the cannon at yourself instead of waiting
+  // out the turn timer (§3.2 fireCannon; resolved via the normal actionAck).
+  function onFireCannon() {
+    if (!isMyLastHolderTurn() || pendingAction) return;
+    const aid = socket.nextAid();
+    trackAction({ aid, kind: 'fire' });
+    socket.send(MSG.FIRE_CANNON, { aid });
+    renderHand();
+    renderCall();
   }
 
   // ---------------------------------------------------------------------
@@ -502,7 +571,7 @@ export function createHud(ctx) {
       return;
     }
 
-    const chambers = pen.chambers ?? 6;
+    const chambers = pen.chambers ?? START_CHAMBERS;
     const coconuts = pen.coconuts ?? 1;
     // Professor Peel "Calculated" (§6, cosmetic): HE sees his odds to a decimal.
     const calculated = getMonkey(seat?.monkeyId)?.passive?.id === 'calculated';
@@ -593,6 +662,7 @@ export function createHud(ctx) {
     renderSeats();
     renderHand();
     renderCall();
+    lastHolderBanner.style.display = isMyLastHolderTurn() ? '' : 'none';
   }
 
   store.on('snapshot', () => renderAll());
