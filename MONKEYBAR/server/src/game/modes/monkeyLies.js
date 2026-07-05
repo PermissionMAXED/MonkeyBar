@@ -168,7 +168,12 @@ export function createMonkeyLiesEngine({
   function setTurn(seat) {
     turnSeat = seat;
     turnDeadline = now() + turnSeconds * 1000;
-    emit('turn', { seat, deadline: turnDeadline, canCall: canCallNow(seat) });
+    emit('turn', {
+      seat,
+      deadline: turnDeadline,
+      canCall: canCallNow(seat),
+      lastHolder: lastHolderPending,
+    });
   }
 
   function canCallNow(seat) {
@@ -245,6 +250,19 @@ export function createMonkeyLiesEngine({
     lastHolderPending = false;
     emit('lastHolder', { seat });
     beginPenalty(seat, true);
+  }
+
+  /**
+   * §3.2 fireCannon: the pending Last-Monkey-Holding player fires the cannon
+   * at themselves immediately instead of waiting out the turn timer.
+   * @param {number} seat
+   */
+  function fireSelf(seat) {
+    if (phase !== 'playing') return err(ERROR_CODES.BAD_STATE);
+    if (seat !== turnSeat) return err(ERROR_CODES.NOT_YOUR_TURN);
+    if (!lastHolderPending) return err(ERROR_CODES.BAD_STATE);
+    triggerLastHolder(seat);
+    return OK;
   }
 
   function beginPenalty(seat, self) {
@@ -395,6 +413,7 @@ export function createMonkeyLiesEngine({
   function snapshotFor(seat) {
     const isSeat = typeof seat === 'number' && seat >= 0 && seat < table.size;
     const s = isSeat ? table.get(seat) : null;
+    const victim = penalty ? table.get(penalty.seat) : null;
     return {
       mode: MONKEY_LIES_MODE_ID,
       mapId,
@@ -405,6 +424,16 @@ export function createMonkeyLiesEngine({
       turnSeat,
       deadline: getTimer()?.deadline ?? 0,
       lastPlay: lastPlay ? { seat: lastPlay.seat, count: lastPlay.count } : null,
+      lastHolder: lastHolderPending,
+      penalty: penalty
+        ? {
+            seat: penalty.seat,
+            chambers: victim.chambersLeft,
+            coconuts: victim.coconuts,
+            chipUsable: victim.chips > 0 && !penalty.chipUsed,
+            deadline: penalty.deadline,
+          }
+        : null,
       yourSeat: isSeat ? seat : null,
       yourHand: s ? s.hand.slice() : null,
       chipUsedByYou: s ? s.chips <= 0 : false,
@@ -422,6 +451,7 @@ export function createMonkeyLiesEngine({
     play,
     callLiar,
     useChip,
+    fireSelf,
     resolvePenalty,
     onTimeout,
     getTimer,

@@ -189,8 +189,12 @@ export function createGameRoom({
       deadlineTimer = null;
       if (destroyed || ended) return;
       const turnSeat = timer.kind === 'turn' ? engine.turnSeat : -1;
+      // A Last-Monkey-Holding turn timing out IS the resolution (the forced
+      // self-shot), not an AFK signal — capture the flag before the timeout
+      // consumes it and skip the strike in that case.
+      const wasLastHolderTurn = timer.kind === 'turn' && !!engine.lastHolderPending;
       engine.onTimeout(timer.kind);
-      if (turnSeat !== -1) noteMissedTurn(turnSeat);
+      if (turnSeat !== -1 && !wasLastHolderTurn) noteMissedTurn(turnSeat);
       syncTimer();
     }, wait);
   }
@@ -296,7 +300,22 @@ export function createGameRoom({
     if (type === MSG.PLAY) result = engine.play(seat, p.cardIds);
     else if (type === MSG.CALL_LIAR) result = engine.callLiar(seat);
     else if (type === MSG.USE_CHIP) result = engine.useChip(seat);
+    else if (type === MSG.FIRE_CANNON) result = engine.fireSelf(seat);
     else result = err(ERROR_CODES.BAD_MSG);
+    syncTimer();
+    return result;
+  }
+
+  /**
+   * Resolve the active penalty for `seat` now (fires the cannon without the
+   * chip) — only valid while that seat's own penalty window is open.
+   * @param {number} seat
+   */
+  function resolvePenalty(seat) {
+    if (destroyed || ended) return err(ERROR_CODES.BAD_STATE);
+    const pen = engine.inspect?.().penalty;
+    if (!pen || pen.seat !== seat) return err(ERROR_CODES.BAD_STATE);
+    const result = engine.resolvePenalty();
     syncTimer();
     return result;
   }
@@ -410,6 +429,7 @@ export function createGameRoom({
     start,
     act,
     actForSeat,
+    resolvePenalty,
     setConnected,
     convertSeatToBot,
     snapshotFor,

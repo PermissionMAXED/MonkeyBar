@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 
 import { createGameRoom } from '../src/game/gameRoom.js';
 import { AFK_MISSED_TURNS_LIMIT } from '@monkeybar/shared/constants.js';
+import { MSG } from '@monkeybar/shared/protocol.js';
 
 const SEATS = [
   { playerId: 'p0', name: 'Human', isBot: false },
@@ -93,4 +94,58 @@ test('AFK: disconnected humans are never AFK-kicked (reconnect hold covers them)
   }
 
   assert.equal(afkCalls.length, 0, 'no AFK kick while disconnected');
+});
+
+test('AFK: a Last-Monkey-Holding turn timeout does NOT count as a missed turn', async () => {
+  const sent = [];
+  const afkCalls = [];
+  const gameRoom = createGameRoom({
+    roomId: 'afk-lastholder-test',
+    modeId: 'monkeyLies',
+    mapId: 'peeling_parrot',
+    turnSeconds: 0.15, // 150 ms turn deadlines
+    seatMetas: SEATS.map((s) => ({ ...s })),
+    send: (playerId, envelope) => sent.push({ playerId, envelope }),
+    onAfk: (playerId, seat) => afkCalls.push({ playerId, seat }),
+    seed: 7,
+    autoDelayMs: 600000, // fallback never acts — the test drives every seat
+    engineOverrides: { penaltyWindowMs: 10, intermissionMs: 600000 },
+  });
+  const { engine, table } = gameRoom;
+
+  gameRoom.start();
+  try {
+    // Strike 1: let the human's (seat 0) first turn time out normally.
+    await waitFor(() => engine.phase === 'playing' && engine.turnSeat === 0);
+    const handBefore = table.get(0).hand.length;
+    await waitFor(() => table.get(0).hand.length < handBefore); // deadline auto-played
+    assert.equal(afkCalls.length, 0, 'one ordinary miss must not kick yet');
+
+    // Drive the table so seat 0 becomes the sole holder: seat 0 sheds 1 card
+    // per turn via actForSeat (which does NOT clear AFK strikes), bots dump 3.
+    // With AFK_MISSED_TURNS_LIMIT = 2, ONE more counted miss would kick seat 0.
+    let steps = 0;
+    while (!(engine.lastHolderPending && engine.turnSeat === 0) && steps++ < 50) {
+      assert.equal(engine.phase, 'playing', `unexpected phase ${engine.phase}`);
+      const seat = engine.turnSeat;
+      const count = seat === 0 ? 1 : Math.min(3, table.get(seat).hand.length);
+      const cardIds = table.get(seat).hand.slice(0, count).map((c) => c.id);
+      const res = gameRoom.actForSeat(seat, MSG.PLAY, { cardIds });
+      assert.equal(res.ok, true, `drive play failed: ${res.code}`);
+    }
+    assert.equal(engine.lastHolderPending, true, 'never reached a sole holder');
+    assert.equal(engine.turnSeat, 0);
+
+    // Let the last-holder turn time out → the forced self-shot fires…
+    await waitFor(() => engine.phase !== 'playing');
+    const lastHolderEvt = sent.find(({ envelope }) => envelope.t === MSG.LAST_HOLDER);
+    assert.ok(lastHolderEvt, 'last-holder self-shot never fired');
+    assert.equal(lastHolderEvt.envelope.p.seat, 0);
+    await new Promise((r) => setTimeout(r, 200)); // penalty window (10 ms) resolves
+  } finally {
+    gameRoom.destroy();
+  }
+
+  // …but it is the round's resolution, not an AFK strike: no kick happened.
+  assert.equal(afkCalls.length, 0, 'last-holder timeout must not add an AFK strike');
 });

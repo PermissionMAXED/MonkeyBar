@@ -38,6 +38,11 @@ export const fallbackAutoPlayPolicy = Object.freeze({
   },
 });
 
+/** How often the idle-session sweep runs. */
+const SWEEP_INTERVAL_MS = 60_000;
+/** Idle sessions (no conn, room, spectate, or hold) are evicted after this. */
+const DEFAULT_IDLE_TTL_MS = 30 * 60_000;
+
 /**
  * @typedef {Object} Session
  * @property {string} playerId
@@ -49,15 +54,39 @@ export const fallbackAutoPlayPolicy = Object.freeze({
  * @property {string|null} spectatingRoomId
  * @property {Map<string, Object>} acks  aid → actionAck envelope (dedup, §3.4)
  * @property {ReturnType<typeof setTimeout>|null} holdTimer
+ * @property {number} lastActiveAt       epoch ms of last issue/attach/detach
  */
 
-export function createSessions({ log = createLogger('sessions'), holdMs = RECONNECT_HOLD_MS } = {}) {
+export function createSessions({
+  log = createLogger('sessions'),
+  holdMs = RECONNECT_HOLD_MS,
+  idleTtlMs = DEFAULT_IDLE_TTL_MS,
+} = {}) {
   /** @type {Map<string, Session>} token → session */
   const byToken = new Map();
   /** @type {Map<string, Session>} playerId → session */
   const byId = new Map();
 
   let nameCounter = 0;
+
+  // ---- idle-session TTL sweep ---------------------------------------------------
+  // Tokens are never re-announced, so fully idle sessions (no live connection,
+  // no room membership, not spectating, no reconnect hold) would otherwise
+  // accumulate forever. Evict them once they exceed idleTtlMs of inactivity.
+
+  function sweepIdleSessions() {
+    const nowTs = Date.now();
+    for (const session of byToken.values()) {
+      if (session.conn || session.roomId || session.spectatingRoomId || session.holdTimer) continue;
+      if (nowTs - session.lastActiveAt <= idleTtlMs) continue;
+      byToken.delete(session.token);
+      byId.delete(session.playerId);
+      log.info(`evicted idle session ${session.name} (${session.playerId})`);
+    }
+  }
+
+  const sweepTimer = setInterval(sweepIdleSessions, SWEEP_INTERVAL_MS);
+  if (sweepTimer.unref) sweepTimer.unref();
 
   // ---- P3 hook points ---------------------------------------------------------
 
@@ -101,6 +130,7 @@ export function createSessions({ log = createLogger('sessions'), holdMs = RECONN
       spectatingRoomId: null,
       acks: new Map(),
       holdTimer: null,
+      lastActiveAt: Date.now(),
     };
     byToken.set(session.token, session);
     byId.set(session.playerId, session);
@@ -141,11 +171,13 @@ export function createSessions({ log = createLogger('sessions'), holdMs = RECONN
       }
     }
     session.conn = conn;
+    session.lastActiveAt = Date.now();
     cancelHold(session);
   }
 
   function detach(session, conn) {
     if (session.conn === conn) session.conn = null;
+    session.lastActiveAt = Date.now();
   }
 
   /** Deliver an envelope to a session's live connection (drops if offline). */
@@ -188,6 +220,7 @@ export function createSessions({ log = createLogger('sessions'), holdMs = RECONN
   }
 
   function shutdown() {
+    clearInterval(sweepTimer);
     for (const session of byToken.values()) cancelHold(session);
     byToken.clear();
     byId.clear();

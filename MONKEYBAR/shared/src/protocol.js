@@ -91,6 +91,8 @@ import {
 
 /**
  * Full game snapshot (spectators: yourSeat=null, yourHand=null).
+ * `lastHolder` and `penalty` are public info: whether the current turn is a
+ * pending Last-Monkey-Holding turn, and the active penalty window (if any).
  * @typedef {Object} Snapshot
  * @property {string} mode
  * @property {string} mapId
@@ -101,6 +103,8 @@ import {
  * @property {number} turnSeat
  * @property {number} deadline           epoch ms
  * @property {{seat: number, count: number}|null} lastPlay
+ * @property {boolean} lastHolder
+ * @property {{seat: number, chambers: number, coconuts: number, chipUsable: boolean, deadline: number}|null} penalty
  * @property {number|null} yourSeat
  * @property {Card[]|null} yourHand
  * @property {boolean} chipUsedByYou
@@ -139,6 +143,7 @@ export const MSG = Object.freeze({
   PLAY: 'play',
   CALL_LIAR: 'callLiar',
   USE_CHIP: 'useChip',
+  FIRE_CANNON: 'fireCannon',
   CHAT: 'chat',
   QUICK_PHRASE: 'quickPhrase',
   EMOTE: 'emote',
@@ -184,6 +189,7 @@ export const ERROR_CODES = Object.freeze({
   INVALID_CARDS: 'INVALID_CARDS',
   RATE_LIMIT: 'RATE_LIMIT',
   NAME_INVALID: 'NAME_INVALID',
+  NOT_PLAYABLE: 'NOT_PLAYABLE',
 });
 
 // ---------------------------------------------------------------------------
@@ -230,6 +236,7 @@ export const ClientMsg = Object.freeze({
   play: (aid, cardIds) => makeMsg(MSG.PLAY, { aid, cardIds }),
   callLiar: (aid) => makeMsg(MSG.CALL_LIAR, { aid }),
   useChip: (aid) => makeMsg(MSG.USE_CHIP, { aid }),
+  fireCannon: (aid) => makeMsg(MSG.FIRE_CANNON, { aid }),
   chat: (text) => makeMsg(MSG.CHAT, { text }),
   quickPhrase: (phraseId) => makeMsg(MSG.QUICK_PHRASE, { phraseId }),
   emote: (emoteId) => makeMsg(MSG.EMOTE, { emoteId }),
@@ -253,7 +260,8 @@ export const ServerMsg = Object.freeze({
   hand: (cards) => makeMsg(MSG.HAND, { cards }),
   roundStart: ({ roundNo, tableFruit, firstSeat, seats }) =>
     makeMsg(MSG.ROUND_START, { roundNo, tableFruit, firstSeat, seats }),
-  turn: ({ seat, deadline, canCall }) => makeMsg(MSG.TURN, { seat, deadline, canCall }),
+  turn: ({ seat, deadline, canCall, lastHolder }) =>
+    makeMsg(MSG.TURN, { seat, deadline, canCall, lastHolder }),
   played: ({ seat, count, handCount }) => makeMsg(MSG.PLAYED, { seat, count, handCount }),
   called: ({ callerSeat, targetSeat }) => makeMsg(MSG.CALLED, { callerSeat, targetSeat }),
   reveal: ({ targetSeat, cards, lie, loserSeat }) =>
@@ -267,8 +275,9 @@ export const ServerMsg = Object.freeze({
   roundEnd: (nextIn) => makeMsg(MSG.ROUND_END, { nextIn }),
   matchEnd: ({ winnerSeat, standings }) => makeMsg(MSG.MATCH_END, { winnerSeat, standings }),
   chat: ({ seat = null, name, text }) => makeMsg(MSG.CHAT, { seat, name, text }),
-  quickPhrase: ({ seat, phraseId }) => makeMsg(MSG.QUICK_PHRASE, { seat, phraseId }),
-  emote: ({ seat, emoteId }) => makeMsg(MSG.EMOTE, { seat, emoteId }),
+  quickPhrase: ({ seat, phraseId, name }) =>
+    makeMsg(MSG.QUICK_PHRASE, prune({ seat, phraseId, name })),
+  emote: ({ seat, emoteId, name }) => makeMsg(MSG.EMOTE, prune({ seat, emoteId, name })),
   conn: ({ seat, connected }) => makeMsg(MSG.CONN, { seat, connected }),
   pong: (ts, serverTs = Date.now()) => makeMsg(MSG.PONG, { ts, serverTs }),
 });
@@ -359,6 +368,7 @@ const CLIENT_VALIDATORS = {
   },
   [MSG.CALL_LIAR]: (p) => (isStr(p.aid) ? null : ERROR_CODES.BAD_MSG),
   [MSG.USE_CHIP]: (p) => (isStr(p.aid) ? null : ERROR_CODES.BAD_MSG),
+  [MSG.FIRE_CANNON]: (p) => (isStr(p.aid) ? null : ERROR_CODES.BAD_MSG),
   [MSG.CHAT]: (p) => {
     if (!isStr(p.text)) return ERROR_CODES.BAD_MSG;
     if (p.text.length < 1 || p.text.length > CHAT_MAX_LENGTH) return ERROR_CODES.BAD_MSG;

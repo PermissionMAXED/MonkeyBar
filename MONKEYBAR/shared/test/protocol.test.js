@@ -63,6 +63,7 @@ test('validateClientMsg accepts every ClientMsg factory output', () => {
     ClientMsg.play('a1', ['c1', 'c2']),
     ClientMsg.callLiar('a2'),
     ClientMsg.useChip('a3'),
+    ClientMsg.fireCannon('a9'),
     ClientMsg.chat('You are lying.'),
     ClientMsg.quickPhrase('youre_lying'),
     ClientMsg.emote('laugh'),
@@ -139,8 +140,8 @@ test('MSG covers all §3.2 client types and they are all validatable', () => {
   const clientTypes = [
     'hello', 'setProfile', 'listRooms', 'createRoom', 'joinRoom', 'leaveRoom',
     'quickMatch', 'cancelQuick', 'ready', 'selectMonkey', 'addBot', 'removeBot',
-    'updateSettings', 'startGame', 'play', 'callLiar', 'useChip', 'chat',
-    'quickPhrase', 'emote', 'spectate', 'stopSpectate', 'ping',
+    'updateSettings', 'startGame', 'play', 'callLiar', 'useChip', 'fireCannon',
+    'chat', 'quickPhrase', 'emote', 'spectate', 'stopSpectate', 'ping',
   ];
   for (const t of clientTypes) {
     assert.ok(Object.values(MSG).includes(t), `MSG missing client type '${t}'`);
@@ -164,7 +165,7 @@ test('MSG covers all §3.3 server types', () => {
 test('ERROR_CODES matches the §3.3 list', () => {
   assert.deepEqual(
     Object.keys(ERROR_CODES).sort(),
-    ['BAD_MSG', 'BAD_STATE', 'INVALID_CARDS', 'NAME_INVALID', 'NOT_FOUND', 'NOT_HOST', 'NOT_YOUR_TURN', 'RATE_LIMIT', 'ROOM_FULL'].sort()
+    ['BAD_MSG', 'BAD_STATE', 'INVALID_CARDS', 'NAME_INVALID', 'NOT_FOUND', 'NOT_HOST', 'NOT_PLAYABLE', 'NOT_YOUR_TURN', 'RATE_LIMIT', 'ROOM_FULL'].sort()
   );
 });
 

@@ -299,7 +299,7 @@ test('reveal logic is correct in full matches (goldens count as truth)', () => {
 // Coconut Cannon: chamber progression, floor, certain doom at 1 chamber
 // ---------------------------------------------------------------------------
 
-test('surviving a shot removes one chamber: 6→5→…, floor 1', () => {
+test('surviving a shot removes one chamber: START_CHAMBERS→…→1, floor 1', () => {
   const game = makeGame({ seed: 3, cannonRng: () => 0.999 }); // 0.999 < c/ch only when p=1
   const { table, events } = game;
   const expected = new Map([...Array(4).keys()].map((s) => [s, START_CHAMBERS]));
@@ -319,11 +319,11 @@ test('surviving a shot removes one chamber: 6→5→…, floor 1', () => {
       assert.equal(expected.get(e.p.seat), 1, 'hit before reaching 1 chamber');
     }
   }
-  // Final chamber counts match the tracked 6→5→… progression (floor 1).
+  // Final chamber counts match the tracked 4→3→… progression (floor 1).
   for (const [seat, chambers] of expected) {
     assert.equal(table.get(seat).chambersLeft, chambers);
   }
-  // Someone ground all the way down 6→…→1.
+  // Someone ground all the way down 4→…→1.
   assert.ok([...expected.values()].some((v) => v === 1), 'nobody reached the 1-chamber floor');
 });
 
@@ -343,9 +343,10 @@ test('at 1 chamber the next shot is certain doom', () => {
 // ---------------------------------------------------------------------------
 
 test('chip adds +2 temporary chambers for one shot and changes the outcome', () => {
-  // Roll 0.14: with chip p = 1/8 = 0.125 → miss; without chip p = 1/6 ≈ 0.167 → hit.
+  // Roll 0.2: with chip p = 1/6 ≈ 0.167 → miss (0.2 ≥ 1/6); without chip
+  // p = 1/4 = 0.25 → hit (0.2 < 1/4). (4 starting chambers, +2 from the chip.)
   const run = (spendChip) => {
-    const game = makeGame({ seed: 11, cannonRng: () => 0.14 });
+    const game = makeGame({ seed: 11, cannonRng: () => 0.2 });
     const { engine, table, events } = game;
     engine.start();
     const first = engine.turnSeat;
@@ -373,13 +374,13 @@ test('chip adds +2 temporary chambers for one shot and changes the outcome', () 
     seat: withChip.victim,
     chambersNow: START_CHAMBERS + CHIP_BONUS_CHAMBERS,
   });
-  assert.equal(byType(withChip.game.events, MSG.CANNON).at(-1).p.hit, false); // 8 chambers saved them
+  assert.equal(byType(withChip.game.events, MSG.CANNON).at(-1).p.hit, false); // 6 chambers saved them
   assert.equal(withChip.game.table.get(withChip.victim).chips, 0);
-  // Temporary chambers don't persist: 6 → 5 after the survived shot.
+  // Temporary chambers don't persist: 4 → 3 after the survived shot.
   assert.equal(withChip.game.table.get(withChip.victim).chambersLeft, START_CHAMBERS - 1);
 
   const withoutChip = run(false);
-  assert.equal(byType(withoutChip.game.events, MSG.CANNON).at(-1).p.hit, true); // same roll, 6 chambers
+  assert.equal(byType(withoutChip.game.events, MSG.CANNON).at(-1).p.hit, true); // same roll, 4 chambers
 });
 
 test('chip is one per match: second penalty offers no chip and useChip is rejected', () => {
@@ -468,6 +469,86 @@ test('Last Monkey Holding: the sole holder may still call the final play', () =>
   assert.equal(reveal.p.targetSeat, target);
   assert.ok([holder, target].includes(reveal.p.loserSeat));
   assert.equal(engine.phase, 'penalty');
+});
+
+test('fireSelf: pending last holder fires immediately; rejected otherwise', () => {
+  const game = makeGame({ seed: 9 });
+  const { engine, table, events } = game;
+  engine.start();
+
+  // Ordinary turns are announced with lastHolder:false…
+  assert.equal(byType(events, MSG.TURN).at(-1).p.lastHolder, false);
+  // …and fireSelf is rejected: BAD_STATE for the turn holder (no pending
+  // last-holder), NOT_YOUR_TURN for everyone else.
+  assert.equal(engine.fireSelf(engine.turnSeat).code, ERROR_CODES.BAD_STATE);
+  assert.equal(engine.fireSelf((engine.turnSeat + 1) % 4).code, ERROR_CODES.NOT_YOUR_TURN);
+
+  // Everyone dumps 3 cards a turn until a sole holder remains.
+  let steps = 0;
+  while (!engine.lastHolderPending && engine.phase === 'playing' && steps++ < 100) {
+    const seat = engine.turnSeat;
+    engine.play(seat, table.get(seat).hand.slice(0, 3).map((c) => c.id));
+  }
+  assert.equal(engine.lastHolderPending, true, 'never reached a sole holder');
+  const holder = engine.turnSeat;
+
+  // The last-holder turn announces itself on the wire.
+  assert.equal(byType(events, MSG.TURN).at(-1).p.lastHolder, true);
+
+  // Only the holder may pull the trigger.
+  assert.equal(engine.fireSelf((holder + 1) % 4).code, ERROR_CODES.NOT_YOUR_TURN);
+  assert.equal(engine.fireSelf(holder).ok, true);
+  assert.equal(byType(events, MSG.LAST_HOLDER).at(-1).p.seat, holder);
+  assert.equal(byType(events, MSG.PENALTY).at(-1).p.seat, holder);
+  assert.equal(engine.phase, 'penalty');
+
+  // fireSelf is turn-phase only: during the penalty window it is BAD_STATE.
+  assert.equal(engine.fireSelf(holder).code, ERROR_CODES.BAD_STATE);
+  engine.onTimeout('penalty');
+  assert.equal(byType(events, MSG.CANNON).at(-1).p.seat, holder); // self-shot
+});
+
+test('snapshot carries public lastHolder and penalty info through those phases', () => {
+  const game = makeGame({ seed: 9 });
+  const { engine, table } = game;
+  engine.start();
+
+  // Ordinary play: no last-holder flag, no penalty.
+  let snap = engine.snapshotFor(null);
+  assert.equal(snap.lastHolder, false);
+  assert.equal(snap.penalty, null);
+
+  let steps = 0;
+  while (!engine.lastHolderPending && engine.phase === 'playing' && steps++ < 100) {
+    const seat = engine.turnSeat;
+    engine.play(seat, table.get(seat).hand.slice(0, 3).map((c) => c.id));
+  }
+  assert.equal(engine.lastHolderPending, true);
+  const holder = engine.turnSeat;
+
+  // Pending last-holder turn: flagged for seats AND spectators; no penalty yet.
+  snap = engine.snapshotFor(holder);
+  assert.equal(snap.lastHolder, true);
+  assert.equal(snap.penalty, null);
+  assert.equal(engine.snapshotFor(null).lastHolder, true);
+
+  // During the penalty window the snapshot exposes the public penalty shape.
+  assert.equal(engine.fireSelf(holder).ok, true);
+  const pen = engine.inspect().penalty;
+  snap = engine.snapshotFor(null);
+  assert.equal(snap.phase, 'penalty');
+  assert.equal(snap.lastHolder, false); // consumed by the trigger
+  assert.deepEqual(snap.penalty, {
+    seat: holder,
+    chambers: table.get(holder).chambersLeft,
+    coconuts: table.get(holder).coconuts,
+    chipUsable: table.get(holder).chips > 0,
+    deadline: pen.deadline,
+  });
+
+  // Resolved: the penalty leaves the snapshot again.
+  engine.onTimeout('penalty');
+  assert.equal(engine.snapshotFor(null).penalty, null);
 });
 
 test('full dumper matches always end via Last Monkey Holding self-shots', () => {

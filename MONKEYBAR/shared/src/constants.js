@@ -1,15 +1,15 @@
 // MONKEYBAR shared rules constants — PLAN.md §4 values live HERE (binding contract).
 
 // ---- Turn timer (seconds) ----
-export const TURN_SECONDS_DEFAULT = 25;
-export const TURN_SECONDS_MIN = 15;
+export const TURN_SECONDS_DEFAULT = 15;
+export const TURN_SECONDS_MIN = 10;
 export const TURN_SECONDS_MAX = 45;
 
 // ---- Timing windows (milliseconds) ----
 /** Victim's decision window during the `penalty` phase (may spend Lucky Banana Chip). */
 export const PENALTY_WINDOW_MS = 5000;
 /** Intermission between `roundEnd` and the next `roundStart`. */
-export const ROUND_INTERMISSION_MS = 5000;
+export const ROUND_INTERMISSION_MS = 3000;
 /** How long a disconnected in-match player's seat is held before converting to a bot. */
 export const RECONNECT_HOLD_MS = 60000;
 /** Quickmatch: server fills remaining seats with bots after this delay. */
@@ -23,7 +23,7 @@ export const PING_INTERVAL_MS = 10000;
 
 // ---- Coconut Cannon (§4.2) ----
 /** Each player starts the match with this many cannon chambers. */
-export const START_CHAMBERS = 6;
+export const START_CHAMBERS = 4;
 /** Each player starts the match with this many coconuts in the cannon. */
 export const START_COCONUTS = 1;
 /** Lucky Banana Chip adds this many temporary chambers to a single shot. */

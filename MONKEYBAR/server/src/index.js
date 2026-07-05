@@ -7,7 +7,7 @@
 
 import http from 'node:http';
 import { createReadStream, existsSync, statSync } from 'node:fs';
-import { extname, join, normalize, resolve, dirname } from 'node:path';
+import { extname, join, normalize, resolve, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { WebSocketServer } from 'ws';
@@ -49,9 +49,15 @@ const MIME = {
 };
 
 function serveStatic(req, res) {
-  const urlPath = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+  let urlPath;
+  try {
+    urlPath = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+  } catch {
+    res.writeHead(400).end('Bad Request');
+    return;
+  }
   let filePath = normalize(join(DIST_DIR, urlPath));
-  if (!filePath.startsWith(DIST_DIR)) {
+  if (!(filePath === DIST_DIR || filePath.startsWith(DIST_DIR + sep))) {
     res.writeHead(403).end('Forbidden');
     return;
   }
@@ -156,6 +162,8 @@ function createDispatcher(sessions, lobby, log) {
         conn.send(ServerMsg.roomState(room.roomState()));
         conn.send(ServerMsg.state(room.gameRoom.snapshotFor(null)));
       } else {
+        // Match ended while we were away — drop the stale spectator entry.
+        if (room && !room.closed) room.removeSpectator(session.playerId);
         session.spectatingRoomId = null;
       }
     }
@@ -313,6 +321,7 @@ function createDispatcher(sessions, lobby, log) {
     [MSG.PLAY]: (conn, p) => gameAction(conn, MSG.PLAY, p),
     [MSG.CALL_LIAR]: (conn, p) => gameAction(conn, MSG.CALL_LIAR, p),
     [MSG.USE_CHIP]: (conn, p) => gameAction(conn, MSG.USE_CHIP, p),
+    [MSG.FIRE_CANNON]: (conn, p) => gameAction(conn, MSG.FIRE_CANNON, p),
     [MSG.CHAT]: chat,
     [MSG.QUICK_PHRASE]: quickPhrase,
     [MSG.EMOTE]: emote,
@@ -420,7 +429,7 @@ export function startServer({
     }
   });
 
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  const wss = new WebSocketServer({ server: httpServer, path: '/ws', maxPayload: 16 * 1024 });
 
   wss.on('connection', (ws) => {
     createConnection(ws, { dispatch, onClose: handleClose, log: log.child('conn') });

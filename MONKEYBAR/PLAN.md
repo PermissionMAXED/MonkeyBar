@@ -131,6 +131,8 @@ SeatPublic  = { seat: number, playerId, name, monkeyId, isBot, connected: bool,
 Snapshot    = { mode, mapId, phase: "dealing"|"playing"|"revealing"|"penalty"|"roundEnd"|"matchEnd",
                 roundNo, tableFruit, seats: SeatPublic[], turnSeat, deadline,
                 lastPlay: { seat, count } | null,
+                lastHolder: bool,                                             // public: current turn is a pending Last-Monkey-Holding turn
+                penalty: { seat, chambers, coconuts, chipUsable, deadline } | null,  // public: active penalty window
                 yourSeat: number|null, yourHand: Card[]|null, chipUsedByYou: bool }  // spectators: yourSeat=null
 ```
 
@@ -155,6 +157,7 @@ Snapshot    = { mode, mapId, phase: "dealing"|"playing"|"revealing"|"penalty"|"r
 | `play` | `{ aid, cardIds: string[] }` | 1–3 cards; implicit claim "these are Table Fruit" |
 | `callLiar` | `{ aid }` | only when it's your turn and `lastPlay != null` |
 | `useChip` | `{ aid }` | only during your own `penalty` window |
+| `fireCannon` | `{ aid }` | only valid on your turn when `lastHolder` is pending; fires the cannon at yourself immediately; acked via the existing `actionAck` |
 | `chat` | `{ text }` | ≤120 chars, rate-limited 1/s |
 | `quickPhrase` | `{ phraseId }` | from `shared/emotes.js` |
 | `emote` | `{ emoteId }` | rate-limited 1/2 s |
@@ -166,7 +169,7 @@ Snapshot    = { mode, mapId, phase: "dealing"|"playing"|"revealing"|"penalty"|"r
 | `t` | payload `p` | notes |
 |---|---|---|
 | `welcome` | `{ playerId, token, resumed, roster, modes, maps, emotes, quickPhrases }` | catalogs from shared data |
-| `error` | `{ code, msg }` | codes: `BAD_MSG, NOT_FOUND, ROOM_FULL, NOT_HOST, BAD_STATE, NOT_YOUR_TURN, INVALID_CARDS, RATE_LIMIT, NAME_INVALID` |
+| `error` | `{ code, msg }` | codes: `BAD_MSG, NOT_FOUND, ROOM_FULL, NOT_HOST, BAD_STATE, NOT_YOUR_TURN, INVALID_CARDS, RATE_LIMIT, NAME_INVALID, NOT_PLAYABLE` |
 | `actionAck` | `{ aid, ok, code? }` | for `play/callLiar/useChip` |
 | `roomList` | `{ rooms: RoomSummary[] }` | |
 | `roomState` | `{ room: RoomState }` | **full snapshot** on every lobby change |
@@ -176,7 +179,7 @@ Snapshot    = { mode, mapId, phase: "dealing"|"playing"|"revealing"|"penalty"|"r
 | `state` | `{ snapshot }` | reconnect / spectate resync |
 | `hand` | `{ cards: Card[] }` | **private**; only your own hand, each deal |
 | `roundStart` | `{ roundNo, tableFruit, firstSeat, seats: SeatPublic[] }` | |
-| `turn` | `{ seat, deadline, canCall: bool }` | `deadline` = epoch ms |
+| `turn` | `{ seat, deadline, canCall: bool, lastHolder: bool }` | `deadline` = epoch ms; `lastHolder` = this turn is a pending Last-Monkey-Holding turn |
 | `played` | `{ seat, count, handCount }` | face-down; no card identities |
 | `called` | `{ callerSeat, targetSeat }` | |
 | `reveal` | `{ targetSeat, cards: Card[], lie: bool, loserSeat }` | only the challenged cards are revealed |
@@ -188,7 +191,7 @@ Snapshot    = { mode, mapId, phase: "dealing"|"playing"|"revealing"|"penalty"|"r
 | `roundEnd` | `{ nextIn }` | ms until next `roundStart` |
 | `matchEnd` | `{ winnerSeat, standings: [{ seat, name, place }] }` | |
 | `chat` | `{ seat?, name, text }` | seat null for spectators |
-| `quickPhrase` | `{ seat, phraseId }` / `emote` `{ seat, emoteId }` | |
+| `quickPhrase` | `{ seat, phraseId, name? }` / `emote` `{ seat, emoteId, name? }` | `name` = sender's display name |
 | `conn` | `{ seat, connected }` | disconnect/reconnect notice |
 | `pong` | `{ ts, serverTs }` | |
 
@@ -210,9 +213,9 @@ Snapshot    = { mode, mapId, phase: "dealing"|"playing"|"revealing"|"penalty"|"r
 **Setup (4–8 players):**
 - **Deck** (`shared/cards.js`): for `P` players build `P × 5` cards → each of **Banana / Coconut / Mango** appears `floor(P×5×0.3)` times, remainder are **Golden Bananas** (wild). (P=4 → 6/6/6+2 golden = 20 cards; P=8 → 12/12/12+4 = 40.)
 - Each round: shuffle, deal **5 cards** to every living player, then announce the **Table Fruit** (random of the three, chosen *after* dealing).
-- Every player starts the **match** with: **6 cannon chambers** and **1 Lucky Banana Chip**.
+- Every player starts the **match** with: **4 cannon chambers** and **1 Lucky Banana Chip**.
 
-**Turn flow (turn timer 25 s, configurable 15–45):**
+**Turn flow (turn timer 15 s, configurable 10–45):**
 1. On your turn you do exactly one of:
    - **PLAY:** place **1–3 cards face down**. The claim is implicit and fixed: *"these are all Table Fruit."* Only the count is public.
    - **CALL — "MONKEY LIES!":** only allowed if the previous play is unresolved (not at round start).
@@ -221,11 +224,11 @@ Snapshot    = { mode, mapId, phase: "dealing"|"playing"|"revealing"|"penalty"|"r
 4. **Empty hand = safe:** shed all 5 cards without being caught and you sit out the rest of the round smirking.
 5. **Last Monkey Holding:** if everyone else has emptied their hand, the last player still holding cards must fire the cannon **at themselves** once.
 
-**Rounds & match:** After every cannon shot (hit or miss), the round ends → 5 s intermission → reshuffle, new Table Fruit, redeal to survivors. A coconut hit **eliminates** you (you stay as a table ghost/spectator with chat). **Last monkey standing wins the match.**
+**Rounds & match:** After every cannon shot (hit or miss), the round ends → 3 s intermission → reshuffle, new Table Fruit, redeal to survivors. A coconut hit **eliminates** you (you stay as a table ghost/spectator with chat). **Last monkey standing wins the match.**
 
 ### 4.2 The Coconut Cannon (penalty mechanic)
 
-- Personal risk track: you start with **6 chambers, 1 coconut**. Each shot: hit chance = `coconuts / chambers`. **Survive → you permanently lose one empty chamber** (6→5→4→3→2→1; at 1 the next shot is certain doom).
+- Personal risk track: you start with **4 chambers, 1 coconut**. Each shot: hit chance = `coconuts / chambers`. **Survive → you permanently lose one empty chamber** (4→3→2→1; at 1 the next shot is certain doom).
 - **Lucky Banana Chip:** in your 5 s `penalty` window you may spend your one chip to bolt **+2 temporary chambers** onto this shot only. One chip per match.
 - Presentation (client): cannon swivels and locks onto the victim, table lights dim, drumroll, other monkeys lean in/cover eyes, fuse burns... **THOOM** (coconut → monkey flies off stool, KO'd, hat rolls away) or **click/confetti-puff** (survival, table exhales).
 

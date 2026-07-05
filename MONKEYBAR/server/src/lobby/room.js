@@ -214,11 +214,17 @@ export function createRoom({
       onMemberRemoved(playerId, reason);
     }
 
-    // Mid-match: the seat lives on as a bot for the rest of the match.
+    // Mid-match: the seat lives on as a bot for the rest of the match. Dead
+    // (ghost) seats still need the seat↔player send link severed so events
+    // stop streaming to the departed player — but no brain gets attached.
     if (state === 'inGame' && gameRoom && !member.isBot) {
       const seat = gameRoom.table.seatOf(playerId);
-      if (seat !== -1 && gameRoom.table.get(seat).alive) {
-        convertSeat(gameRoom, seat, { reason: reason === 'left' ? 'leftMatch' : reason });
+      if (seat !== -1) {
+        if (gameRoom.table.get(seat).alive) {
+          convertSeat(gameRoom, seat, { reason: reason === 'left' ? 'leftMatch' : reason });
+        } else {
+          gameRoom.convertSeatToBot(seat);
+        }
       }
     }
 
@@ -478,7 +484,13 @@ export function createRoom({
     const isSpectator = spectators.has(playerId);
     if (!member && !isSpectator) return err(ERROR_CODES.BAD_STATE);
     const seat = state === 'inGame' && gameRoom && member ? gameRoom.table.seatOf(playerId) : -1;
-    broadcast(ServerMsg.quickPhrase({ seat: seat === -1 ? null : seat, phraseId }));
+    broadcast(
+      ServerMsg.quickPhrase({
+        seat: seat === -1 ? null : seat,
+        phraseId,
+        name: member?.name ?? nameOf(playerId),
+      })
+    );
     return OK;
   }
 
@@ -486,7 +498,13 @@ export function createRoom({
     const member = members.get(playerId);
     if (!member) return err(ERROR_CODES.BAD_STATE, 'spectators cannot emote');
     const seat = state === 'inGame' && gameRoom ? gameRoom.table.seatOf(playerId) : -1;
-    broadcast(ServerMsg.emote({ seat: seat === -1 ? null : seat, emoteId }));
+    broadcast(
+      ServerMsg.emote({
+        seat: seat === -1 ? null : seat,
+        emoteId,
+        name: member?.name ?? nameOf(playerId),
+      })
+    );
     return OK;
   }
 
