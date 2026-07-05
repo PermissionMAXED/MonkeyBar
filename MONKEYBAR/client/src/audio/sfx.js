@@ -26,12 +26,19 @@ export function initAudioContext() {
 
 // ---------------------------------------------------------------------------
 
+const SFX_BASE_GAIN = 0.9;
+
 export function createSFX() {
   /** @type {AudioContext|null} */
   let ctx = null;
   let master = null;
   let muted = false;
+  let volume = 1;
   let noiseBuf = null;
+
+  function applyMasterGain() {
+    if (master) master.gain.value = muted ? 0 : SFX_BASE_GAIN * volume;
+  }
 
   function init() {
     if (ctx) {
@@ -41,8 +48,8 @@ export function createSFX() {
     ctx = ensureContext();
     if (!ctx) return false;
     master = ctx.createGain();
-    master.gain.value = muted ? 0 : 0.9;
     master.connect(ctx.destination);
+    applyMasterGain();
     // 1s of white noise, reused by every noise-based hit
     noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
     const data = noiseBuf.getChannelData(0);
@@ -265,10 +272,18 @@ export function createSFX() {
     },
     setMuted(m) {
       muted = !!m;
-      if (master) master.gain.value = muted ? 0 : 0.9;
+      applyMasterGain();
     },
     get muted() {
       return muted;
+    },
+    /** Master SFX volume, 0..1 (applied on top of the base gain). */
+    setVolume(v) {
+      volume = Math.max(0, Math.min(1, Number(v) || 0));
+      applyMasterGain();
+    },
+    get volume() {
+      return volume;
     },
     /** Play a named one-shot: play('cannonThoom') etc. */
     play(name, ...args) {

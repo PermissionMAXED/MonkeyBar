@@ -21,6 +21,8 @@ function midiToFreq(m) {
   return 440 * Math.pow(2, (m - 69) / 12);
 }
 
+const MUSIC_BASE_GAIN = 0.5;
+
 export function createMusic() {
   /** @type {AudioContext|null} */
   let ctx = null;
@@ -33,6 +35,7 @@ export function createMusic() {
   let noiseBuf = null;
 
   let muted = false;
+  let volume = 1;
   let playing = false;
   let intensity = 0;
   let timer = null;
@@ -41,13 +44,17 @@ export function createMusic() {
 
   const stepDur = () => 60 / BPM / 2; // 8th note
 
+  function applyMasterGain() {
+    if (master) master.gain.value = muted ? 0 : MUSIC_BASE_GAIN * volume;
+  }
+
   function init() {
     if (ctx) return true;
     ctx = initAudioContext();
     if (!ctx) return false;
 
     master = ctx.createGain();
-    master.gain.value = muted ? 0 : 0.5;
+    master.gain.value = muted ? 0 : MUSIC_BASE_GAIN * volume;
     lowpass = ctx.createBiquadFilter();
     lowpass.type = 'lowpass';
     lowpass.frequency.value = 2400;
@@ -237,10 +244,18 @@ export function createMusic() {
     },
     setMuted(m) {
       muted = !!m;
-      if (master) master.gain.value = muted ? 0 : 0.5;
+      applyMasterGain();
     },
     get muted() {
       return muted;
+    },
+    /** Master music volume, 0..1 (applied on top of the base gain). */
+    setVolume(v) {
+      volume = Math.max(0, Math.min(1, Number(v) || 0));
+      applyMasterGain();
+    },
+    get volume() {
+      return volume;
     },
   };
 }

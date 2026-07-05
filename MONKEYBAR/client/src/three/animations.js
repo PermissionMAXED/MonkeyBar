@@ -428,6 +428,55 @@ const CLIP_TABLE = {
     // stays KO'd — caller re-seats/resets if needed
   },
 
+  /**
+   * Bystander dread: lean over the table toward the action, head raised.
+   * opts.headYaw — local head yaw eased toward the victim.
+   * opts.hold — promise extending the hold (released when the lights come up).
+   */
+  async leanIn(anim, monkey, opts = {}) {
+    const j = monkey.joints;
+    monkey.setExpression('shock');
+    const moves = [
+      anim.to(j.torso.rotation, { x: 0.34 }, 0.45, { ease: Ease.quadOut }).promise,
+      anim.to(j.head.rotation, { x: -0.28 }, 0.45, { ease: Ease.quadOut }).promise,
+      anim.to(j.armL.rotation, { x: -0.85 }, 0.45).promise,
+      anim.to(j.armR.rotation, { x: -0.85 }, 0.45).promise,
+    ];
+    if (typeof opts.headYaw === 'number') {
+      moves.push(anim.to(j.head.rotation, { y: opts.headYaw }, 0.55, { ease: Ease.quadInOut }).promise);
+    }
+    await Promise.all(moves);
+    await anim.wait(1.2);
+    if (opts.hold) await opts.hold;
+    monkey.setExpression('neutral');
+    await resetPose(anim, monkey, 0.5);
+  },
+
+  /**
+   * Bystander flinch: both arms up over the face, can't watch.
+   * Same opts as leanIn (headYaw / hold).
+   */
+  async coverEyes(anim, monkey, opts = {}) {
+    const j = monkey.joints;
+    monkey.setExpression('sweat');
+    const moves = [
+      anim.to(j.armL.rotation, { x: -2.45, z: 0.55 }, 0.4, { ease: Ease.quadOut }).promise,
+      anim.to(j.armR.rotation, { x: -2.45, z: -0.55 }, 0.4, { ease: Ease.quadOut }).promise,
+      anim.to(j.foreArmL.rotation, { x: -1.5 }, 0.4).promise,
+      anim.to(j.foreArmR.rotation, { x: -1.5 }, 0.4).promise,
+      anim.to(j.head.rotation, { x: 0.2 }, 0.4).promise,
+      anim.to(j.torso.rotation, { x: 0.12 }, 0.4).promise,
+    ];
+    if (typeof opts.headYaw === 'number') {
+      moves.push(anim.to(j.head.rotation, { y: opts.headYaw * 0.6 }, 0.55, { ease: Ease.quadInOut }).promise);
+    }
+    await Promise.all(moves);
+    await anim.wait(1.6);
+    if (opts.hold) await opts.hold;
+    monkey.setExpression('neutral');
+    await resetPose(anim, monkey, 0.5);
+  },
+
   /** Survival: massive exhale, slump, wipe brow. */
   async survive(anim, monkey) {
     const j = monkey.joints;

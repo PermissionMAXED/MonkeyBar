@@ -170,6 +170,106 @@ export function createParticles(scene) {
     return sys;
   }
 
+  // ---------------------------------------------------------------------
+  // Confetti: tumbling paper rectangles (one InstancedMesh per burst)
+  // ---------------------------------------------------------------------
+  const CONFETTI_COLORS = ['#ff3df0', '#39ff88', '#ffd23d', '#3dc8ff', '#ff5a3d', '#b06bff'];
+
+  function confettiBurst(origin, { count = 90 } = {}) {
+    const geo = new THREE.PlaneGeometry(0.02, 0.035);
+    const mat = new THREE.MeshBasicMaterial({
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 1,
+      depthWrite: false,
+      blending: THREE.NormalBlending,
+    });
+    const mesh = new THREE.InstancedMesh(geo, mat, count);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    const c = new THREE.Color();
+    /** per-instance sim state */
+    const parts = [];
+    for (let i = 0; i < count; i++) {
+      c.set(CONFETTI_COLORS[i % CONFETTI_COLORS.length]).multiplyScalar(0.85 + Math.random() * 0.3);
+      mesh.setColorAt(i, c);
+      parts.push({
+        pos: new THREE.Vector3(origin.x, origin.y, origin.z),
+        vel: new THREE.Vector3(
+          (Math.random() - 0.5) * 2.0,
+          1.1 + Math.random() * 2.1,
+          (Math.random() - 0.5) * 2.0
+        ),
+        rot: new THREE.Euler(Math.random() * Math.PI * 2, Math.random() * Math.PI * 2, Math.random() * Math.PI * 2),
+        // tumble on two axes
+        angVelX: (Math.random() - 0.5) * 16,
+        angVelZ: (Math.random() - 0.5) * 16,
+        flutterPhase: Math.random() * Math.PI * 2,
+        flutterFreq: 4.5 + Math.random() * 4,
+      });
+    }
+    scene.add(mesh);
+
+    const dummy = new THREE.Object3D();
+    const life = 2.2;
+    const gravity = -2.2;
+    let age = 0;
+    const sys = {
+      update(dt) {
+        age += dt;
+        const t = age / life;
+        if (t >= 1) return false;
+        mat.opacity = t < 0.72 ? 1 : 1 - (t - 0.72) / 0.28;
+        for (let i = 0; i < count; i++) {
+          const p = parts[i];
+          p.vel.y = Math.max(p.vel.y + gravity * dt, -1.5); // paper terminal velocity
+          p.vel.x *= 0.985;
+          p.vel.z *= 0.985;
+          const flutter = Math.sin(age * p.flutterFreq + p.flutterPhase);
+          p.pos.x += (p.vel.x + flutter * 0.28) * dt;
+          p.pos.y += p.vel.y * dt;
+          p.pos.z += (p.vel.z + Math.cos(age * p.flutterFreq * 0.8 + p.flutterPhase) * 0.28) * dt;
+          p.rot.x += p.angVelX * dt;
+          p.rot.z += p.angVelZ * dt;
+          dummy.position.copy(p.pos);
+          dummy.rotation.copy(p.rot);
+          dummy.updateMatrix();
+          mesh.setMatrixAt(i, dummy.matrix);
+        }
+        mesh.instanceMatrix.needsUpdate = true;
+        return true;
+      },
+      dispose() {
+        scene.remove(mesh);
+        geo.dispose();
+        mat.dispose();
+        mesh.dispose();
+      },
+    };
+    systems.push(sys);
+    return sys;
+  }
+
+  /** Short-lived point light (muzzle flash lights the room for a beat). */
+  function flashLight(origin, { color = '#ff9a3d', intensity = 10, distance = 3, decay = 2, life = 0.15 } = {}) {
+    const light = new THREE.PointLight(color, intensity, distance, decay);
+    light.position.copy(origin);
+    scene.add(light);
+    let age = 0;
+    systems.push({
+      update(dt) {
+        age += dt;
+        const t = age / life;
+        if (t >= 1) return false;
+        light.intensity = intensity * (1 - t);
+        return true;
+      },
+      dispose() {
+        scene.remove(light);
+        light.dispose();
+      },
+    });
+  }
+
   return {
     setAmbientDust,
 
@@ -191,26 +291,14 @@ export function createParticles(scene) {
       });
     },
 
-    /** Celebration confetti burst. */
+    /** Celebration confetti: tumbling, fluttering paper rectangles. */
     confetti(origin, { count = 90 } = {}) {
-      burst({
-        origin,
-        count,
-        colors: ['#ff3df0', '#39ff88', '#ffd23d', '#3dc8ff', '#ff5a3d', '#b06bff'],
-        size: 0.035,
-        speed: 1.6,
-        spread: 0.9,
-        up: 2.2,
-        gravity: -2.6,
-        drag: 0.96,
-        life: 2.1,
-        fadePow: 0.7,
-        additive: false,
-      });
+      confettiBurst(origin, { count });
     },
 
-    /** Cannon muzzle flash + sparks along `dir`. */
+    /** Cannon muzzle flash + sparks along `dir` + a room-lighting flash. */
     muzzleFlash(origin, dir) {
+      flashLight(origin);
       burst({
         origin,
         count: 40,

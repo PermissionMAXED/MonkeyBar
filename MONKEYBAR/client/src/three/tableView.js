@@ -227,6 +227,53 @@ export function createTableView(scene, camera, anim) {
     },
 
     /**
+     * Fly the actual local-hand meshes to the pile: reparent them from the
+     * camera-space hand group into the world group preserving world transform,
+     * then tween each along the standard pile flight/landing. Cards turn
+     * face-down at takeoff (plays are secret — only the count is public).
+     * @param {THREE.Mesh[]} cardMeshes  meshes from showHand/getHandCards
+     */
+    async playHandCards(cardMeshes) {
+      for (const card of cardMeshes) {
+        const i = handCards.indexOf(card);
+        if (i !== -1) handCards.splice(i, 1);
+      }
+      layoutHand();
+      const flights = cardMeshes.map((card, i) => {
+        group.attach(card); // world transform preserved
+        card.userData.setFruit(null); // face-down
+        card.castShadow = true;
+        const idx = pile.length;
+        pile.push(card);
+        const tx = 0.3 + (Math.random() - 0.5) * 0.08;
+        const tz = (Math.random() - 0.5) * 0.14;
+        const ty = TABLE_TOP_Y + 0.006 + idx * 0.005;
+        const rz = (Math.random() - 0.5) * 0.9;
+        return (async () => {
+          await anim.wait(i * 0.12);
+          const start = card.position.clone();
+          const startQuat = card.quaternion.clone();
+          const endQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, rz));
+          await anim.tween({
+            duration: 0.42,
+            ease: Ease.quadInOut,
+            onUpdate(k) {
+              card.position.x = start.x + (tx - start.x) * k;
+              card.position.z = start.z + (tz - start.z) * k;
+              card.position.y = start.y + (ty - start.y) * k + Math.sin(k * Math.PI) * 0.22;
+              card.quaternion.slerpQuaternions(startQuat, endQuat, k);
+            },
+          }).promise;
+          // exact landing pose so revealPile's flip math lines up
+          card.position.set(tx, ty, tz);
+          card.rotation.set(-Math.PI / 2, 0, rz);
+        })();
+      });
+      await Promise.all(flights);
+      return pile.slice(-cardMeshes.length);
+    },
+
+    /**
      * Flip the last `cards.length` pile cards face-up showing their fruits.
      * `lie` tints the reveal glow red, truth green.
      */

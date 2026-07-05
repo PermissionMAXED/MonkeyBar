@@ -446,6 +446,25 @@ export function buildBar(mapConfig) {
   moodSign2.rotation.y = -Math.PI / 2 + 0.35;
   group.add(moodSign2);
 
+  // neon tube buzz — same style as the point lights in lights.js: two sines
+  // plus a rare deep dropout, modulating each sign's emissiveIntensity
+  const neonSigns = [sign, moodSign, moodSign2]
+    .filter((s) => s.userData.neonMat)
+    .map((s) => ({
+      mat: s.userData.neonMat,
+      base: s.userData.neonMat.emissiveIntensity,
+      phase: Math.random() * 10,
+    }));
+  updaters.push((dt, elapsed) => {
+    for (const n of neonSigns) {
+      const flick =
+        Math.sin(elapsed * 17 + n.phase) * 0.05 +
+        Math.sin(elapsed * 3.1 + n.phase * 2) * 0.06 +
+        (Math.sin(elapsed * 41 + n.phase) > 0.985 ? -0.35 : 0);
+      n.mat.emissiveIntensity = n.base * (0.94 + flick);
+    }
+  });
+
   // ---- hanging vines ----
   const vineCount = Math.round(propParams.vineDensity * 22);
   const vineMat = matte('#2f5a28', { roughness: 0.95 });

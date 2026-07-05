@@ -173,14 +173,28 @@ function drawMouth(ctx, col, expr) {
 
 let atlasTexCache = null;
 
+// Inner gutter per cell: mip levels average neighboring texels, so without a
+// transparent margin the big eye-whites bleed across cell borders and show up
+// as halos on the face planes of adjacent expressions.
+const GUTTER = 8;
+
 function getExpressionAtlas() {
   if (atlasTexCache) return atlasTexCache;
   const { canvas, ctx } = makeCanvas(TILE * EXPRESSIONS.length, TILE * 2);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const inset = (TILE - GUTTER * 2) / TILE;
   EXPRESSIONS.forEach((expr, i) => {
-    drawEyes(ctx, i, expr);
+    // draw each cell scaled into its inner (TILE − 2·GUTTER) square
     ctx.save();
-    ctx.translate(0, TILE);
+    ctx.translate(i * TILE + GUTTER, GUTTER);
+    ctx.scale(inset, inset);
+    ctx.translate(-i * TILE, 0);
+    drawEyes(ctx, i, expr);
+    ctx.restore();
+    ctx.save();
+    ctx.translate(i * TILE + GUTTER, TILE + GUTTER);
+    ctx.scale(inset, inset);
+    ctx.translate(-i * TILE, 0);
     drawMouth(ctx, i, expr);
     ctx.restore();
   });
@@ -510,7 +524,9 @@ export function createMonkey(monkeyId, name = '') {
     accessories: [],
   };
   const bs = sil.bodyScale;
-  const size = 0.72 + 0.33 * bs; // temper the extremes so everyone fits a stool
+  // wider tempering so silhouettes clearly vary (~0.82–1.37 for bodyScale
+  // 0.45–1.7) while the largest still clears table/stool and nameplates
+  const size = 0.62 + 0.44 * bs;
   const [furHex, bellyHex, skinHex] = sil.furPalette;
 
   const fur = matte(furHex, { roughness: 0.92 });

@@ -9,6 +9,7 @@
 //   shake, lookAt, startLoop/stopLoop, audio.
 
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { getMap, DEFAULT_MAP_ID } from '@shared/maps.js';
 import { getEmote } from '@shared/emotes.js';
 import { buildBar, TABLE_TOP_Y } from './barScene.js';
@@ -49,6 +50,14 @@ export function createEngine(canvas) {
   renderer.setClearColor(new THREE.Color('#120d08'));
 
   const scene = new THREE.Scene();
+  // environment IBL: metals (brass cannon), the back-bar mirror and glasses
+  // pick up real reflections instead of reading flat black. Intensity kept low
+  // so the neon-bar mood isn't washed out.
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  pmrem.dispose();
+  scene.environmentIntensity = 0.35;
+
   const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.05, 60);
   camera.position.set(0, 1.4, 3);
   scene.add(camera); // camera-parented objects (hand fan) must be in the graph
@@ -313,10 +322,10 @@ export function createEngine(canvas) {
 
     // ------------------------------------------------- choreography
     /** Play a canned clip ('cardPlay'|'slam'|'point'|'cheer'|'sob'|'shock'|'cannonHit'|'survive'|...). */
-    playClip(seat, clipName) {
+    playClip(seat, clipName, opts = {}) {
       const monkey = monkeyAt(seat);
       if (!monkey) return Promise.resolve();
-      return runClip(anim, monkey, clipName, { floorY: bar?.floorY ?? 0 });
+      return runClip(anim, monkey, clipName, { floorY: bar?.floorY ?? 0, ...opts });
     },
 
     /** Show the local player's hand fan. Returns the card meshes. */
@@ -327,17 +336,23 @@ export function createEngine(canvas) {
 
     /**
      * Seat plays `count` face-down cards.
-     * `cardMeshesOrNull`: local hand meshes to consume (or null → spawn).
+     * `cardMeshesOrNull`: local hand meshes to fly to the pile (or null → spawn
+     * fresh face-down cards at the seat's table edge for remote plays).
      */
     async playCards(seat, count, cardMeshesOrNull) {
       const monkey = monkeyAt(seat);
-      if (cardMeshesOrNull && cardMeshesOrNull.length) {
-        tableView.takeHandCards(cardMeshesOrNull.length);
-      }
       sfx.cardSlide();
       const clip = count >= 3 ? 'slam' : 'cardPlay';
       const clipP = monkey ? this.playClip(seat, clip) : Promise.resolve();
-      await tableView.addToPile(seat, count);
+      if (cardMeshesOrNull && cardMeshesOrNull.length) {
+        // local play: the actual fan meshes fly from the hand to the pile
+        await tableView.playHandCards(cardMeshesOrNull);
+        if (count > cardMeshesOrNull.length) {
+          await tableView.addToPile(seat, count - cardMeshesOrNull.length);
+        }
+      } else {
+        await tableView.addToPile(seat, count);
+      }
       sfx.chipClack();
       await clipP;
     },
@@ -393,6 +408,25 @@ export function createEngine(canvas) {
         this.playClip(seat, 'shock'); // not awaited — plays under the drumroll
       }
 
+      // bystanders react under the drumroll: everyone seated except the victim
+      // and the local seat leans in (60%) or covers their eyes (40%), heads
+      // easing toward the victim. Poses release when the lights come back up.
+      let releaseBystanders = () => {};
+      {
+        const hold = new Promise((res) => (releaseBystanders = res));
+        const localVictim = new THREE.Vector3();
+        for (const [s, entry] of seats) {
+          if (s === seat || s === localSeat) continue;
+          const m = entry.monkey;
+          if (m.state.baseExpression === 'ko') continue; // ghosts sit it out
+          localVictim.copy(victimPos);
+          m.root.worldToLocal(localVictim);
+          const headYaw = THREE.MathUtils.clamp(Math.atan2(localVictim.x, localVictim.z), -1.1, 1.1);
+          const clip = Math.random() < 0.6 ? 'leanIn' : 'coverEyes';
+          this.playClip(s, clip, { headYaw, hold }); // not awaited — rides the drumroll
+        }
+      }
+
       // 3 — drumroll + burning fuse
       const rollSeconds = 2.2;
       sfx.drumroll(rollSeconds);
@@ -443,6 +477,7 @@ export function createEngine(canvas) {
       }
 
       // 5 — the bar breathes again
+      releaseBystanders(); // bystanders ease back to neutral
       dolly.release();
       lights?.dimTo(1, 1.1);
       music.setIntensity(0.2);
@@ -507,6 +542,11 @@ export function createEngine(canvas) {
       setMuted(m) {
         sfx.setMuted(m);
         music.setMuted(m);
+      },
+      /** Master volume 0..1, applied to both SFX and music. */
+      setVolume(v) {
+        sfx.setVolume(v);
+        music.setVolume(v);
       },
     },
   };
