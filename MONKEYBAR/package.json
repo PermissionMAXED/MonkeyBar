@@ -1,6 +1,6 @@
 {
   "name": "monkeybar",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "MONKEYBAR — online multiplayer monkey bluff party game (three.js client, authoritative ws server)",

@@ -1,6 +1,7 @@
-// Settings screen (P5) — audio mute/volume + quality toggle stored as flags
-// in store.prefs (the engine/audio layers read these later), plus the current
-// room turn-timer display and a back button.
+// Settings screen (P5, +R10) — audio mute/volume + quality + reduced-motion
+// toggles stored as flags in store.prefs (the engine/audio layers and the
+// gameClient choreography read these), plus the current room turn-timer
+// display and a back button.
 
 import { TURN_SECONDS_DEFAULT } from '@shared/constants.js';
 import { el } from './dom.js';
@@ -54,6 +55,19 @@ export function createSettingsScreen(ctx) {
   });
   const qualityLabel = el('span', { text: '✨ High (bloom + shadows)' });
 
+  // ---- reduced motion (R10) ----
+  // gameClient's fastMode() reads prefs.reducedMotion on every tools.wait,
+  // so flipping this mid-match takes effect on the very next choreography beat.
+  const motionToggle = el('div', {
+    className: 'toggle',
+    role: 'switch',
+    onClick: () => {
+      const reducedMotion = !store.get('prefs').reducedMotion;
+      setPref('reducedMotion', reducedMotion);
+      motionToggle.classList.toggle('on', reducedMotion);
+    },
+  });
+
   // ---- turn timer display (set by the room host, shown read-only here) ----
   const timerEl = el('span', { style: { fontWeight: '800', color: 'var(--banana)' } });
 
@@ -65,6 +79,7 @@ export function createSettingsScreen(ctx) {
     qualityToggle.classList.toggle('on', prefs.quality !== 'low');
     qualityLabel.textContent =
       prefs.quality !== 'low' ? '✨ High (bloom + shadows)' : '🥔 Low (performance)';
+    motionToggle.classList.toggle('on', !!prefs.reducedMotion);
     const room = store.get('roomState');
     timerEl.textContent = room
       ? `${room.settings?.turnSeconds ?? TURN_SECONDS_DEFAULT}s (host-set for "${room.name}")`
@@ -87,6 +102,10 @@ export function createSettingsScreen(ctx) {
         ]),
         el('h3', { className: 'h-sub', text: 'Graphics' }),
         el('div', { className: 'toggle-row' }, [qualityLabel, qualityToggle]),
+        el('div', { className: 'toggle-row' }, [
+          el('span', { text: '🐢 Reduced motion (skip long animations)' }),
+          motionToggle,
+        ]),
         el('h3', { className: 'h-sub', text: 'Game' }),
         el('div', { className: 'toggle-row' }, [el('span', { text: '⏱ Turn timer' }), timerEl]),
       ]),

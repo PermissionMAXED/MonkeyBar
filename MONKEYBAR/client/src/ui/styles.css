@@ -2297,6 +2297,99 @@ input[type='range'].slider {
 }
 
 /* --------------------------------------------------------------------------
+   How to play (R10) — ⓘ buttons on mode cards + the per-mode overlay
+   -------------------------------------------------------------------------- */
+
+.mode-card-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mode-info-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--ink-dim);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+
+.mode-info-btn:hover {
+  border-color: var(--banana);
+  color: var(--banana);
+  background: rgba(255, 210, 61, 0.12);
+}
+
+.htp-modal {
+  max-height: 84vh;
+  overflow-y: auto;
+}
+
+.htp-tagline {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--ink-dim);
+}
+
+.htp-rules {
+  margin: 6px 0 2px;
+  padding-left: 20px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.htp-rules li {
+  margin-bottom: 5px;
+}
+
+.htp-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0 2px;
+}
+
+.htp-control-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12.5px;
+  line-height: 1.4;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.htp-control-what {
+  flex: 0 0 auto;
+  min-width: 132px;
+  font-weight: 800;
+  color: var(--banana);
+}
+
+.htp-control-does {
+  color: var(--ink-dim);
+}
+
+.htp-win {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  border: 1px solid rgba(57, 255, 136, 0.35);
+  background: rgba(57, 255, 136, 0.08);
+}
+
+/* --------------------------------------------------------------------------
    Quickmatch searching overlay
    -------------------------------------------------------------------------- */
 

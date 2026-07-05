@@ -28,20 +28,24 @@
 //               by store.push, reset on gameStart)
 //   chatLog     [{ kind, seat, name, text, glyph, ts }]
 //   connStatus  'connecting'|'open'|'reconnecting'|'closed'
-//   prefs       { muted, volume, quality }  (audio/engine flags, persisted)
+//   prefs       { muted, volume, quality, reducedMotion }
+//               (audio/engine/choreography flags, persisted; reducedMotion
+//               makes gameClient's fastMode() skip long animations)
 //   welcome     raw welcome payload (P1 compat)
 //   connection  legacy P1 connection string (kept for compat)
 
 const PREFS_KEY = 'mb_prefs';
 
+const PREFS_DEFAULTS = { muted: false, volume: 0.8, quality: 'high', reducedMotion: false };
+
 function loadPrefs() {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
-    if (raw) return { muted: false, volume: 0.8, quality: 'high', ...JSON.parse(raw) };
+    if (raw) return { ...PREFS_DEFAULTS, ...JSON.parse(raw) };
   } catch {
     /* corrupted prefs -> defaults */
   }
-  return { muted: false, volume: 0.8, quality: 'high' };
+  return { ...PREFS_DEFAULTS };
 }
 
 /**

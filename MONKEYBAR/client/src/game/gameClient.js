@@ -87,8 +87,12 @@ export function createGameClient(engine, store, socket) {
   /** Catch-up latch: once the backlog is deep, stay fast until fully drained. */
   let catchingUp = false;
 
-  /** True → skip long animations (hidden tab / deep backlog). */
+  /** True → skip long animations (reduced-motion pref / hidden tab / deep
+   *  backlog). All choreography — Monkey Lies inline and the per-mode
+   *  choreographers — gates its drama on this via tools.wait/tools.fastMode,
+   *  so the R10 settings toggle (prefs.reducedMotion) flows through here. */
   function fastMode() {
+    if (store.get('prefs')?.reducedMotion) return true;
     if (document.hidden) return true;
     if (catchingUp) {
       if (queue.length <= 2) catchingUp = false;

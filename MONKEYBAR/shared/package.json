@@ -1,6 +1,6 @@
 {
   "name": "@monkeybar/shared",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "MONKEYBAR shared contract: protocol, rules constants, deck math, RNG, and catalogs",

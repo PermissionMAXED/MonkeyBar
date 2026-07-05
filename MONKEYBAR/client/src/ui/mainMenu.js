@@ -1,10 +1,14 @@
-// Main menu screen (P5) — logo, name entry, Play / Quick Match / Character /
-// Settings / Shop. Name persists to profile (+ localStorage) via setProfile.
+// Main menu screen (P5, +R10) — logo, name entry, Play / Quick Match /
+// Character / How to play / Settings / Shop. Name persists to profile
+// (+ localStorage) via setProfile. R10: every quick-match mode card carries a
+// ⓘ button opening that mode's how-to-play overlay, and the searching state
+// recovers from server errors instead of spinning forever.
 
 import { MSG } from '@shared/protocol.js';
 import { NAME_MAX_LENGTH } from '@shared/constants.js';
 import { el, clear } from './dom.js';
 import { portraitCanvas } from './portraits.js';
+import { openHowToPlay } from './howToPlay.js';
 
 const NAME_KEY = 'mb_name';
 
@@ -71,14 +75,35 @@ export function createMainMenu(ctx) {
     return true;
   }
 
-  /** One mode card: playable → launch button; locked → styled "coming soon". */
+  /** One mode card: playable → launch button; locked → styled "coming soon".
+   *  R10: the head also carries a ⓘ how-to-play button (cards are <div>s so
+   *  the nested button stays valid HTML). */
   function modeCard(m) {
+    const launch = () => {
+      if (!m.playable) return;
+      socket.send(MSG.QUICK_MATCH, { mode: m.id });
+      store.set('quickSearching', true);
+      renderSearching(m);
+    };
     const children = [
       el('div', { className: 'mode-card-head' }, [
         el('span', { className: 'mode-card-name', text: m.name }),
-        m.playable
-          ? el('span', { className: 'mode-tag live', text: '● LIVE' })
-          : el('span', { className: 'mode-tag soon', text: '🔒 COMING SOON' }),
+        el('span', { className: 'mode-card-tags' }, [
+          m.playable
+            ? el('span', { className: 'mode-tag live', text: '● LIVE' })
+            : el('span', { className: 'mode-tag soon', text: '🔒 COMING SOON' }),
+          el('button', {
+            className: 'mode-info-btn',
+            type: 'button',
+            title: `How to play ${m.name}`,
+            'aria-label': `How to play ${m.name}`,
+            text: 'ⓘ',
+            onClick: (e) => {
+              e.stopPropagation();
+              openHowToPlay(ctx, m.id);
+            },
+          }),
+        ]),
       ]),
       el('p', { className: 'mode-card-desc', text: m.desc }),
     ];
@@ -93,16 +118,17 @@ export function createMainMenu(ctx) {
       );
     }
     return el(
-      'button',
+      'div',
       {
         className: `mode-card ${m.playable ? 'playable' : 'locked'}`,
-        type: 'button',
-        disabled: m.playable ? undefined : 'true',
-        onClick: () => {
-          if (!m.playable) return;
-          socket.send(MSG.QUICK_MATCH, { mode: m.id });
-          store.set('quickSearching', true);
-          renderSearching(m);
+        role: 'button',
+        tabindex: m.playable ? '0' : undefined,
+        onClick: launch,
+        onKeydown: (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            launch();
+          }
         },
       },
       children
@@ -162,6 +188,15 @@ export function createMainMenu(ctx) {
     if (!v) closeModal();
   });
 
+  // R10: a server error mid-search must not leave the spinner up forever —
+  // screens.js already toasts the message, we just recover the modal state.
+  socket.on(MSG.ERROR, () => {
+    if (store.get('quickSearching')) {
+      socket.send(MSG.CANCEL_QUICK, {});
+      store.set('quickSearching', false); // closes the modal via the sub above
+    }
+  });
+
   // ---- layout ----
   const screen = el('div', { className: 'mb-screen' }, [
     el('div', { className: 'mb-veil' }),
@@ -189,6 +224,12 @@ export function createMainMenu(ctx) {
             type: 'button',
             text: '🐒 Character',
             onClick: () => go('characterSelect'),
+          }),
+          el('button', {
+            className: 'btn',
+            type: 'button',
+            text: '📖 How to play',
+            onClick: () => go('howToPlay'),
           }),
           el('button', { className: 'btn', type: 'button', text: '🔧 Settings', onClick: () => go('settings') }),
           el('button', { className: 'btn ghost', type: 'button', text: '🛍️ Shop', onClick: () => go('shop') }),
