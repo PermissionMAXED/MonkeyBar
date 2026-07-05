@@ -13,7 +13,7 @@
     "dev": "node scripts/dev.mjs",
     "build": "npm run build -w client",
     "start": "NODE_ENV=production node server/src/index.js",
-    "test": "node --test \"shared/test/*.test.js\" \"server/test/*.test.js\"",
+    "test": "node --test --test-concurrency=1 \"shared/test/*.test.js\" \"server/test/*.test.js\"",
     "lint": "eslint ."
   },
   "engines": {
