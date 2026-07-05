@@ -1,6 +1,7 @@
-// 10 map definitions — PLAN.md §7. Slice ships the hero bar ("The Peeling Parrot")
-// plus 2 palette variants as playable; the other 7 are registered but locked.
-// `palette` colors + `propParams` drive client/src/three/barScene.js.
+// 10 map definitions — PLAN.md §7. The slice shipped the hero bar ("The
+// Peeling Parrot") plus 2 palette variants; R8 implemented the remaining 7
+// scenes (extraProps builders in client/src/three/mapExtras.js) and flipped
+// them playable. `palette` colors + `propParams` drive client/src/three/barScene.js.
 
 /**
  * @typedef {Object} MapPalette
@@ -94,7 +95,7 @@ export const MAPS = [
     id: 'rumble_reef',
     name: 'Rumble Reef',
     desc: 'A tiki dive built into a shipwreck: portholes, rope lights, and sand on the floor.',
-    playable: false,
+    playable: true,
     palette: { wall: '#12303d', accent: '#2a5a6e', neon: '#3dc8ff', fog: '#06141c' },
     signText: 'RUMBLE REEF',
     propParams: {
@@ -111,7 +112,7 @@ export const MAPS = [
     id: 'canopy_casino',
     name: 'Canopy Casino',
     desc: 'High-roller treehouse above the jungle canopy — velvet, gold trim, and a long fall for cheats.',
-    playable: false,
+    playable: true,
     palette: { wall: '#2e1420', accent: '#6e2a3d', neon: '#ffd23d', fog: '#160810' },
     signText: 'CANOPY CASINO',
     propParams: {
@@ -128,7 +129,7 @@ export const MAPS = [
     id: 'frostbite_lounge',
     name: 'Frostbite Lounge',
     desc: 'An ice-bar folly for snow monkeys: frozen table, steaming hot-spring tub in the corner.',
-    playable: false,
+    playable: true,
     palette: { wall: '#1c2836', accent: '#3a5a7a', neon: '#7ae8ff', fog: '#0a1420' },
     signText: 'FROSTBITE LOUNGE',
     propParams: {
@@ -145,7 +146,7 @@ export const MAPS = [
     id: 'dune_saloon',
     name: 'Dune Saloon',
     desc: 'Swinging doors, cactus jugs, and a desert wind that never stops rattling the shutters.',
-    playable: false,
+    playable: true,
     palette: { wall: '#4a3620', accent: '#8a6a3a', neon: '#ff9a3d', fog: '#1c1206' },
     signText: 'DUNE SALOON',
     propParams: {
@@ -162,7 +163,7 @@ export const MAPS = [
     id: 'temple_taproom',
     name: 'Temple Taproom',
     desc: 'A bar squatting in ancient ruins — moss-eaten idols watch every bluff, and they judge.',
-    playable: false,
+    playable: true,
     palette: { wall: '#2a2e22', accent: '#565e3a', neon: '#e8d43d', fog: '#10130a' },
     signText: 'TEMPLE TAPROOM',
     propParams: {
@@ -179,7 +180,7 @@ export const MAPS = [
     id: 'rooftop_rumpus',
     name: 'Rooftop Rumpus',
     desc: 'City-skyline rooftop bar with string lights, billboard glow, and pigeons eyeing your chips.',
-    playable: false,
+    playable: true,
     palette: { wall: '#22242e', accent: '#4a4e6e', neon: '#ff5a7a', fog: '#0c0d14' },
     signText: 'ROOFTOP RUMPUS',
     propParams: {
@@ -196,7 +197,7 @@ export const MAPS = [
     id: 'submarine_speakeasy',
     name: 'Submarine Speakeasy',
     desc: 'A leaky sub parked on the sea floor. Sonar pings keep time, and the pressure is literal.',
-    playable: false,
+    playable: true,
     palette: { wall: '#101c22', accent: '#2a4a52', neon: '#3dffc8', fog: '#04100e' },
     signText: 'SUB SPEAKEASY',
     propParams: {

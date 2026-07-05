@@ -1,9 +1,11 @@
 // Standalone showcase — run with `?demo=1` (client/src/three/demo.js).
-// Drives the engine API only (no server): loads the hero map, seats 6
-// monkeys, and loops idle/emotes/card plays/a reveal/a cannon HIT and a
-// SURVIVAL, with synthesized SFX + music after the first click.
+// Drives the engine API only (no server): seats 6 monkeys and loops
+// idle/emotes/card plays/a reveal/a cannon HIT and a SURVIVAL, with
+// synthesized SFX + music after the first click. Each round moves the party
+// to the next bar, cycling through all 10 maps (R8).
 
 import { FRUITS } from '@shared/cards.js';
+import { MAPS } from '@shared/maps.js';
 
 const CAST = [
   { seat: 1, id: 'rico', name: 'Rico "The Fuse"' },
@@ -92,11 +94,17 @@ export async function runDemo(engine) {
 
   console.log('[demo] scene ready — 6 monkeys seated');
 
+  // dev/testing handle (demo-only page, never shipped in a match flow)
+  window.__mbDemo = { engine };
+
   // ---- the loop ------------------------------------------------------------
+  // each round relocates the party to the next of the 10 bars
   let round = 0;
   for (;;) {
+    const map = MAPS[round % MAPS.length];
     round++;
-    step(`round ${round}: the table settles in (idle + emotes)`);
+    engine.loadMap(map.id); // no-op on round 1 (hero map already loaded)
+    step(`round ${round} @ ${map.name}: the table settles in (idle + emotes)`);
     await wait(2.2);
     engine.emote(3, 'taunt');
     await wait(1.4);

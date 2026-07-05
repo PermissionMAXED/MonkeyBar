@@ -104,6 +104,9 @@ export function createLights(scene, mapConfig) {
     dispose() {
       scene.remove(group);
       scene.fog = null;
+      // free the shadow-map render target — the demo cycles all 10 maps, so
+      // leaking one 1024² target per swap would grow GPU memory unbounded
+      key.dispose();
     },
   };
 }

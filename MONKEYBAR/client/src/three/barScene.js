@@ -1,12 +1,19 @@
 // Bar builder — PLAN.md §7 (client/src/three/barScene.js).
 // `buildBar(mapConfig)` constructs a full bar interior from a shared/maps.js
-// config. Hero map "The Peeling Parrot" fully implemented; the other playable
-// palettes (Neon Nectar, Voodoo Vats) reuse the layout with their own palette,
-// densities and extra props.
+// config. Hero map "The Peeling Parrot" fully implemented; all other maps
+// reuse the generic layout with their own palette, densities, extraProps
+// builders and per-map structural accents (R8: the builders/accents for the
+// 7 maps unlocked at 1.0 live in mapExtras.js and are merged in here).
+//
+// R9 contract: the returned bar exposes `decorAnchor` — a stable Object3D
+// floating above the back bar (same spot on every map) where equipped `deco`
+// cosmetics (disco ball, parrot perch, …) get parented. It is part of
+// bar.group, so it is torn down with the map.
 
 import * as THREE from 'three';
 import { woodMaterial, neonMaterial, matte } from './materials.js';
 import { createBottle, createStool } from './props.js';
+import { EXTRA_BUILDERS, MAP_ACCENTS } from './mapExtras.js';
 
 export const TABLE_RADIUS = 1.15;
 export const TABLE_TOP_Y = 0.92;
@@ -546,16 +553,25 @@ export function buildBar(mapConfig) {
     pendant.rotation.z = Math.cos(elapsed * 0.33) * 0.02;
   });
 
-  // ---- map-specific extra props ----
-  const ctx = { group, palette, propParams };
+  // ---- map-specific extra props + structural accents ----
+  // ctx.updaters lets builders hook the per-bar update loop (bar.update).
+  const ctx = { group, palette, propParams, updaters, mapId: mapConfig.id };
   for (const id of propParams.extraProps || []) {
-    const builder = EXTRA_PROP_BUILDERS[id];
+    const builder = EXTRA_PROP_BUILDERS[id] || EXTRA_BUILDERS[id];
     if (builder) builder(ctx);
   }
+  MAP_ACCENTS[mapConfig.id]?.(ctx);
+
+  // ---- stable decor anchor above the back bar (R9 cosmetics hang here) ----
+  const decorAnchor = new THREE.Object3D();
+  decorAnchor.name = 'decor_anchor';
+  decorAnchor.position.set(0, 2.85, -ROOM_RADIUS + 1.05);
+  group.add(decorAnchor);
 
   return {
     group,
     mapConfig,
+    decorAnchor,
     seatRadius: SEAT_RADIUS,
     tableTopY: TABLE_TOP_Y,
     tableRadius: TABLE_RADIUS,
@@ -565,8 +581,17 @@ export function buildBar(mapConfig) {
       for (const fn of updaters) fn(dt, elapsed);
     },
     dispose() {
+      // Bar-owned materials are all created fresh per buildBar (wood maps are
+      // clones of the cache), so disposing them here is safe and keeps
+      // renderer.info stable when the demo cycles through all 10 maps.
       group.traverse((o) => {
         if (o.geometry) o.geometry.dispose();
+        const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
+        for (const m of mats) {
+          if (m.map) m.map.dispose();
+          if (m.emissiveMap && m.emissiveMap !== m.map) m.emissiveMap.dispose();
+          m.dispose();
+        }
       });
       group.removeFromParent();
     },
