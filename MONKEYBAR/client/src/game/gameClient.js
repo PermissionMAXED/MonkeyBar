@@ -23,6 +23,7 @@
 
 import { MSG } from '@shared/protocol.js';
 import { DEFAULT_MAP_ID } from '@shared/maps.js';
+import { TABLE_TOP_Y } from '../three/barScene.js';
 
 /** Fast-forward choreography when more events than this are waiting. */
 const FAST_MODE_BACKLOG = 10;
@@ -113,6 +114,99 @@ export function createGameClient(engine, store, socket) {
   const seatInfo = (seatNo) => snap()?.seats?.find((s) => s.seat === seatNo) ?? null;
   const aliveSeats = () => (snap()?.seats ?? []).filter((s) => s.alive);
 
+  // ------------------------------------------------------------------------
+  // Monkey passives (§6) — all cosmetic/UX flavor, zero balance impact.
+  // ------------------------------------------------------------------------
+  /** §6 passive id of the monkey seated at seatNo (or null). */
+  const passiveOf = (seatNo) => engine.getMonkey(seatNo)?.def?.passive?.id ?? null;
+  /** Where the played pile sits on the table (for pile-anchored VFX). */
+  const pilePos = () => ({ x: 0.3, y: TABLE_TOP_Y + 0.06, z: 0 });
+
+  function sysFlavor(text) {
+    store.push('chatLog', { kind: 'sys', text, ts: Date.now() });
+  }
+
+  /** Rico "Hot Head": idle twitchiness grows as his chambers shrink. */
+  function refreshHotHeads(seats) {
+    for (const s of seats ?? []) {
+      if (!s.alive || passiveOf(s.seat) !== 'hotHead') continue;
+      const monkey = engine.getMonkey(s.seat);
+      if (monkey) monkey.state.twitchy = 1 + Math.max(0, 6 - (s.chambersLeft ?? 6)) * 0.35;
+    }
+  }
+
+  /** Madame Mystery: publicly "predicts" a winner at the first round start. */
+  function maybeProphecy(p) {
+    if ((p.roundNo ?? 0) !== 1) return;
+    const seats = p.seats ?? snap()?.seats ?? [];
+    const mystic = seats.find((s) => passiveOf(s.seat) === 'prophecy');
+    if (!mystic) return;
+    // Deterministic pick (same on every client): hash of the seat playerIds.
+    const key = seats.map((s) => s.playerId ?? String(s.seat)).join('|');
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+    const others = seats.filter((s) => s.seat !== mystic.seat);
+    const chosen = others.length ? others[hash % others.length] : mystic;
+    sysFlavor(
+      `🔮 ${mystic.name} peers into the crystal ball: “The last monkey standing will be… ${chosen.name}.”`
+    );
+    if (mystic.seat !== localSeat) {
+      const monkey = engine.getMonkey(mystic.seat);
+      if (monkey) {
+        monkey.flashExpression('grin', 1.6);
+        engine.particles.goldGlint(monkey.headWorldPos());
+      }
+    }
+  }
+
+  /** Sister Cocoa: once per match, bestows a cosmetic blessing on another monkey. */
+  let blessingDone = false;
+  function maybeBlessing(p) {
+    if (blessingDone || (p.roundNo ?? 0) < 2) return;
+    const seats = (p.seats ?? snap()?.seats ?? []).filter((s) => s.alive);
+    const sister = seats.find((s) => passiveOf(s.seat) === 'blessing');
+    if (!sister) return;
+    blessingDone = true;
+    const others = seats.filter((s) => s.seat !== sister.seat);
+    if (!others.length) return;
+    const key = seats.map((s) => s.playerId ?? String(s.seat)).join('/');
+    let hash = 7;
+    for (let i = 0; i < key.length; i++) hash = (hash * 33 + key.charCodeAt(i)) >>> 0;
+    const blessed = others[hash % others.length];
+    sysFlavor(`😇 ${sister.name} bestows her blessing upon ${blessed.name}. May the fruit be kind.`);
+    const monkey = engine.getMonkey(blessed.seat);
+    if (monkey) {
+      monkey.flashExpression('grin', 1.4);
+      engine.particles.goldGlint(monkey.headWorldPos());
+    }
+  }
+
+  /** Bolt "Glitch": his emotes leave a flickering neon trail. */
+  function maybeGlitchTrail(seatNo) {
+    if (passiveOf(seatNo) !== 'glitch') return;
+    const monkey = engine.getMonkey(seatNo);
+    if (monkey) engine.particles.neonTrail(monkey.headWorldPos());
+  }
+
+  /** Echo "Mimic": mirrors the last emote used at the table (rate-limited). */
+  let lastMimicAt = 0;
+  function maybeMimic(p) {
+    const now = Date.now();
+    if (now - lastMimicAt < 6000) return;
+    const echo = aliveSeats().find((s) => s.seat !== p.seat && passiveOf(s.seat) === 'mimic');
+    if (!echo || echo.seat === localSeat || echo.seat === cannonBusySeat) return;
+    lastMimicAt = now;
+    setTimeout(() => {
+      if (!inMatch || echo.seat === cannonBusySeat) return;
+      engine.emote(echo.seat, p.emoteId);
+    }, 700);
+  }
+
+  /** DJ Drift "Drop the Bass": sting when his play rides on unchallenged. */
+  let uncalledPlaySeat = null;
+  /** Caller of the challenge in flight (for the reveal-winner flourish). */
+  let lastCallerSeat = null;
+
   /** Fade a monkey into a table ghost (§4.1: eliminated players stay seated). */
   function ghostSeat(seatNo) {
     if (ghosted.has(seatNo)) return;
@@ -165,6 +259,17 @@ export function createGameClient(engine, store, socket) {
     if (on) engine.setSpectatorView();
   }
 
+  // P7: title-screen ATTRACT MODE — a slow camera orbit of the bar plays
+  // behind every menu screen (and the lobby's map preview). It never runs
+  // during a match, and it never clobbers an existing overview (so the
+  // winner-focused orbit keeps its focus through the results screen).
+  function updateAttract() {
+    if (inMatch || localSeat != null) return;
+    if (store.get('screen') === 'game') return;
+    if (!overviewOn) setOverview(true);
+  }
+  subs.push(store.on('screen', () => updateAttract()));
+
   // ------------------------------------------------------------------------
   // Audio: unlock (needs a user gesture) + prefs wiring
   // ------------------------------------------------------------------------
@@ -203,6 +308,10 @@ export function createGameClient(engine, store, socket) {
     inMatch = snapshot.phase !== 'matchEnd';
     ghosted.clear();
     cannonBusySeat = null;
+    uncalledPlaySeat = null;
+    lastCallerSeat = null;
+    // once-per-match passives: don't re-fire when reconnecting mid-match
+    blessingDone = (snapshot.roundNo ?? 0) >= 2;
 
     engine.loadMap(snapshot.mapId);
     engine.tableView.clearHand();
@@ -233,6 +342,7 @@ export function createGameClient(engine, store, socket) {
     }
     engine.setTurn(snapshot.phase === 'playing' ? snapshot.turnSeat : null);
     engine.audio.music.setIntensity(snapshot.phase === 'penalty' ? 0.8 : 0.2);
+    refreshHotHeads(snapshot.seats);
     armAudio();
   }
 
@@ -257,9 +367,17 @@ export function createGameClient(engine, store, socket) {
         // sweep the old cards; the HUD table-fruit banner (roundBanner) is
         // set by screens.js — intermission keeps this queue caught up.
         await engine.clearPile();
-        engine.audio.music.setIntensity(0.2);
+        // music intensity climbs with the round number — the bar heats up
+        engine.audio.music.setIntensity(Math.min(0.45, 0.2 + (p.roundNo ?? 1) * 0.03));
         engine.rig.lookAtTable();
         for (const s of aliveSeats()) engine.getMonkey(s.seat)?.setExpression('neutral');
+        uncalledPlaySeat = null;
+        lastCallerSeat = null;
+        refreshHotHeads(p.seats ?? snap()?.seats);
+        if (!fastMode()) {
+          maybeProphecy(p);
+          maybeBlessing(p);
+        }
         return wait(0.2);
       }
 
@@ -289,6 +407,13 @@ export function createGameClient(engine, store, socket) {
         engine.lookAt(p.seat);
         engine.audio.music.setIntensity(0.8);
         engine.getMonkey(p.seat)?.setExpression('sweat');
+        // Professor Peel "Calculated": announces the exact odds to the bar.
+        const peel = aliveSeats().find((s) => passiveOf(s.seat) === 'calculated');
+        if (peel && !fastMode()) {
+          const pct = (((p.coconuts ?? 1) / Math.max(1, p.chambers ?? 6)) * 100).toFixed(1);
+          const whose = peel.seat === p.seat ? 'my' : 'the';
+          sysFlavor(`🧮 ${peel.name} adjusts his cracked glasses: “${pct}% — ${whose} odds, precisely.”`);
+        }
         return wait(0.3);
       }
 
@@ -329,6 +454,13 @@ export function createGameClient(engine, store, socket) {
   }
 
   async function choreographPlay(p) {
+    // DJ Drift "Drop the Bass": the previous play just rode on unchallenged.
+    if (uncalledPlaySeat != null && !fastMode() && passiveOf(uncalledPlaySeat) === 'dropTheBass') {
+      engine.audio.sfx.bassSting();
+      engine.getMonkey(uncalledPlaySeat)?.flashExpression('grin', 1.0);
+    }
+    uncalledPlaySeat = p.seat;
+
     // face-down slide from the seat + reach/slam clip
     let meshes = null;
     if (p.seat === localSeat) {
@@ -355,10 +487,18 @@ export function createGameClient(engine, store, socket) {
     }
     if (p.seat !== localSeat) engine.lookAt(p.seat);
 
+    // Lady Vine "Grace": her card plays land in brief, elegant slow motion.
+    if (!fastMode() && passiveOf(p.seat) === 'grace') anim.slowMo(0.45, 0.55);
+
     // Fast mode (deep backlog / hidden tab): let the flight play out without
     // blocking the queue — this is what lets a lagging queue actually catch up.
     const flight = engine.playCards(p.seat, p.count, meshes);
     await (fastMode() ? Promise.race([flight, anim.wait(0.1)]) : flight);
+
+    // Shady Slim "Smokescreen": a wisp of smoke curls off his face-down cards.
+    if (!fastMode() && passiveOf(p.seat) === 'smokescreen') {
+      engine.particles.smokePuff(pilePos(), { count: 10, size: 0.07, speed: 0.28 });
+    }
 
     // keep the local fan authoritative (ack order can race the animation)
     if (p.seat === localSeat) {
@@ -371,6 +511,8 @@ export function createGameClient(engine, store, socket) {
   }
 
   async function choreographCall(p) {
+    uncalledPlaySeat = null; // the play got challenged — no bass drop
+    lastCallerSeat = p.callerSeat;
     // point-and-shout + micro hit-stop + music tightens (§7)
     engine.audio.music.setIntensity(0.6);
     engine.lookAt(p.callerSeat);
@@ -386,9 +528,33 @@ export function createGameClient(engine, store, socket) {
     // fx-timed HUD banner fires WITH the flip, not when the packet landed
     store.set('fxReveal', { ...p, ts: Date.now() });
     if (fastMode()) return;
+    // Baron Bananas "Rich Reveal": gold glints whenever HIS cards flip.
+    if (passiveOf(p.targetSeat) === 'richReveal') {
+      engine.particles.goldGlint(pilePos());
+      engine.particles.goldGlint(pilePos());
+    }
     // dramatic staggered flip (inside revealCards) + per-seat reactions
     await engine.revealCards(p.targetSeat, p.cards ?? [], p.lie);
     if (p.loserSeat !== p.targetSeat) engine.playClip(p.loserSeat, 'sob');
+    // Tiny Tantrum "Table Rattle": losing a challenge shakes the whole table.
+    if (passiveOf(p.loserSeat) === 'tableRattle') {
+      engine.shake(0.55);
+      engine.audio.sfx.chipClack();
+      sysFlavor('🍼 Tiny Tantrum pounds the table! Everything rattles.');
+    }
+    // Challenge winner flourishes: King Kola's royal horn / Splinter's flag show.
+    const winnerSeat = p.loserSeat === p.targetSeat ? lastCallerSeat : p.targetSeat;
+    if (winnerSeat != null) {
+      const wp = passiveOf(winnerSeat);
+      if (wp === 'fanfare') {
+        engine.audio.sfx.royalHorn();
+        engine.getMonkey(winnerSeat)?.flashExpression('grin', 1.6);
+      } else if (wp === 'showman') {
+        const m = engine.getMonkey(winnerSeat);
+        if (m) engine.particles.confetti(m.headWorldPos(), { count: 30 });
+        engine.playClip(winnerSeat, 'smug');
+      }
+    }
     for (const s of aliveSeats()) {
       if (s.seat === p.loserSeat || s.seat === p.targetSeat || s.seat === localSeat) continue;
       if (Math.random() < 0.45) engine.getMonkey(s.seat)?.flashExpression(p.lie ? 'grin' : 'shock', 1.2);
@@ -406,11 +572,29 @@ export function createGameClient(engine, store, socket) {
       return;
     }
     cannonBusySeat = p.seat;
+    const passive = passiveOf(p.seat);
     try {
       // §7: dolly, dim, drumroll, THOOM+shake+KO flop OR click+confetti+exhale.
       // AWAITED IN FULL — the queue (and thus the UI drama) holds until the
       // lights come back up.
-      await engine.cannonSequence(p.seat, p.hit, { onResolve: announce });
+      await engine.cannonSequence(p.seat, p.hit, {
+        onResolve: () => {
+          announce();
+          if (!p.hit && passive === 'ironGut') engine.audio.sfx.hiccup(); // Chugs shrugs it off
+        },
+      });
+      if (!p.hit) {
+        if (passive === 'sympathy') {
+          // Grandma Guava: the whole bar exhales with her.
+          engine.audio.sfx.phew();
+          for (const s of aliveSeats()) {
+            if (s.seat !== p.seat && s.seat !== localSeat) {
+              engine.getMonkey(s.seat)?.flashExpression('grin', 1.1);
+            }
+          }
+        }
+        refreshHotHeads(snap()?.seats); // Rico gets twitchier as chambers shrink
+      }
     } finally {
       cannonBusySeat = null;
     }
@@ -424,6 +608,13 @@ export function createGameClient(engine, store, socket) {
       // winner celebration: confetti + cheer + slow camera orbit (§7)
       engine.audio.music.setIntensity(0.5);
       setOverview(true, p.winnerSeat);
+      const wp = passiveOf(p.winnerSeat);
+      if (wp === 'fanfare') engine.audio.sfx.royalHorn(); // King Kola takes his crown
+      if (wp === 'showman') {
+        // Captain Splinter: an extra pirate-flag flourish of confetti
+        const m = engine.getMonkey(p.winnerSeat);
+        if (m) engine.particles.confetti(m.headWorldPos(), { count: 60 });
+      }
       const cheer = engine.celebrate(p.winnerSeat);
       await Promise.race([cheer, anim.wait(3.2)]);
       await wait(1.4);
@@ -484,8 +675,10 @@ export function createGameClient(engine, store, socket) {
   subs.push(
     socket.on(MSG.EMOTE, (p) => {
       if (!inMatch && !snap()) return;
+      maybeMimic(p); // Echo mirrors the table's last emote (even the local player's)
       if (p.seat === localSeat || p.seat === cannonBusySeat) return; // DOM bubble covers these
       engine.emote(p.seat, p.emoteId);
+      maybeGlitchTrail(p.seat); // Bolt's emotes leave a neon trail
     })
   );
   subs.push(
@@ -507,6 +700,7 @@ export function createGameClient(engine, store, socket) {
       for (let s = 0; s < SEAT_MAX; s++) engine.clearSeat(s);
       ghosted.clear();
       engine.audio.music.setIntensity(0);
+      updateAttract(); // back to the menu → attract orbit resumes
     })
   );
 
@@ -517,8 +711,9 @@ export function createGameClient(engine, store, socket) {
     })
   );
 
-  // idle backdrop behind the menus before any room exists
+  // idle backdrop behind the menus before any room exists + attract orbit
   engine.loadMap(DEFAULT_MAP_ID);
+  updateAttract();
 
   return {
     /** test/debug hooks */

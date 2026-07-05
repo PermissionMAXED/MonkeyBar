@@ -114,19 +114,24 @@ export function createLobbyBrowser(ctx) {
       catalogs.modes.map((m) =>
         el('option', {
           value: m.id,
-          text: m.playable ? m.name : `${m.name} — coming soon`,
+          text: m.playable ? m.name : `🔒 ${m.name} — coming soon`,
           disabled: m.playable ? undefined : 'true',
           selected: m.playable ? 'true' : undefined,
         })
       )
     );
 
+    // All 10 bars stay visible; the 7 locked ones are styled "coming soon" (P7)
     const mapSelect = el(
       'select',
       { className: 'select' },
-      catalogs.maps
-        .filter((m) => m.playable)
-        .map((m) => el('option', { value: m.id, text: m.name }))
+      catalogs.maps.map((m) =>
+        el('option', {
+          value: m.id,
+          text: m.playable ? m.name : `🔒 ${m.name} — coming soon`,
+          disabled: m.playable ? undefined : 'true',
+        })
+      )
     );
 
     const sizeSelect = el(

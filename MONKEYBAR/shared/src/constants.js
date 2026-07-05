@@ -14,6 +14,8 @@ export const ROUND_INTERMISSION_MS = 5000;
 export const RECONNECT_HOLD_MS = 60000;
 /** Quickmatch: server fills remaining seats with bots after this delay. */
 export const QUICKMATCH_FILL_DELAY_MS = 5000;
+/** Connected humans who let this many turns time out are kicked (seat → bot). */
+export const AFK_MISSED_TURNS_LIMIT = 2;
 /** Connections with no ping/traffic for this long are culled. */
 export const HEARTBEAT_CULL_MS = 30000;
 /** Clients send `ping` at this interval. */

@@ -28,7 +28,9 @@ export function createCharacterSelect(ctx) {
     } catch {
       /* storage blocked */
     }
-    if (socket.isOpen()) socket.send(MSG.SELECT_MONKEY, { monkeyId: monkey.id });
+    // setProfile works both in the menus and in a lobby (§3.2) — selectMonkey
+    // is room-only and used to error with a toast when picked from the menu.
+    if (socket.isOpen()) socket.send(MSG.SET_PROFILE, { monkeyId: monkey.id });
     toast(`You are now ${monkey.name} 🐒`);
     renderGrid();
   }

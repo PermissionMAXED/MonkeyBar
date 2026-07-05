@@ -345,6 +345,8 @@ export function createEngine(canvas) {
     /** Flip the challenged cards face-up. `lie` = the claim was false. */
     async revealCards(seat, cards, lie) {
       rig.lookAtPoint(new THREE.Vector3(0.3, TABLE_TOP_Y + 0.1, 0));
+      anim.hitStop(0.07); // micro hit-stop: the bar holds its breath on the flip
+      rig.addTrauma(0.12);
       sfx.cardFlip();
       const revealP = tableView.revealPile(cards, lie);
       const monkey = monkeyAt(seat);
@@ -419,6 +421,7 @@ export function createEngine(canvas) {
         particles.smokePuff(muzzle, { count: 34 });
         sfx.cannonThoom();
         postfx.pulseBloom(2.4);
+        anim.hitStop(0.11); // THOOM freeze-frame — the camera shake rides through it
         rig.addTrauma(1.0);
         if (victim) {
           await this.playClip(seat, 'cannonHit');

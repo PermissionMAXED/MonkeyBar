@@ -253,18 +253,18 @@ export function createLobbyScreen(ctx) {
       socket.send(MSG.UPDATE_SETTINGS, { patch: { turnSeconds: parseInt(turnSlider.value, 10) } });
     });
 
+    // All 10 bars stay visible; the 7 locked ones are styled "coming soon" (P7)
     const mapSelect = el(
       'select',
       { className: 'select' },
-      catalogs.maps
-        .filter((m) => m.playable)
-        .map((m) =>
-          el('option', {
-            value: m.id,
-            text: m.name,
-            selected: m.id === room.settings?.mapId ? 'true' : undefined,
-          })
-        )
+      catalogs.maps.map((m) =>
+        el('option', {
+          value: m.id,
+          text: m.playable ? m.name : `🔒 ${m.name} — coming soon`,
+          disabled: m.playable ? undefined : 'true',
+          selected: m.id === room.settings?.mapId ? 'true' : undefined,
+        })
+      )
     );
     mapSelect.addEventListener('change', () => {
       socket.send(MSG.UPDATE_SETTINGS, { patch: { mapId: mapSelect.value } });
@@ -276,7 +276,7 @@ export function createLobbyScreen(ctx) {
       catalogs.modes.map((m) =>
         el('option', {
           value: m.id,
-          text: m.playable ? m.name : `${m.name} — coming soon`,
+          text: m.playable ? m.name : `🔒 ${m.name} — coming soon`,
           disabled: m.playable ? undefined : 'true',
           selected: m.id === room.mode ? 'true' : undefined,
         })

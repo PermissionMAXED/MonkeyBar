@@ -225,6 +225,36 @@ export function createSFX() {
       const g = envGain(t, 0.05, 0.09, seconds, 'lin');
       noise(t, seconds, g, { type: 'highpass', freq: 5200, q: 0.6 });
     },
+    /** Royal horn — King Kola's Fanfare passive (round-win flourish). */
+    royalHorn() {
+      if (!ready()) return;
+      const t = ctx.currentTime;
+      // regal perfect-fifth swell: G4 → D5 → G5
+      const notes = [[0, 392], [0.16, 587.33], [0.32, 783.99]];
+      for (const [dt, f] of notes) {
+        const g = envGain(t + dt, 0.03, 0.14, 0.55);
+        osc('sawtooth', f, t + dt, 0.6, g);
+        osc('square', f / 2, t + dt, 0.6, g);
+      }
+    },
+    /** Mighty hiccup — Chugs' Iron Gut passive (cannon survival). */
+    hiccup() {
+      if (!ready()) return;
+      const t = ctx.currentTime;
+      const g = envGain(t, 0.005, 0.28, 0.12);
+      osc('square', 220, t, 0.1, g, 520); // pitch flips UP — classic hic
+      const g2 = envGain(t + 0.1, 0.005, 0.12, 0.09);
+      osc('sine', 180, t + 0.1, 0.08, g2, 120);
+    },
+    /** Table-wide relieved "phew" — Grandma Guava's Sympathy passive. */
+    phew() {
+      if (!ready()) return;
+      const t = ctx.currentTime;
+      const g = envGain(t, 0.06, 0.18, 0.5, 'lin');
+      noise(t, 0.55, g, { type: 'bandpass', freq: 900, endFreq: 350, q: 0.7 });
+      const g2 = envGain(t + 0.05, 0.04, 0.07, 0.4, 'lin');
+      osc('sine', 340, t + 0.05, 0.42, g2, 220);
+    },
   };
 
   return {

@@ -47,6 +47,29 @@ export function createAnimator() {
   /** @type {Set<Function>} */
   const updaters = new Set();
 
+  // P7 juice: micro hit-stop — freezes all tweens/updaters for a beat
+  // (reveal flips, cannon THOOM). Real-time based so it can never wedge.
+  let timeScale = 1;
+  let hitStopTimer = null;
+  function hitStop(seconds = 0.08) {
+    timeScale = 0;
+    if (hitStopTimer) clearTimeout(hitStopTimer);
+    hitStopTimer = setTimeout(() => {
+      timeScale = 1;
+      hitStopTimer = null;
+    }, Math.max(16, seconds * 1000));
+  }
+
+  /** Brief slow-motion (Grace's elegant plays). Real-time timer, never wedges. */
+  function slowMo(scale = 0.4, seconds = 0.5) {
+    if (hitStopTimer) return; // never fight an active hit-stop
+    timeScale = Math.max(0.05, scale);
+    hitStopTimer = setTimeout(() => {
+      timeScale = 1;
+      hitStopTimer = null;
+    }, Math.max(16, seconds * 1000));
+  }
+
   function tween({ duration = 0.5, delay = 0, ease = Ease.quadOut, onUpdate, onComplete, loop = false, yoyo = false, tag = null }) {
     let resolveP;
     const promise = new Promise((res) => (resolveP = res));
@@ -110,6 +133,8 @@ export function createAnimator() {
     to,
     wait,
     sequence,
+    hitStop,
+    slowMo,
     /** Persistent per-frame updater; returns a remover. */
     addUpdater(fn) {
       updaters.add(fn);
@@ -120,6 +145,8 @@ export function createAnimator() {
       for (const tw of [...tweens]) if (tw.tag === tag) tw.cancel();
     },
     update(dt) {
+      dt *= timeScale;
+      if (dt <= 0) return;
       for (const fn of updaters) fn(dt);
       for (const tw of [...tweens]) {
         if (tw.dead) continue;
@@ -181,6 +208,9 @@ export function resetPose(anim, monkey, duration = 0.35, tag = null) {
 // Idle: sway + breathe + blink (runs whenever the monkey isn't in a clip)
 // ---------------------------------------------------------------------------
 
+/** Idle micro-clips (P7 juice) — occasional fidgets between the sway/breathe. */
+const FIDGET_CLIPS = ['fidgetScratch', 'fidgetGlance', 'fidgetSip', 'fidgetStretch'];
+
 /**
  * Attach a continuous idle behavior. Returns { stop }.
  * `monkey.state.busy > 0` (set by clips) pauses the procedural idle write.
@@ -189,6 +219,7 @@ export function attachIdle(anim, monkey, { energy = 1 } = {}) {
   const phase = Math.random() * Math.PI * 2;
   let t = Math.random() * 10;
   let blinkIn = 1.5 + Math.random() * 3;
+  let fidgetIn = 5 + Math.random() * 9;
 
   const remove = anim.addUpdater((dt) => {
     t += dt;
@@ -197,6 +228,14 @@ export function attachIdle(anim, monkey, { energy = 1 } = {}) {
     if (blinkIn <= 0 && monkey.state.baseExpression !== 'ko') {
       monkey.flashExpression('blink', 0.13);
       blinkIn = 1.6 + Math.random() * 3.4;
+    }
+    // occasional fidget: scratch, look around, sip a drink, stretch
+    fidgetIn -= dt;
+    if (fidgetIn <= 0) {
+      fidgetIn = 7 + Math.random() * 10;
+      if (monkey.state.busy === 0 && monkey.state.baseExpression !== 'ko') {
+        playClip(anim, monkey, FIDGET_CLIPS[Math.floor(Math.random() * FIDGET_CLIPS.length)]);
+      }
     }
     if (monkey.state.busy > 0) return;
     const e = energy * (monkey.state.twitchy || 1);
@@ -407,6 +446,69 @@ const CLIP_TABLE = {
     monkey.setExpression('grin');
     await resetPose(anim, monkey, 0.5);
     monkey.setExpression('neutral');
+  },
+
+  // ---- idle fidget micro-clips (P7 juice) — subtle, short, self-resetting.
+  // Each step checks `busy > 1` (a real choreography clip started underneath)
+  // and bails out early so the real clip owns the pose from then on.
+
+  /** Scratch the side of the head. */
+  async fidgetScratch(anim, monkey) {
+    const j = monkey.joints;
+    const preempted = () => monkey.state.busy > 1;
+    await Promise.all([
+      anim.to(j.armR.rotation, { x: -2.35, z: -0.55 }, 0.35, { ease: Ease.quadInOut }).promise,
+      anim.to(j.foreArmR.rotation, { x: -0.9 }, 0.35).promise,
+      anim.to(j.head.rotation, { z: -0.14 }, 0.35).promise,
+    ]);
+    for (let i = 0; i < 3 && !preempted(); i++) {
+      await anim.to(j.foreArmR.rotation, { x: -0.72 }, 0.09, { ease: Ease.sineInOut }).promise;
+      await anim.to(j.foreArmR.rotation, { x: -0.95 }, 0.09, { ease: Ease.sineInOut }).promise;
+    }
+    if (preempted()) return;
+    await resetPose(anim, monkey, 0.4);
+  },
+
+  /** Suspicious double-take around the bar. */
+  async fidgetGlance(anim, monkey) {
+    const j = monkey.joints;
+    const preempted = () => monkey.state.busy > 1;
+    await anim.to(j.head.rotation, { y: 0.55 }, 0.24, { ease: Ease.quadOut }).promise;
+    await anim.wait(0.35);
+    if (preempted()) return;
+    await anim.to(j.head.rotation, { y: -0.42 }, 0.18, { ease: Ease.quadInOut }).promise;
+    await anim.wait(0.28);
+    if (preempted()) return;
+    await resetPose(anim, monkey, 0.3);
+  },
+
+  /** Raise the off-hand for a sip of the house brew. */
+  async fidgetSip(anim, monkey) {
+    const j = monkey.joints;
+    const preempted = () => monkey.state.busy > 1;
+    await Promise.all([
+      anim.to(j.armL.rotation, { x: -1.9, z: 0.35 }, 0.4, { ease: Ease.quadInOut }).promise,
+      anim.to(j.foreArmL.rotation, { x: -1.5 }, 0.4).promise,
+      anim.to(j.head.rotation, { x: 0.18 }, 0.4).promise,
+    ]);
+    await anim.wait(0.5);
+    if (preempted()) return;
+    await resetPose(anim, monkey, 0.45);
+  },
+
+  /** Roll the shoulders / arch the back. */
+  async fidgetStretch(anim, monkey) {
+    const j = monkey.joints;
+    const preempted = () => monkey.state.busy > 1;
+    await Promise.all([
+      anim.to(j.torso.rotation, { x: -0.16 }, 0.45, { ease: Ease.sineInOut }).promise,
+      anim.to(j.armL.rotation, { z: 0.5 }, 0.45).promise,
+      anim.to(j.armR.rotation, { z: -0.5 }, 0.45).promise,
+      anim.to(j.head.rotation, { x: -0.2 }, 0.45).promise,
+    ]);
+    await anim.wait(0.3);
+    if (preempted()) return;
+    await resetPose(anim, monkey, 0.5);
   },
 
   /** Stand-in for reveal-win smugness. */

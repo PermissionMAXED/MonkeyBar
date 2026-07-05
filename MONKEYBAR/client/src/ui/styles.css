@@ -2169,6 +2169,124 @@ input[type='range'].slider {
 }
 
 /* --------------------------------------------------------------------------
+   Quick Match mode cards (P7): live modes pop, locked modes are clearly
+   "coming soon" — dimmed, hatched, and non-interactive.
+   -------------------------------------------------------------------------- */
+
+.modal.wide {
+  width: min(560px, 94vw);
+}
+
+.mode-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 6px 0 4px;
+}
+
+.mode-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+  border-radius: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.mode-card.playable:hover {
+  transform: translateY(-2px);
+  border-color: var(--banana);
+  background: rgba(255, 210, 61, 0.09);
+}
+
+.mode-card.locked {
+  cursor: not-allowed;
+  opacity: 0.62;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.028),
+    rgba(255, 255, 255, 0.028) 10px,
+    rgba(0, 0, 0, 0.12) 10px,
+    rgba(0, 0, 0, 0.12) 20px
+  );
+}
+
+.mode-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mode-card-name {
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: 0.4px;
+}
+
+.mode-tag {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.mode-tag.live {
+  color: #39ff88;
+  background: rgba(57, 255, 136, 0.12);
+  border: 1px solid rgba(57, 255, 136, 0.4);
+}
+
+.mode-tag.soon {
+  color: #ffb84d;
+  background: rgba(255, 184, 77, 0.1);
+  border: 1px dashed rgba(255, 184, 77, 0.5);
+}
+
+.mode-card-desc {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-dim);
+}
+
+.mutator-teaser {
+  margin: 8px 0 0;
+  padding: 8px 10px 8px 26px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px dashed rgba(255, 255, 255, 0.14);
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--ink-dim);
+}
+
+.mutator-teaser li {
+  list-style: none;
+  position: relative;
+}
+
+.mutator-teaser li::before {
+  content: '•';
+  position: absolute;
+  left: -13px;
+  color: #ffb84d;
+}
+
+/* Locked options in the map/mode <select>s */
+.select option:disabled {
+  color: #8b8578;
+  font-style: italic;
+}
+
+/* --------------------------------------------------------------------------
    Quickmatch searching overlay
    -------------------------------------------------------------------------- */
 

@@ -256,6 +256,25 @@ export function createParticles(scene) {
       });
     },
 
+    /** Flickering neon trail (Bolt's Glitch passive — rises with the emote). */
+    neonTrail(origin) {
+      for (let i = 0; i < 3; i++) {
+        burst({
+          origin: { x: origin.x, y: origin.y + i * 0.14, z: origin.z },
+          count: 12,
+          colors: ['#35e8d0', '#ff3df0', '#7ae8ff'],
+          size: 0.034,
+          speed: 0.35,
+          spread: 0.35,
+          up: 1.4,
+          gravity: -0.2,
+          drag: 0.9,
+          life: 0.8 + i * 0.25,
+          fadePow: 1.4,
+        });
+      }
+    },
+
     /** Gold glints (Baron Bananas reveal, survival shimmer). */
     goldGlint(origin) {
       burst({

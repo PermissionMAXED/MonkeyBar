@@ -13,6 +13,7 @@
 // logic as the server-side turn-timeout auto-play (§3.4).
 
 import { ERROR_CODES, MSG, ServerMsg } from '@monkeybar/shared/protocol.js';
+import { AFK_MISSED_TURNS_LIMIT } from '@monkeybar/shared/constants.js';
 
 import { createTable } from './table.js';
 import { getEngineFactory } from './modes/index.js';
@@ -46,6 +47,9 @@ const err = (code) => ({ ok: false, code });
  * @param {(playerId: string, envelope: {t: string, p: Object}) => void} options.send
  * @param {() => string[]} [options.getSpectatorIds]
  * @param {() => Object} [options.getAutoPlayPolicy]  P3 hook (see net/sessions.js)
+ * @param {(playerId: string, seat: number) => void} [options.onAfk]
+ *        called once when a CONNECTED human lets AFK_MISSED_TURNS_LIMIT turns
+ *        time out in a row — the room kicks them and the seat becomes a bot
  * @param {(summary: {winnerSeat: number, standings: Object[]}) => void} [options.onMatchEnd]
  * @param {number} [options.seed]
  * @param {number} [options.autoDelayMs]
@@ -61,6 +65,7 @@ export function createGameRoom({
   send,
   getSpectatorIds = () => [],
   getAutoPlayPolicy = () => null,
+  onAfk = null,
   onMatchEnd = () => {},
   seed,
   autoDelayMs = defaultAutoDelayMs(),
@@ -183,9 +188,43 @@ export function createGameRoom({
     deadlineTimer = setTimeout(() => {
       deadlineTimer = null;
       if (destroyed || ended) return;
+      const turnSeat = timer.kind === 'turn' ? engine.turnSeat : -1;
       engine.onTimeout(timer.kind);
+      if (turnSeat !== -1) noteMissedTurn(turnSeat);
       syncTimer();
     }, wait);
+  }
+
+  // ---- AFK detection (P7 hardening) --------------------------------------------
+  // A CONNECTED human whose turn hits the real deadline (server auto-plays for
+  // them) is "missing turns". After AFK_MISSED_TURNS_LIMIT consecutive misses,
+  // onAfk kicks them from the room, which converts the seat to a bot.
+  // Disconnected players are excluded — the §3.4 reconnect hold covers them.
+
+  /** @type {Map<number, number>} seat → consecutive missed turns */
+  const missedTurns = new Map();
+
+  function noteMissedTurn(seat) {
+    if (!onAfk || destroyed || ended) return;
+    const s = table.get(seat);
+    if (s.isBot || !s.connected || !s.alive) return;
+    const misses = (missedTurns.get(seat) ?? 0) + 1;
+    missedTurns.set(seat, misses);
+    if (misses < AFK_MISSED_TURNS_LIMIT) return;
+    missedTurns.delete(seat);
+    log.info(`room ${roomId}: seat ${seat} (${s.name}) AFK after ${misses} missed turns`);
+    broadcastPublic(
+      ServerMsg.chat({
+        seat: null,
+        name: '🍹 The Bar',
+        text: `${s.name} dozed off at the table — a bot takes the stool.`,
+      })
+    );
+    try {
+      onAfk(s.playerId, seat);
+    } catch (e) {
+      log.warn('onAfk handler failed:', e.message);
+    }
   }
 
   /** Should the server act for this seat (bot without a P3 driver, or offline)? */
@@ -246,6 +285,7 @@ export function createGameRoom({
     const seat = table.seatOf(playerId);
     if (seat === -1) return err(ERROR_CODES.BAD_STATE);
     const result = actForSeat(seat, type, p);
+    if (result.ok) missedTurns.delete(seat); // any real action clears AFK strikes
     return result;
   }
 

@@ -78,6 +78,8 @@ let botCounter = 0;
  * @param {(gameRoom: Object, seat: number, opts: Object) => void} [options.convertSeat]
  *        seat→bot conversion hook (net/sessions.js convertSeatToBot; P3 overridable)
  * @param {() => void} [options.onPublicChange]  lobbyManager refreshes room lists
+ * @param {(playerId: string, reason: string) => void} [options.onMemberRemoved]
+ *        lobbyManager clears session.roomId for server-initiated removals (AFK kick)
  * @param {(room: Object) => void} [options.onClosed]
  * @param {ReturnType<import('../util/log.js').createLogger>} [options.log]
  */
@@ -94,6 +96,7 @@ export function createRoom({
   getAutoPlayPolicy = () => null,
   convertSeat = (gr, seat, opts = {}) => gr.convertSeatToBot(seat, opts.personality ?? 'cautious'),
   onPublicChange = () => {},
+  onMemberRemoved = () => {},
   onClosed = () => {},
   log = createLogger('room'),
 }) {
@@ -206,7 +209,10 @@ export function createRoom({
     const member = members.get(playerId);
     if (!member) return err(ERROR_CODES.NOT_FOUND);
     members.delete(playerId);
-    if (!member.isBot) safeSend(playerId, ServerMsg.leftRoom(reason));
+    if (!member.isBot) {
+      safeSend(playerId, ServerMsg.leftRoom(reason));
+      onMemberRemoved(playerId, reason);
+    }
 
     // Mid-match: the seat lives on as a bot for the rest of the match.
     if (state === 'inGame' && gameRoom && !member.isBot) {
@@ -399,6 +405,7 @@ export function createRoom({
       send: safeSend,
       getSpectatorIds: () => [...spectators],
       getAutoPlayPolicy,
+      onAfk: handleAfkKick,
       onMatchEnd: handleMatchEnd,
       log: log.child('game'),
       ...(opts.gameOptions ?? {}),
@@ -416,6 +423,16 @@ export function createRoom({
     onPublicChange();
     gameRoom.start();
     return OK;
+  }
+
+  /** AFK human (2 missed turns while connected) → kicked; seat becomes a bot. */
+  function handleAfkKick(playerId) {
+    if (closed) return;
+    const member = members.get(playerId);
+    if (!member || member.isBot) return;
+    // removeMember sends leftRoom('kicked'), converts the live seat to a bot,
+    // migrates the host if needed, and notifies lobbyManager via onMemberRemoved.
+    removeMember(playerId, 'kicked');
   }
 
   function handleMatchEnd() {

@@ -71,34 +71,51 @@ export function createMainMenu(ctx) {
     return true;
   }
 
+  /** One mode card: playable → launch button; locked → styled "coming soon". */
+  function modeCard(m) {
+    const children = [
+      el('div', { className: 'mode-card-head' }, [
+        el('span', { className: 'mode-card-name', text: m.name }),
+        m.playable
+          ? el('span', { className: 'mode-tag live', text: '● LIVE' })
+          : el('span', { className: 'mode-tag soon', text: '🔒 COMING SOON' }),
+      ]),
+      el('p', { className: 'mode-card-desc', text: m.desc }),
+    ];
+    // King of the Bar: render its Bar Rule mutator list as a teaser (§4.3)
+    if (m.mutators?.length) {
+      children.push(
+        el(
+          'ul',
+          { className: 'mutator-teaser' },
+          m.mutators.map((mu) => el('li', { text: mu }))
+        )
+      );
+    }
+    return el(
+      'button',
+      {
+        className: `mode-card ${m.playable ? 'playable' : 'locked'}`,
+        type: 'button',
+        disabled: m.playable ? undefined : 'true',
+        onClick: () => {
+          if (!m.playable) return;
+          socket.send(MSG.QUICK_MATCH, { mode: m.id });
+          store.set('quickSearching', true);
+          renderSearching(m);
+        },
+      },
+      children
+    );
+  }
+
   function openQuickMatch() {
     if (!ensureName()) return;
     closeModal();
     const modes = store.get('catalogs').modes;
-    const list = el(
-      'div',
-      { className: 'menu-buttons' },
-      modes.map((m) =>
-        el(
-          'button',
-          {
-            className: `btn ${m.playable ? 'primary' : 'ghost'}`,
-            type: 'button',
-            disabled: m.playable ? undefined : 'true',
-            title: m.desc,
-            onClick: () => {
-              if (!m.playable) return;
-              socket.send(MSG.QUICK_MATCH, { mode: m.id });
-              store.set('quickSearching', true);
-              renderSearching(m);
-            },
-          },
-          [el('span', { text: m.playable ? m.name : `${m.name} — coming soon` })]
-        )
-      )
-    );
+    const list = el('div', { className: 'mode-card-list' }, modes.map(modeCard));
     modal = el('div', { className: 'modal-veil', onClick: (e) => e.target === modal && closeModal() }, [
-      el('div', { className: 'modal panel purple' }, [
+      el('div', { className: 'modal panel purple wide' }, [
         el('h2', { className: 'h-title', text: 'Quick Match' }),
         el('p', { className: 'muted', text: 'Pick a game. Empty stools fill with bots after 5 seconds.' }),
         list,

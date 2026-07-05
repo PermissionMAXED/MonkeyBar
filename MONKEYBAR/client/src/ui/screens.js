@@ -194,6 +194,7 @@ export function initUI(store, socket, engine) {
       INVALID_CARDS: 'Invalid card selection.',
       RATE_LIMIT: 'Slow down there, monkey.',
       NAME_INVALID: 'That name will not fly at this bar.',
+      NOT_PLAYABLE: 'That mode is still brewing — coming soon.',
     };
     toast(friendly[p.code] ?? p.msg ?? p.code ?? 'Unknown error', 'error');
   });

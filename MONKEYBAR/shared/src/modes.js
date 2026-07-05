@@ -6,6 +6,7 @@
  * @property {string} name
  * @property {string} desc
  * @property {boolean} playable
+ * @property {string[]} [mutators]  Bar Rule teaser list (King of the Bar)
  */
 
 /** @type {GameMode[]} */
@@ -49,6 +50,15 @@ export const MODES = [
       'Monkey Lies with a twist: every round a random Bar Rule mutator bends the game. ' +
       'Adapt or get launched.',
     playable: false,
+    // §4.3 Bar Rule teaser — surfaced on the mode card in the client (P7).
+    mutators: [
+      '🍺 Happy Hour — everyone plays 2+ cards, no singles',
+      '🙊 Silent Round — chat & emotes disabled, poker faces only',
+      '🔄 Sticky Stool — turn order reverses every call',
+      '🍋 Sour Table — the Table Fruit changes mid-round',
+      '💣 Hair Trigger — cannon starts with 2 coconuts loaded',
+      '👑 Royal Decree — the round winner picks the next Table Fruit',
+    ],
   },
   {
     id: 'customChaos',

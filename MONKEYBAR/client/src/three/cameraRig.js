@@ -134,15 +134,16 @@ export function createCameraRig(camera) {
       camera.rotation.y -= mouse.x * 0.045;
       camera.rotation.x -= mouse.y * 0.03;
 
-      // trauma shake — decays, amplitude = trauma^2
+      // trauma shake — decays, amplitude = trauma^2 (P7 tune: slightly tighter
+      // amplitude + faster settle — punchy on the THOOM, no lingering wobble)
       if (trauma > 0.001) {
         const shake = trauma * trauma;
         camera.getWorldDirection(fwd);
         right.crossVectors(fwd, camera.up).normalize();
-        camera.position.addScaledVector(right, (Math.random() - 0.5) * 0.09 * shake);
-        camera.position.y += (Math.random() - 0.5) * 0.07 * shake;
-        camera.rotation.z += (Math.random() - 0.5) * 0.05 * shake;
-        trauma = Math.max(0, trauma - dt * 1.4);
+        camera.position.addScaledVector(right, (Math.random() - 0.5) * 0.08 * shake);
+        camera.position.y += (Math.random() - 0.5) * 0.06 * shake;
+        camera.rotation.z += (Math.random() - 0.5) * 0.045 * shake;
+        trauma = Math.max(0, trauma - dt * 1.6);
       }
     },
 

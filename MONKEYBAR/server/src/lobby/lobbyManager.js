@@ -70,13 +70,21 @@ export function createLobbyManager({
 
   function buildRoom(opts) {
     const code = opts.isPrivate ? generateRoomCode((c) => codes.has(c)) : null;
-    const room = createRoom({
+    /** @type {ReturnType<import('./room.js').createRoom>} */
+    let room;
+    room = createRoom({
       ...opts,
       code,
       send: (playerId, envelope) => sessions.sendTo(playerId, envelope),
       getAutoPlayPolicy: () => sessions.getAutoPlayPolicy(),
       convertSeat: (gameRoom, seat, o) => sessions.convertSeatToBot(gameRoom, seat, o),
       onPublicChange: broadcastRoomList,
+      // Server-initiated removals (AFK kick, host kick): release the session so
+      // the player can immediately browse/join rooms again.
+      onMemberRemoved: (playerId) => {
+        const s = sessions.get(playerId);
+        if (s && room && s.roomId === room.id) s.roomId = null;
+      },
       onClosed: handleRoomClosed,
       log: log.child('room'),
     });

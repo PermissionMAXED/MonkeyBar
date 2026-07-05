@@ -8,6 +8,7 @@
 
 import { MSG } from '@shared/protocol.js';
 import { MAX_PLAY, MIN_PLAY } from '@shared/constants.js';
+import { getMonkey } from '@shared/monkeys.js';
 import { el, clear, FRUIT_META, shortName } from './dom.js';
 import { portraitCanvas } from './portraits.js';
 import { createChatPanel } from './chat.js';
@@ -503,7 +504,10 @@ export function createHud(ctx) {
 
     const chambers = pen.chambers ?? 6;
     const coconuts = pen.coconuts ?? 1;
-    const oddsPct = Math.round((coconuts / Math.max(1, chambers)) * 100);
+    // Professor Peel "Calculated" (§6, cosmetic): HE sees his odds to a decimal.
+    const calculated = getMonkey(seat?.monkeyId)?.passive?.id === 'calculated';
+    const oddsRaw = (coconuts / Math.max(1, chambers)) * 100;
+    const oddsPct = calculated ? oddsRaw.toFixed(1) : Math.round(oddsRaw);
     const canChip = !!pen.chipUsable && !s.chipUsedByYou && !pendingAction;
 
     const pips = el(
@@ -536,7 +540,7 @@ export function createHud(ctx) {
           el('div', { className: 'cannon-art', text: '🥥💣' }),
           el('div', { className: 'p-title', text: 'You face the cannon' }),
           el('div', { className: 'p-odds' }, [
-            el('span', { text: 'Hit chance: ' }),
+            el('span', { text: calculated ? '🧮 Calculated hit chance: ' : 'Hit chance: ' }),
             el('b', { text: `${coconuts} / ${chambers} (${oddsPct}%)` }),
           ]),
           pips,
