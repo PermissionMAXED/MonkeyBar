@@ -49,6 +49,9 @@ const DEFAULT_IDLE_TTL_MS = 30 * 60_000;
  * @property {string} token
  * @property {string} name
  * @property {string|null} monkeyId
+ * @property {import('@monkeybar/shared/protocol.js').EquippedCosmetics} equipped
+ *           equipped cosmetic ids, mirrored from the profile store (§10.3) —
+ *           refreshed on issue/resume and by the equipCosmetic handler
  * @property {Object|null} conn          active connection wrapper (net/connection.js)
  * @property {string|null} roomId        room the player is a member of
  * @property {string|null} spectatingRoomId
@@ -57,10 +60,20 @@ const DEFAULT_IDLE_TTL_MS = 30 * 60_000;
  * @property {number} lastActiveAt       epoch ms of last issue/attach/detach
  */
 
+/**
+ * @param {Object} [options]
+ * @param {ReturnType<import('../util/log.js').createLogger>} [options.log]
+ * @param {number} [options.holdMs]
+ * @param {number} [options.idleTtlMs]
+ * @param {ReturnType<import('../persist/profileStore.js').createProfileStore>|null} [options.profileStore]
+ *        R2 economy: identity source for profiles (token→playerId, §B.5-1);
+ *        sessions mirror the equipped cosmetics from it
+ */
 export function createSessions({
   log = createLogger('sessions'),
   holdMs = RECONNECT_HOLD_MS,
   idleTtlMs = DEFAULT_IDLE_TTL_MS,
+  profileStore = null,
 } = {}) {
   /** @type {Map<string, Session>} token → session */
   const byToken = new Map();
@@ -125,6 +138,7 @@ export function createSessions({
       token: randomUUID(),
       name: normalizeName(profile.name),
       monkeyId: null,
+      equipped: {},
       conn: null,
       roomId: null,
       spectatingRoomId: null,
@@ -132,6 +146,10 @@ export function createSessions({
       holdTimer: null,
       lastActiveAt: Date.now(),
     };
+    if (profileStore) {
+      session.equipped = profileStore.getEquipped(session.playerId);
+      profileStore.bindToken(session.token, session.playerId); // identity survives restarts
+    }
     byToken.set(session.token, session);
     byId.set(session.playerId, session);
     return session;
@@ -145,7 +163,33 @@ export function createSessions({
   /** @param {string|undefined} token @returns {Session|null} */
   function resume(token) {
     if (typeof token !== 'string') return null;
-    return byToken.get(token) ?? null;
+    let session = byToken.get(token) ?? null;
+    if (!session && profileStore) {
+      // Post-restart: the live session map is gone, but the profile store
+      // remembers which playerId this token identifies (§B.5-1) — rebuild a
+      // fresh session around the SAME identity so coins/cosmetics survive.
+      const playerId = profileStore.resolveToken(token);
+      if (playerId) {
+        session = {
+          playerId,
+          token,
+          name: normalizeName(),
+          monkeyId: null,
+          equipped: {},
+          conn: null,
+          roomId: null,
+          spectatingRoomId: null,
+          acks: new Map(),
+          holdTimer: null,
+          lastActiveAt: Date.now(),
+        };
+        byToken.set(token, session);
+        byId.set(playerId, session);
+      }
+    }
+    // Re-mirror the persisted equipped set (the profile outlives the socket).
+    if (session && profileStore) session.equipped = profileStore.getEquipped(session.playerId);
+    return session;
   }
 
   /** @param {string} playerId @returns {Session|null} */

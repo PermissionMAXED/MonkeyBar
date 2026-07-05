@@ -22,6 +22,12 @@ import { createConnection } from './net/connection.js';
 import { createSessions } from './net/sessions.js';
 import { createLobbyManager } from './lobby/lobbyManager.js';
 import { initBotManager } from './bots/botManager.js';
+import { isModePlayable } from './game/modes/index.js';
+import {
+  createProfileStore,
+  getActiveProfileStore,
+  setActiveProfileStore,
+} from './persist/profileStore.js';
 import { createLogger } from './util/log.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -85,12 +91,17 @@ const CATALOGS = Object.freeze({
   quickPhrases: QUICK_PHRASES,
 });
 
+// R2: `playable` on the wire reflects the mode REGISTRY (modes/index.js), not
+// the static shared catalog — flipping a mode module live updates the client.
+const decoratedModes = () => MODES.map((m) => ({ ...m, playable: isModePlayable(m.id) }));
+
 /**
  * @param {ReturnType<typeof createSessions>} sessions
  * @param {ReturnType<typeof createLobbyManager>} lobby
+ * @param {import('./persist/profileStore.js').ProfileStore} profileStore
  * @param {ReturnType<typeof createLogger>} log
  */
-function createDispatcher(sessions, lobby, log) {
+function createDispatcher(sessions, lobby, profileStore, log) {
   /** Send an error result ({ok:false,code,msg}) as an `error` envelope. */
   const relayError = (conn, res) => {
     if (!res.ok) conn.sendError(res.code, res.msg ?? '');
@@ -103,6 +114,11 @@ function createDispatcher(sessions, lobby, log) {
       return null;
     }
     return conn.session;
+  };
+
+  /** Send the session's current `profile` frame (R2 §10.1). */
+  const sendProfile = (conn, session) => {
+    conn.send(ServerMsg.profile(profileStore.payloadFor(session.playerId)));
   };
 
   const memberRoom = (session) => (session.roomId ? lobby.getRoom(session.roomId) : null);
@@ -141,8 +157,11 @@ function createDispatcher(sessions, lobby, log) {
         token: session.token,
         resumed,
         ...CATALOGS,
+        modes: decoratedModes(),
       })
     );
+    // R2 §10.1: the client learns its coins/level/cosmetics right after welcome.
+    sendProfile(conn, session);
 
     if (resumed && session.roomId) {
       const room = lobby.getRoom(session.roomId);
@@ -217,6 +236,34 @@ function createDispatcher(sessions, lobby, log) {
     const ack = ServerMsg.actionAck(p.aid, result.ok, result.ok ? undefined : result.code);
     sessions.rememberAck(session, p.aid, ack);
     conn.send(ack);
+  }
+
+  // ---- profile / shop (§10.1 getProfile, buyCosmetic, equipCosmetic) ---------------
+
+  function getProfile(conn) {
+    const session = requireSession(conn);
+    if (session) sendProfile(conn, session);
+  }
+
+  function buyCosmetic(conn, p) {
+    const session = requireSession(conn);
+    if (!session) return;
+    // Price / minLevel checks against shared/cosmetics.js live in the store
+    // (→ NOT_FOUND / CANT_AFFORD / LOCKED). Success answers with a fresh profile.
+    if (relayError(conn, profileStore.buy(session.playerId, p.itemId))) {
+      sendProfile(conn, session);
+    }
+  }
+
+  function equipCosmetic(conn, p) {
+    const session = requireSession(conn);
+    if (!session) return;
+    if (!relayError(conn, profileStore.equip(session.playerId, p.slot, p.itemId))) return;
+    session.equipped = profileStore.getEquipped(session.playerId);
+    sendProfile(conn, session);
+    // In a room: refresh the member's cosmetics + rebroadcast roomState (§10.1).
+    const room = memberRoom(session);
+    if (room && !room.closed) room.setMemberCosmetics(session.playerId, session.equipped);
   }
 
   // ---- chat / social -----------------------------------------------------------------
@@ -322,6 +369,11 @@ function createDispatcher(sessions, lobby, log) {
     [MSG.CALL_LIAR]: (conn, p) => gameAction(conn, MSG.CALL_LIAR, p),
     [MSG.USE_CHIP]: (conn, p) => gameAction(conn, MSG.USE_CHIP, p),
     [MSG.FIRE_CANNON]: (conn, p) => gameAction(conn, MSG.FIRE_CANNON, p),
+    // §10.1 generic mode verb — routed like `play` (aid dedup + actionAck).
+    [MSG.MODE_ACTION]: (conn, p) => gameAction(conn, MSG.MODE_ACTION, p),
+    [MSG.GET_PROFILE]: getProfile,
+    [MSG.BUY_COSMETIC]: buyCosmetic,
+    [MSG.EQUIP_COSMETIC]: equipCosmetic,
     [MSG.CHAT]: chat,
     [MSG.QUICK_PHRASE]: quickPhrase,
     [MSG.EMOTE]: emote,
@@ -402,6 +454,7 @@ function createDispatcher(sessions, lobby, log) {
  *   port: number,
  *   sessions: ReturnType<typeof createSessions>,
  *   lobby: ReturnType<typeof createLobbyManager>,
+ *   profileStore: ReturnType<typeof createProfileStore>,
  *   close: () => Promise<void>,
  * }>}
  */
@@ -410,15 +463,23 @@ export function startServer({
   production = process.env.NODE_ENV === 'production',
   logLevel = process.env.LOG_LEVEL || 'info',
   quickFillDelayMs = undefined, // tests shrink the 5 s quickmatch fill
+  profileFile = process.env.MONKEYBAR_PROFILE_FILE || undefined, // tests isolate the store
 } = {}) {
   const log = createLogger('monkeybar', logLevel);
-  const sessions = createSessions({ log: log.child('sessions') });
+  // R2 economy: profiles load at boot from server/data/profiles.json and are
+  // registered as the ACTIVE store so the lobby layer can reach them (§B.5-1).
+  const profileStore = createProfileStore({
+    ...(profileFile ? { file: profileFile } : {}),
+    log: log.child('profiles'),
+  });
+  setActiveProfileStore(profileStore);
+  const sessions = createSessions({ log: log.child('sessions'), profileStore });
   const lobby = createLobbyManager({ sessions, quickFillDelayMs, log: log.child('lobby') });
   // P3 wiring: bot brains — attaches to every gameRoom's bot seats, upgrades
   // the §3.4 disconnect-hold auto-play to the Cautious policy, and gives
   // seats converted from disconnected players a real brain.
   const bots = initBotManager({ sessions, lobby, log: log.child('bots') });
-  const { dispatch, handleClose } = createDispatcher(sessions, lobby, log);
+  const { dispatch, handleClose } = createDispatcher(sessions, lobby, profileStore, log);
 
   const httpServer = http.createServer((req, res) => {
     if (production) {
@@ -449,14 +510,18 @@ export function startServer({
         port: actualPort,
         sessions,
         lobby,
-        close: () =>
-          new Promise((resolveClose) => {
-            bots.dispose();
-            lobby.shutdown();
-            sessions.shutdown();
-            for (const client of wss.clients) client.terminate();
-            wss.close(() => httpServer.close(() => resolveClose()));
-          }),
+        profileStore,
+        close: async () => {
+          bots.dispose();
+          lobby.shutdown();
+          sessions.shutdown();
+          await profileStore.close(); // flush any debounced save before exit
+          if (getActiveProfileStore() === profileStore) setActiveProfileStore(null);
+          for (const client of wss.clients) client.terminate();
+          await new Promise((resolveClose) =>
+            wss.close(() => httpServer.close(() => resolveClose()))
+          );
+        },
       });
     });
   });

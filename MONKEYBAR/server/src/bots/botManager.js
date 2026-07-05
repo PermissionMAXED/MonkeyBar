@@ -22,7 +22,8 @@ import { ERROR_CODES, MSG, ServerMsg } from '@monkeybar/shared/protocol.js';
 import { PENALTY_WINDOW_MS } from '@monkeybar/shared/constants.js';
 
 import { setGameRoomCreatedHook } from '../game/gameRoom.js';
-import { createAutoPlayPolicy, createBotBrain } from './botBrain.js';
+import { createAutoPlayPolicy } from './botBrain.js';
+import { getBrainFactory } from './brains/index.js';
 import { getPersonality, randomPersonalityId } from './personalities.js';
 import { createLogger } from '../util/log.js';
 
@@ -149,7 +150,7 @@ export function createBotManager({
    */
   function rePrimeFromSnapshot(gameRoom, bot) {
     const playerId = gameRoom.table.get(bot.seat).playerId;
-    bot.brain.primeFromSnapshot(gameRoom.snapshotFor(playerId));
+    bot.brain.primeFromSnapshot?.(gameRoom.snapshotFor(playerId));
   }
 
   function scheduleTurnDecision(gameRoom, rec, bot) {
@@ -168,6 +169,12 @@ export function createBotManager({
       try {
         if (action.type === 'call') {
           res = gameRoom.actForSeat(bot.seat, MSG.CALL_LIAR);
+        } else if (action.type === 'mode') {
+          // R2 brain convention: generic mode verbs ride MSG.MODE_ACTION.
+          res = gameRoom.actForSeat(bot.seat, MSG.MODE_ACTION, {
+            action: action.action,
+            data: action.data ?? {},
+          });
         } else {
           res = gameRoom.actForSeat(bot.seat, MSG.PLAY, { cardIds: action.cardIds });
         }
@@ -241,12 +248,21 @@ export function createBotManager({
    */
   function attachSeat(gameRoom, seat) {
     if (gameRoom.ended) return null;
+    // R2 brain convention: the brain factory is keyed by the match's mode.
+    // No factory (null stub) → leave the seat unclaimed so the gameRoom
+    // fallback drives it via engine.onTimeout (engines own sane defaults).
+    // Stand-ins without a modeId (tests) keep the historical ML brain.
+    const createBrain = getBrainFactory(gameRoom.modeId ?? 'monkeyLies');
+    if (!createBrain) {
+      log.debug(`no brain for mode '${gameRoom.modeId}' — seat ${seat} left to the timeout fallback`);
+      return null;
+    }
     const rec = roomRec(gameRoom);
     if (rec.bots.has(seat)) return rec.bots.get(seat);
 
     const seatInfo = gameRoom.table.get(seat);
     const personalityId = getPersonality(seatInfo.personality ?? randomPersonalityId(rng)).id;
-    const brain = createBotBrain({ seat, personalityId, rng });
+    const brain = createBrain({ seat, personalityId, rng });
     const bot = {
       seat,
       brain,
@@ -262,7 +278,7 @@ export function createBotManager({
       const reaction = brain.observe(envelope);
       if (reaction) scheduleReaction(gameRoom, rec, bot, reaction);
       const { t, p } = envelope;
-      if (t === MSG.PLAYED && p.seat === seat && !bot.acting && bot.brain.inspect().handSize !== p.handCount) {
+      if (t === MSG.PLAYED && p.seat === seat && !bot.acting && bot.brain.inspect?.().handSize !== p.handCount) {
         // The server acted for this seat (deadline auto-play race): the
         // brain's tracked hand no longer matches the authoritative count.
         // Repair from the reconnect snapshot so the next decision stays legal.
@@ -285,7 +301,7 @@ export function createBotManager({
     // reconnecting client would receive, then cover any in-flight decision.
     const snap = gameRoom.snapshotFor(seatInfo.playerId);
     if (snap && snap.roundNo > 0) {
-      brain.primeFromSnapshot(snap);
+      brain.primeFromSnapshot?.(snap);
       if (snap.phase === 'playing' && snap.turnSeat === seat) {
         scheduleTurnDecision(gameRoom, rec, bot);
       } else if (snap.phase === 'penalty') {
@@ -293,7 +309,7 @@ export function createBotManager({
         // inspect() is used server-side only to re-read it after the fact.
         const pen = gameRoom.engine.inspect?.().penalty;
         if (pen && pen.seat === seat) {
-          brain.primePenalty({
+          brain.primePenalty?.({
             chambers: seatInfo.chambersLeft,
             coconuts: seatInfo.coconuts,
             chipUsable: seatInfo.chips > 0,

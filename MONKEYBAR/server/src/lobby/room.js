@@ -17,9 +17,12 @@ import { ERROR_CODES, ServerMsg } from '@monkeybar/shared/protocol.js';
 import { MONKEYS } from '@monkeybar/shared/monkeys.js';
 import { MAPS } from '@monkeybar/shared/maps.js';
 import { getMode } from '@monkeybar/shared/modes.js';
+import { defaultKnobs, validateKnobs } from '@monkeybar/shared/chaos.js';
 
 import { createGameRoom } from '../game/gameRoom.js';
+import { settleMatch } from '../game/economy.js';
 import { isModeKnown, isModePlayable, NOT_PLAYABLE } from '../game/modes/index.js';
+import { getActiveProfileStore } from '../persist/profileStore.js';
 import { createLogger } from '../util/log.js';
 
 /** §5 archetypes — the ids P3's bots/personalities.js will implement. */
@@ -105,6 +108,8 @@ export function createRoom({
   /** @type {Set<string>} spectator playerIds */
   const spectators = new Set();
   const settings = { turnSeconds: TURN_SECONDS_DEFAULT, mapId: 'peeling_parrot' };
+  // §10.3: chaos knobs exist ONLY while the room's mode is customChaos.
+  if (mode === 'customChaos') settings.chaos = defaultKnobs();
   let hostId = null;
   let state = 'lobby'; // 'lobby' | 'inGame'
   /** @type {ReturnType<import('../game/gameRoom.js').createGameRoom>|null} */
@@ -190,6 +195,8 @@ export function createRoom({
       ready: !!opts.ready,
       isBot: false,
       isHost: false,
+      // §10.3: equipped cosmetic ids only — never the full inventory.
+      cosmetics: getActiveProfileStore()?.getEquipped(profile.playerId) ?? {},
     });
     if (opts.asHost || !hostId) setHost(profile.playerId);
     broadcastRoomState();
@@ -312,6 +319,21 @@ export function createRoom({
     return OK;
   }
 
+  /**
+   * R2 cosmetics plumbing: refresh a member's equipped set after an
+   * equipCosmetic and rebroadcast the room (§10.1). Mid-match equips update
+   * the lobby view only — seat metas were fixed at startGame.
+   * @param {string} playerId
+   * @param {import('@monkeybar/shared/protocol.js').EquippedCosmetics} cosmetics
+   */
+  function setMemberCosmetics(playerId, cosmetics) {
+    const m = members.get(playerId);
+    if (!m) return err(ERROR_CODES.BAD_STATE);
+    m.cosmetics = { ...(cosmetics ?? {}) };
+    broadcastRoomState();
+    return OK;
+  }
+
   function addBot(byId, personality) {
     if (byId !== hostId) return err(ERROR_CODES.NOT_HOST);
     if (state !== 'lobby') return err(ERROR_CODES.BAD_STATE);
@@ -326,6 +348,7 @@ export function createRoom({
       isBot: true,
       personality: p,
       isHost: false,
+      cosmetics: {}, // bots never own cosmetics
     });
     broadcastRoomState();
     return { ok: true, botId };
@@ -361,6 +384,19 @@ export function createRoom({
         return err(ERROR_CODES.NOT_FOUND, 'unknown mode');
       }
       mode = patch.mode; // non-playable allowed here; start is what's blocked
+      // §10.3: settings.chaos exists ONLY while mode === customChaos.
+      if (mode === 'customChaos') settings.chaos = settings.chaos ?? defaultKnobs();
+      else delete settings.chaos;
+    }
+    if (patch.chaos !== undefined) {
+      if (mode !== 'customChaos') {
+        return err(ERROR_CODES.BAD_MSG, 'chaos knobs apply to Custom Chaos only');
+      }
+      if (typeof patch.chaos !== 'object' || patch.chaos === null || Array.isArray(patch.chaos)) {
+        return err(ERROR_CODES.BAD_MSG);
+      }
+      // shared/chaos.js clamps every knob to its schema bounds.
+      settings.chaos = validateKnobs(patch.chaos, settings.chaos ?? defaultKnobs());
     }
     broadcastRoomState();
     return OK;
@@ -400,6 +436,8 @@ export function createRoom({
       monkeyId: m.monkeyId,
       isBot: m.isBot,
       personality: m.personality ?? null,
+      // §10.3 cosmetics chain: member → seat meta → table seat → SeatPublic.
+      cosmetics: m.cosmetics && Object.keys(m.cosmetics).length > 0 ? { ...m.cosmetics } : null,
     }));
 
     gameRoom = createGameRoom({
@@ -413,6 +451,8 @@ export function createRoom({
       getAutoPlayPolicy,
       onAfk: handleAfkKick,
       onMatchEnd: handleMatchEnd,
+      // §10.3: Custom Chaos knobs ride into the engine factory as `knobs`.
+      ...(mode === 'customChaos' && settings.chaos ? { knobs: { ...settings.chaos } } : {}),
       log: log.child('game'),
       ...(opts.gameOptions ?? {}),
     });
@@ -441,10 +481,34 @@ export function createRoom({
     removeMember(playerId, 'kicked');
   }
 
-  function handleMatchEnd() {
+  /**
+   * @param {{winnerSeat: number, standings: Array<{seat: number, name: string, place: number}>}} [summary]
+   *        the engine's matchEnd payload (gameRoom.onMatchEnd)
+   */
+  function handleMatchEnd(summary) {
     if (closed || !gameRoom) return;
-    gameRoom.destroy();
+    const finished = gameRoom;
     gameRoom = null;
+    // R2 economy: pay every human still seated (private `rewards` + fresh
+    // `profile`, §10.2). Seats that converted to bots (leavers/kicks) and
+    // real bots are skipped inside settleMatch; short matches pay nothing.
+    const store = getActiveProfileStore();
+    if (store && summary) {
+      try {
+        settleMatch({
+          store,
+          modeId: finished.modeId,
+          roundNo: finished.engine?.roundNo ?? 0,
+          standings: summary.standings,
+          seatAt: (seat) => finished.table.get(seat),
+          countersFor: (seat) => finished.countersFor(seat),
+          send: safeSend,
+        });
+      } catch (e) {
+        log.warn('match payout failed:', e.message);
+      }
+    }
+    finished.destroy();
     state = 'lobby';
     for (const m of members.values()) {
       if (!m.isBot) m.ready = false;
@@ -564,6 +628,7 @@ export function createRoom({
     setReady,
     selectMonkey,
     setMemberName,
+    setMemberCosmetics,
     addBot,
     removeBot,
     updateSettings,

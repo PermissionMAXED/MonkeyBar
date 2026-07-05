@@ -53,6 +53,9 @@ const err = (code) => ({ ok: false, code });
  * @param {(summary: {winnerSeat: number, standings: Object[]}) => void} [options.onMatchEnd]
  * @param {number} [options.seed]
  * @param {number} [options.autoDelayMs]
+ * @param {import('@monkeybar/shared/chaos.js').ChaosKnobs} [options.knobs]
+ *        Custom Chaos: the room's validated settings.chaos, forwarded to the
+ *        engine factory verbatim (§10.3)
  * @param {Object} [options.engineOverrides]  extra engine options (tests)
  * @param {ReturnType<import('../util/log.js').createLogger>} [options.log]
  */
@@ -69,6 +72,7 @@ export function createGameRoom({
   onMatchEnd = () => {},
   seed,
   autoDelayMs = defaultAutoDelayMs(),
+  knobs = null,
   engineOverrides = {},
   log = createLogger('gameRoom'),
 }) {
@@ -105,8 +109,46 @@ export function createGameRoom({
     mapId,
     onEvent: handleEngineEvent,
     autoPlayPolicy: enginePolicy,
+    ...(knobs ? { knobs } : {}),
     ...engineOverrides,
   });
+
+  // ---- per-match economy counters (R2, §B.4) ----------------------------------
+  // Successful "MONKEY LIES!" calls (any engine that rides the §3.3
+  // called→reveal pair) and survived cannon shots, per seat. The lobby room
+  // reads countersFor(seat) at matchEnd to compute Banana Coin bonuses; bot
+  // seats are filtered out at payout time (bots never earn).
+
+  /** @type {Map<number, {goodCalls: number, survivedShots: number}>} */
+  const matchCounters = new Map();
+  let pendingCallerSeat = -1;
+
+  function counterFor(seat) {
+    let c = matchCounters.get(seat);
+    if (!c) {
+      c = { goodCalls: 0, survivedShots: 0 };
+      matchCounters.set(seat, c);
+    }
+    return c;
+  }
+
+  /** @param {{t: string, p: Object}} evt  public engine event */
+  function noteEconomyEvent(evt) {
+    if (evt.t === MSG.CALLED) {
+      pendingCallerSeat = evt.p.callerSeat;
+    } else if (evt.t === MSG.REVEAL) {
+      if (evt.p.lie && pendingCallerSeat !== -1) counterFor(pendingCallerSeat).goodCalls += 1;
+      pendingCallerSeat = -1;
+    } else if (evt.t === MSG.CANNON) {
+      if (!evt.p.hit) counterFor(evt.p.seat).survivedShots += 1;
+    }
+  }
+
+  /** Per-match economy counters for one seat (a copy). */
+  function countersFor(seat) {
+    const c = matchCounters.get(seat);
+    return c ? { ...c } : { goodCalls: 0, survivedShots: 0 };
+  }
 
   // ---- broadcast + private filtering -----------------------------------------
 
@@ -151,6 +193,7 @@ export function createGameRoom({
       feedSeat(evt.seat, envelope);
     } else {
       broadcastPublic(envelope);
+      noteEconomyEvent(evt);
       if (evt.t === MSG.TURN) maybeScheduleFallback('turn', evt.p.seat);
       else if (evt.t === MSG.PENALTY) maybeScheduleFallback('penalty', evt.p.seat);
       else if (evt.t === MSG.MATCH_END) finishMatch(evt.p);
@@ -301,7 +344,14 @@ export function createGameRoom({
     else if (type === MSG.CALL_LIAR) result = engine.callLiar(seat);
     else if (type === MSG.USE_CHIP) result = engine.useChip(seat);
     else if (type === MSG.FIRE_CANNON) result = engine.fireSelf(seat);
-    else result = err(ERROR_CODES.BAD_MSG);
+    else if (type === MSG.MODE_ACTION) {
+      // §10.1 generic mode verb — routed like `play`. Engines without a
+      // modeAction surface (e.g. Monkey Lies) reject it as a bad message.
+      result =
+        typeof engine.modeAction === 'function'
+          ? engine.modeAction(seat, p.action, p.data ?? {})
+          : err(ERROR_CODES.BAD_MSG);
+    } else result = err(ERROR_CODES.BAD_MSG);
     syncTimer();
     return result;
   }
@@ -435,6 +485,7 @@ export function createGameRoom({
     snapshotFor,
     subscribeSeat,
     setSeatDriven,
+    countersFor,
     destroy,
     get ended() {
       return ended;

@@ -17,6 +17,8 @@ import {
  * @property {string} [monkeyId]
  * @property {boolean} [isBot]
  * @property {string} [personality]  bot personality tag (P3 uses this)
+ * @property {import('@monkeybar/shared/protocol.js').EquippedCosmetics|null} [cosmetics]
+ *           equipped cosmetic ids (§10.3) — passed straight through to SeatPublic
  */
 
 /**
@@ -27,6 +29,7 @@ import {
  * @property {string|null} monkeyId
  * @property {boolean} isBot
  * @property {string|null} personality
+ * @property {import('@monkeybar/shared/protocol.js').EquippedCosmetics|null} cosmetics
  * @property {boolean} connected
  * @property {boolean} alive
  * @property {import('@monkeybar/shared/protocol.js').Card[]} hand
@@ -51,6 +54,7 @@ export function createTable(seatMetas) {
     monkeyId: meta.monkeyId ?? null,
     isBot: !!meta.isBot,
     personality: meta.personality ?? null,
+    cosmetics: meta.cosmetics ?? null,
     connected: true,
     alive: true,
     hand: [],
@@ -128,7 +132,7 @@ export function createTable(seatMetas) {
    */
   function publicSeat(seat) {
     const s = get(seat);
-    return {
+    const out = {
       seat: s.seat,
       playerId: s.playerId,
       name: s.name,
@@ -140,6 +144,9 @@ export function createTable(seatMetas) {
       chips: s.chips,
       chambersLeft: s.chambersLeft,
     };
+    // §10.3: equipped cosmetic ids ride SeatPublic only when the seat has any.
+    if (s.cosmetics) out.cosmetics = s.cosmetics;
+    return out;
   }
 
   function publicSeats() {
