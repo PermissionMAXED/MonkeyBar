@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 
 import { createGameRoom } from '../src/game/gameRoom.js';
 import { AFK_MISSED_TURNS_LIMIT } from '@monkeybar/shared/constants.js';
+import { cardMatchesTableFruit } from '@monkeybar/shared/cards.js';
 import { MSG } from '@monkeybar/shared/protocol.js';
 
 const SEATS = [
@@ -94,6 +95,83 @@ test('AFK: disconnected humans are never AFK-kicked (reconnect hold covers them)
   }
 
   assert.equal(afkCalls.length, 0, 'no AFK kick while disconnected');
+});
+
+test('AFK: sleeping through a Royal Decree window counts as a missed turn', async () => {
+  // Seed 1 (verified): after the leading bots shed one card each, seat 0's
+  // turn comes with a Table-Fruit card in hand. Seat 0 plays it (honest), the
+  // next bot calls and loses, the cannon misses (0.99) — the decree window
+  // opens for seat 0. Strike 1 = the 5 s decree window expiring unanswered;
+  // strike 2 = an ordinary round-2 turn timeout. With AFK_MISSED_TURNS_LIMIT
+  // = 2 the kick fires — proving the decree miss counted.
+  const sent = [];
+  const afkCalls = [];
+  const gameRoom = createGameRoom({
+    roomId: 'afk-decree-test',
+    modeId: 'monkeyLies',
+    mapId: 'peeling_parrot',
+    turnSeconds: 0.15, // 150 ms turn deadlines
+    seatMetas: SEATS.map((s) => ({ ...s })),
+    send: (playerId, envelope) => sent.push({ playerId, envelope }),
+    onAfk: (playerId, seat) => afkCalls.push({ playerId, seat }),
+    seed: 1,
+    autoDelayMs: 600000, // fallback never acts — the test drives every bot
+    engineOverrides: {
+      rules: { decree: true }, // every round is a Royal Decree round
+      cannonRng: () => 0.99, // every shot survives
+      penaltyWindowMs: 10,
+      intermissionMs: 50,
+    },
+  });
+  const { engine, table } = gameRoom;
+
+  /** Drive bot turns (1 card each, via actForSeat — no strikes) to seat 0. */
+  function driveBotsToSeatZero() {
+    let steps = 0;
+    while (engine.turnSeat !== 0 && steps++ < 10) {
+      const seat = engine.turnSeat;
+      const res = gameRoom.actForSeat(seat, MSG.PLAY, { cardIds: [table.get(seat).hand[0].id] });
+      assert.equal(res.ok, true, `drive play failed: ${res.code}`);
+    }
+    assert.equal(engine.turnSeat, 0, 'never reached seat 0');
+  }
+
+  gameRoom.start();
+  try {
+    // Round 1: seat 0 plays an HONEST card (no strike), the next bot calls it
+    // and loses — seat 0 becomes the decree winner.
+    driveBotsToSeatZero();
+    const honest = table.get(0).hand.find((c) => cardMatchesTableFruit(c, engine.tableFruit));
+    assert.ok(honest, 'seed 1 must deal seat 0 a Table-Fruit card');
+    assert.ok(gameRoom.actForSeat(0, MSG.PLAY, { cardIds: [honest.id] }).ok);
+    const caller = engine.turnSeat;
+    assert.notEqual(caller, 0);
+    assert.ok(gameRoom.actForSeat(caller, MSG.CALL_LIAR).ok);
+    const reveal = sent.map(({ envelope }) => envelope).find((e) => e.t === MSG.REVEAL);
+    assert.equal(reveal.p.lie, false, 'the called play was honest');
+    assert.equal(reveal.p.loserSeat, caller);
+
+    // Penalty (10 ms) resolves on the room's own timer → the decree opens.
+    await waitFor(() => engine.phase === 'decree', 2000);
+    assert.equal(engine.turnSeat, 0, 'the decree window belongs to seat 0');
+    assert.equal(engine.getTimer().kind, 'decree');
+
+    // Strike 1: the 5 s decree window expires unanswered (DECREE_WINDOW_MS is
+    // engine-fixed). One miss is below the limit — no kick yet.
+    await waitFor(() => engine.phase !== 'decree', 8000, 25);
+    assert.equal(afkCalls.length, 0, 'a single decree miss must not kick');
+
+    // Strike 2: an ordinary turn timeout in round 2. The kick fires
+    // SYNCHRONOUSLY with that second miss — proof the decree miss counted
+    // (a lone round-2 miss would still be below the limit).
+    await waitFor(() => engine.phase === 'playing' && engine.roundNo === 2, 3000);
+    driveBotsToSeatZero();
+    const handBefore = table.get(0).hand.length;
+    await waitFor(() => table.get(0).hand.length < handBefore, 2000); // deadline auto-played
+    assert.deepEqual(afkCalls, [{ playerId: 'p0', seat: 0 }], 'decree miss + turn miss = AFK kick');
+  } finally {
+    gameRoom.destroy();
+  }
 });
 
 test('AFK: a Last-Monkey-Holding turn timeout does NOT count as a missed turn', async () => {

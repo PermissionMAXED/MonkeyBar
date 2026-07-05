@@ -14,6 +14,7 @@
 
 import { ERROR_CODES, MSG, ServerMsg } from '@monkeybar/shared/protocol.js';
 import { AFK_MISSED_TURNS_LIMIT } from '@monkeybar/shared/constants.js';
+import { DICE_EVENTS, POKER_EVENTS, ROULETTE_EVENTS } from '@monkeybar/shared/modeEvents.js';
 
 import { createTable } from './table.js';
 import { getEngineFactory } from './modes/index.js';
@@ -114,14 +115,24 @@ export function createGameRoom({
   });
 
   // ---- per-match economy counters (R2, §B.4) ----------------------------------
-  // Successful "MONKEY LIES!" calls (any engine that rides the §3.3
-  // called→reveal pair) and survived cannon shots, per seat. The lobby room
-  // reads countersFor(seat) at matchEnd to compute Banana Coin bonuses; bot
-  // seats are filtered out at payout time (bots never earn).
+  // Good calls and survived shots, per seat, consumed from PUBLIC event kinds
+  // only (gameRoom stays mode-generic — it never reaches into an engine):
+  //   * §3.3 called→reveal pair (Monkey Lies family): successful liar calls;
+  //   * §3.3 cannon miss (any mode with the Coconut Cannon): survived shots;
+  //   * modeEvent dice CHALLENGE→REVEAL pair: a challenge that felled the
+  //     bidder is Banana Dice's "good call";
+  //   * modeEvent poker SHOWDOWN: winning a contested showdown is Jungle
+  //     Poker's "good call" (fold wins are intentionally uncounted);
+  //   * modeEvent roulette SHAKE: surviving a coconut shake counts as a
+  //     survived shot (the coconut IS roulette's cannon).
+  // The lobby room reads countersFor(seat) at matchEnd to compute Banana Coin
+  // bonuses; bot seats are filtered out at payout time (bots never earn).
 
   /** @type {Map<number, {goodCalls: number, survivedShots: number}>} */
   const matchCounters = new Map();
   let pendingCallerSeat = -1;
+  /** @type {{callerSeat: number, targetSeat: number}|null} pending dice challenge */
+  let pendingDiceChallenge = null;
 
   function counterFor(seat) {
     let c = matchCounters.get(seat);
@@ -141,6 +152,28 @@ export function createGameRoom({
       pendingCallerSeat = -1;
     } else if (evt.t === MSG.CANNON) {
       if (!evt.p.hit) counterFor(evt.p.seat).survivedShots += 1;
+    } else if (evt.t === MSG.MODE_EVENT) {
+      const { kind } = evt.p;
+      if (kind === DICE_EVENTS.CHALLENGE) {
+        pendingDiceChallenge = { callerSeat: evt.p.callerSeat, targetSeat: evt.p.targetSeat };
+      } else if (kind === DICE_EVENTS.REVEAL) {
+        // The bid fell (the challenged bidder lost a die) → the challenger
+        // made a good call; a bid that stood earns nobody anything.
+        if (pendingDiceChallenge && evt.p.loserSeat === pendingDiceChallenge.targetSeat) {
+          counterFor(pendingDiceChallenge.callerSeat).goodCalls += 1;
+        }
+        pendingDiceChallenge = null;
+      } else if (kind === POKER_EVENTS.SHOWDOWN) {
+        // Contested showdowns only — dragging a pot because everyone folded
+        // takes no nerve to reveal.
+        if (!evt.p.uncontested) {
+          for (const seat of evt.p.winnerSeats ?? [evt.p.winnerSeat]) {
+            counterFor(seat).goodCalls += 1;
+          }
+        }
+      } else if (kind === ROULETTE_EVENTS.SHAKE) {
+        counterFor(evt.p.seat).survivedShots += 1;
+      }
     }
   }
 
@@ -231,10 +264,14 @@ export function createGameRoom({
     deadlineTimer = setTimeout(() => {
       deadlineTimer = null;
       if (destroyed || ended) return;
-      const turnSeat = timer.kind === 'turn' ? engine.turnSeat : -1;
+      // 'turn' and 'decree' deadlines both belong to ONE seat sleeping on its
+      // own window — either counts as a missed turn for AFK detection.
+      const isSeatTurn = timer.kind === 'turn' || timer.kind === 'decree';
+      const turnSeat = isSeatTurn ? engine.turnSeat : -1;
       // A Last-Monkey-Holding turn timing out IS the resolution (the forced
       // self-shot), not an AFK signal — capture the flag before the timeout
-      // consumes it and skip the strike in that case.
+      // consumes it and skip the strike in that case ('turn' only; a decree
+      // window is never a last-holder resolution).
       const wasLastHolderTurn = timer.kind === 'turn' && !!engine.lastHolderPending;
       engine.onTimeout(timer.kind);
       if (turnSeat !== -1 && !wasLastHolderTurn) noteMissedTurn(turnSeat);

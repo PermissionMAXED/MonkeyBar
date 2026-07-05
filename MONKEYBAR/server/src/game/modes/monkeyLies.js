@@ -45,6 +45,7 @@ import {
   TURN_SECONDS_DEFAULT,
 } from '@monkeybar/shared/constants.js';
 import { BASIC_FRUITS, FRUITS, buildDeck, cardMatchesTableFruit } from '@monkeybar/shared/cards.js';
+import { KING_EVENTS } from '@monkeybar/shared/modeEvents.js';
 import { ERROR_CODES } from '@monkeybar/shared/protocol.js';
 import { mulberry32, shuffle } from '@monkeybar/shared/rng.js';
 
@@ -54,10 +55,9 @@ export const MONKEY_LIES_MODE_ID = 'monkeyLies';
 export const PICK_FRUIT_ACTION = 'pickFruit';
 /** Royal Decree pick window (ms). */
 export const DECREE_WINDOW_MS = 5000;
-/** Engine-level modeEvent kinds (wrappers may rename/decorate them). */
+/** Engine-level modeEvent kinds (wrappers may rename/decorate them). The
+ *  Sour Table flip ships as the shared KING_EVENTS.FRUIT_FLIP kind directly. */
 export const ENGINE_EVENTS = Object.freeze({
-  /** `{ fruit, roundNo }` — mid-round Table Fruit re-roll (Sour Table). */
-  FRUIT_FLIP: 'fruitFlip',
   /** `{ seat, fruit }` — Royal Decree: the challenge winner picked the next Table Fruit. */
   FRUIT_PICKED: 'fruitPicked',
 });
@@ -192,7 +192,10 @@ export function createMonkeyLiesEngine({
   let turnDeadline = 0;
   /** The current turn's seat is the only holder: PLAY disallowed, CALL-or-fire. */
   let lastHolderPending = false;
-  /** @type {{seat: number, cards: import('@monkeybar/shared/protocol.js').Card[], count: number}|null} */
+  /** @type {{seat: number, cards: import('@monkeybar/shared/protocol.js').Card[], count: number, fruitAtPlay: string}|null}
+   *  `fruitAtPlay` = the Table Fruit in effect WHEN the play landed. A Sour
+   *  Table flip after the play must not retroactively turn an honest claim
+   *  into a lie — callLiar judges against this, never the post-flip fruit. */
   let lastPlay = null;
   /** @type {{seat: number, self: boolean, bonus: number, chipUsed: boolean, deadline: number}|null} */
   let penalty = null;
@@ -367,7 +370,9 @@ export function createMonkeyLiesEngine({
       cards.push(card);
     }
     s.hand = s.hand.filter((c) => !cardIds.includes(c.id));
-    lastPlay = { seat, cards, count: cards.length };
+    // Stamp the fruit the claim was made under BEFORE any Sour Table flip
+    // below re-rolls it (a flip riding this very play lands after the claim).
+    lastPlay = { seat, cards, count: cards.length, fruitAtPlay: tableFruit };
     emit('played', { seat, count: cards.length, handCount: s.hand.length });
     playsThisRound += 1;
     // Sour Table: the Table Fruit re-rolls after every Nth play (0 = off).
@@ -382,7 +387,7 @@ export function createMonkeyLiesEngine({
   function flipTableFruit() {
     const others = BASIC_FRUITS.filter((f) => f !== tableFruit);
     tableFruit = others[Math.floor(rng() * others.length)];
-    modeEvent(ENGINE_EVENTS.FRUIT_FLIP, { fruit: tableFruit, roundNo });
+    modeEvent(KING_EVENTS.FRUIT_FLIP, { fruit: tableFruit, roundNo });
   }
 
   function advanceAfterPlay(fromSeat) {
@@ -410,7 +415,9 @@ export function createMonkeyLiesEngine({
 
     const target = lastPlay.seat;
     const cards = lastPlay.cards;
-    const lie = !isTruthfulPlay(cards, tableFruit);
+    // Judge the claim under the fruit in effect AT PLAY TIME: an honest play
+    // made before a Sour Table flip is not retroactively a lie.
+    const lie = !isTruthfulPlay(cards, lastPlay.fruitAtPlay);
     const loser = lie ? target : seat;
     // Royal Decree: the challenge WINNER (the non-loser side) earns the pick.
     decreeWinner = lie ? seat : target;
@@ -769,6 +776,7 @@ export function createMonkeyLiesEngine({
         turnSeat,
         lastHolderPending,
         lastPlayCards: lastPlay ? lastPlay.cards.slice() : null,
+        lastPlayFruit: lastPlay ? lastPlay.fruitAtPlay : null,
         penalty: penalty ? { ...penalty } : null,
         eliminatedOrder: eliminatedOrder.slice(),
         rules: { ...cur },

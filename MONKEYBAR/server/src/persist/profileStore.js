@@ -8,6 +8,14 @@
 //   * any disk failure degrades to a warning — the store keeps serving from
 //     memory (in-memory fallback) and retries on the next mutation/flush.
 //
+// GROWTH GUARD (post-release fix): reads are TRANSIENT. `hello`/welcome and
+// getProfile serve payloadFor/getEquipped from a read-only path that never
+// stores anything, so anonymous visitors leave no trace. A profile (and the
+// token bindings pointing at it) is persisted only once it becomes MEANINGFUL
+// — the first real mutation (addRewards / buy / equip / bumpStats). Loading
+// prunes empty default profiles and orphan token bindings left by older
+// builds.
+//
 // Identity = the session layer's token→playerId (§3.4): the binding is
 // persisted here (bindToken/resolveToken) so a client's saved token still
 // resolves to the same profile after a server restart. Losing the token
@@ -95,18 +103,38 @@ export function createProfileStore({
       try {
         const data = JSON.parse(readFileSync(file, 'utf8'));
         const stored = data && typeof data === 'object' ? data.profiles : null;
+        let pruned = 0;
         if (stored && typeof stored === 'object') {
           for (const [playerId, rec] of Object.entries(stored)) {
-            profiles.set(playerId, normalizeRecord(playerId, rec));
+            const record = normalizeRecord(playerId, rec);
+            // Prune empty default profiles left behind by older builds that
+            // persisted on hello — they carry zero information.
+            if (isDefaultProfile(record)) {
+              pruned += 1;
+              continue;
+            }
+            profiles.set(playerId, record);
           }
         }
         const storedTokens = data && typeof data === 'object' ? data.tokens : null;
+        let orphanTokens = 0;
         if (storedTokens && typeof storedTokens === 'object') {
           for (const [token, playerId] of Object.entries(storedTokens)) {
-            if (typeof playerId === 'string') tokens.set(token, playerId);
+            // Prune orphan bindings: a token pointing at a pruned/absent
+            // profile can only ever resolve to a fresh default anyway.
+            if (typeof playerId !== 'string') continue;
+            if (!profiles.has(playerId)) {
+              orphanTokens += 1;
+              continue;
+            }
+            tokens.set(token, playerId);
           }
         }
         log.info(`loaded ${profiles.size} profiles from ${file}`);
+        if (pruned > 0 || orphanTokens > 0) {
+          log.info(`pruned ${pruned} empty profiles + ${orphanTokens} orphan tokens`);
+          markDirty(); // rewrite the cleaned file on the next debounce
+        }
       } catch (e) {
         if (e.code !== 'ENOENT') {
           log.warn(`could not load ${file} (${e.message}) — starting with a fresh store`);
@@ -141,6 +169,25 @@ export function createProfileStore({
     };
   }
 
+  /**
+   * An "empty default" profile carries zero information — exactly what a
+   * fresh visitor gets. These are never written to disk (and are pruned on
+   * load), so anonymous hellos cannot grow profiles.json.
+   * @param {StoredProfile} p
+   */
+  function isDefaultProfile(p) {
+    return (
+      p.coins === 0 &&
+      p.xp === 0 &&
+      p.level === 1 &&
+      p.wins === 0 &&
+      p.matches === 0 &&
+      p.unlocked.length === 0 &&
+      Object.keys(p.equipped).length === 0 &&
+      Object.keys(p.stats.perMode).length === 0
+    );
+  }
+
   // ---- debounced atomic save ----------------------------------------------------
 
   function markDirty() {
@@ -156,12 +203,15 @@ export function createProfileStore({
   async function writeToDisk() {
     if (!diskOk || !dirty) return;
     dirty = false;
+    // Only MEANINGFUL profiles (and the token bindings that point at them)
+    // hit the disk — transient defaults from hello/getProfile never persist.
+    const persistable = new Map([...profiles].filter(([, p]) => !isDefaultProfile(p)));
     const json = JSON.stringify(
       {
         version: 1,
         savedAt: new Date(now()).toISOString(),
-        profiles: Object.fromEntries(profiles),
-        tokens: Object.fromEntries(tokens),
+        profiles: Object.fromEntries(persistable),
+        tokens: Object.fromEntries([...tokens].filter(([, playerId]) => persistable.has(playerId))),
       },
       null,
       2
@@ -199,12 +249,20 @@ export function createProfileStore({
 
   // ---- identity (§B.5-1: token→playerId survives restarts) ------------------------
 
-  /** Remember which playerId a session token identifies (called on issue). */
+  /**
+   * Remember which playerId a session token identifies (called on issue).
+   * TRANSIENT until the profile means something: the in-memory binding lets
+   * the session resume immediately, but nothing is scheduled for disk while
+   * the profile is still an empty default — the first meaningful mutation
+   * (addRewards/buy/equip/bumpStats) marks the store dirty and the save
+   * filter then includes every binding pointing at the now-real profile.
+   */
   function bindToken(token, playerId) {
     if (typeof token !== 'string' || typeof playerId !== 'string') return;
     if (tokens.get(token) === playerId) return;
     tokens.set(token, playerId);
-    markDirty();
+    const p = profiles.get(playerId);
+    if (p && !isDefaultProfile(p)) markDirty();
   }
 
   /** @param {string} token @returns {string|null} the bound playerId, if any */
@@ -214,15 +272,29 @@ export function createProfileStore({
 
   // ---- profiles -------------------------------------------------------------------
 
-  /** @param {string} playerId @returns {StoredProfile} */
+  /**
+   * MUTATION path: the live record for `playerId`, created in memory when
+   * absent. Creation alone schedules nothing — the save filter skips default
+   * profiles, so only the mutators' touch() makes anything durable.
+   * @param {string} playerId @returns {StoredProfile}
+   */
   function getOrCreate(playerId) {
     let p = profiles.get(playerId);
     if (!p) {
       p = normalizeRecord(playerId, {});
       profiles.set(playerId, p);
-      markDirty();
     }
     return p;
+  }
+
+  /**
+   * READ-ONLY path (hello/welcome, getProfile): the stored record if one
+   * exists, else a TRANSIENT default that is never stored anywhere —
+   * anonymous visitors leave no trace in memory maps or on disk.
+   * @param {string} playerId @returns {StoredProfile}
+   */
+  function peek(playerId) {
+    return profiles.get(playerId) ?? normalizeRecord(playerId, {});
   }
 
   function touch(p) {
@@ -230,9 +302,9 @@ export function createProfileStore({
     markDirty();
   }
 
-  /** §10.2 `profile` frame payload for one player. */
+  /** §10.2 `profile` frame payload for one player (read-only — never stores). */
   function payloadFor(playerId) {
-    const p = getOrCreate(playerId);
+    const p = peek(playerId);
     return {
       playerId: p.playerId,
       coins: p.coins,
@@ -247,9 +319,9 @@ export function createProfileStore({
     };
   }
 
-  /** Equipped cosmetic ids per slot (a copy — never the live record). */
+  /** Equipped cosmetic ids per slot (a read-only copy — never stores). */
   function getEquipped(playerId) {
-    return { ...getOrCreate(playerId).equipped };
+    return { ...peek(playerId).equipped };
   }
 
   // ---- economy mutations ------------------------------------------------------------
@@ -343,6 +415,7 @@ export function createProfileStore({
     bindToken,
     resolveToken,
     getOrCreate,
+    peek,
     payloadFor,
     getEquipped,
     addRewards,

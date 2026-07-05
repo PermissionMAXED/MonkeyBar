@@ -42,11 +42,6 @@ import { mulberry32 } from '@monkeybar/shared/rng.js';
 export const MODE_ID = 'bananaDice';
 export const PLAYABLE = true;
 
-/** Survive the cannon at 0 dice → the bar spots you one die (back to 1).
- *  Not in shared DICE_EVENTS (shared is frozen 1.0 contract) — kept as a
- *  mode-local kind; the client mirrors the literal. */
-export const DICE_EVENT_DIE_REGAINED = 'diceDieRegained';
-
 const OK = Object.freeze({ ok: true });
 const err = (code) => ({ ok: false, code });
 
@@ -55,14 +50,19 @@ const err = (code) => ({ ok: false, code });
  * (bids above the table total are never legal — the order is finite so
  * bidding always terminates in a challenge). Null when nothing beats `bid`.
  * Exposed for the timeout auto-raise, the bot brain and tests.
+ *
+ * The helper SKIPS face 1: 1s are wild (they count toward every face), so a
+ * face-1 raise is the weakest possible claim — the opener is {1, 2}, and a
+ * count bump lands on face 2, not 1. Face-1 bids stay perfectly LEGAL via
+ * bidBeats — only this helper (opener / timeout auto-raise) avoids them.
  * @param {{count: number, face: number}|null} bid  current bid (null → opener)
  * @param {number} totalDice  dice in play across all alive seats
  * @returns {{count: number, face: number}|null}
  */
 export function minimalRaise(bid, totalDice) {
-  if (!bid) return totalDice >= 1 ? { count: 1, face: 1 } : null;
+  if (!bid) return totalDice >= 1 ? { count: 1, face: 2 } : null;
   if (bid.face < DICE_FACES) return { count: bid.count, face: bid.face + 1 };
-  if (bid.count < totalDice) return { count: bid.count + 1, face: 1 };
+  if (bid.count < totalDice) return { count: bid.count + 1, face: 2 };
   return null;
 }
 
@@ -288,7 +288,7 @@ export function createEngine({
       // spots you one die: back in the game with a single die.
       s.chambersLeft = Math.max(1, s.chambersLeft - 1);
       diceCount.set(seat, 1);
-      modeEvent(DICE_EVENT_DIE_REGAINED, { seat, diceLeft: 1 });
+      modeEvent(DICE_EVENTS.DIE_REGAINED, { seat, diceLeft: 1 });
     }
     if (table.aliveCount() <= 1) endMatch();
     else endRound();

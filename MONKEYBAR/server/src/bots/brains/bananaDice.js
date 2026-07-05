@@ -28,7 +28,7 @@ import { MSG } from '@monkeybar/shared/protocol.js';
 import { randInt } from '@monkeybar/shared/rng.js';
 
 import { getPersonality } from '../personalities.js';
-import { DICE_EVENT_DIE_REGAINED, minimalRaise } from '../../game/modes/bananaDice.js';
+import { minimalRaise } from '../../game/modes/bananaDice.js';
 
 export const MODE_ID = 'bananaDice';
 
@@ -428,7 +428,7 @@ export function createBrain({ seat, personalityId = 'cautious', rng = Math.rando
         return null;
       }
 
-      case DICE_EVENT_DIE_REGAINED: {
+      case DICE_EVENTS.DIE_REGAINED: {
         const info = seats.get(p.seat);
         if (info) info.dice = p.diceLeft;
         return null;

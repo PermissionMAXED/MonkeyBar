@@ -1,4 +1,7 @@
-// 6-mode registry — PLAN.md §4 / §4.3. Only Monkey Lies is playable in the slice.
+// 6-mode registry — PLAN.md §4 / §4.3. All six modes are playable in 1.0.
+// The static `playable` flags mirror the server's mode registry
+// (server/src/game/modes/index.js), which stays the runtime source of truth:
+// the `welcome` catalog re-decorates each mode with isModePlayable(id).
 
 /**
  * @typedef {Object} GameMode
@@ -25,7 +28,7 @@ export const MODES = [
     desc:
       "Liar's-dice under coconut shells: five jungle dice each, escalating bids, challenges. " +
       'Lose a die per lost challenge — at zero dice you face the cannon.',
-    playable: false,
+    playable: true,
   },
   {
     id: 'coconutRoulette',
@@ -33,7 +36,7 @@ export const MODES = [
     desc:
       'Pure nerve. A ticking rigged coconut passes around the table: SHAKE it for a chip (and risk the boom) ' +
       'or PASS and pay one. Explosion odds rise with every shake.',
-    playable: false,
+    playable: true,
   },
   {
     id: 'junglePoker',
@@ -41,7 +44,7 @@ export const MODES = [
     desc:
       'Three-card blind poker with banana-chip stakes. Fold or force the showdown — ' +
       'bust your stack and the cannon takes payment.',
-    playable: false,
+    playable: true,
   },
   {
     id: 'kingOfTheBar',
@@ -49,12 +52,12 @@ export const MODES = [
     desc:
       'Monkey Lies with a twist: every round a random Bar Rule mutator bends the game. ' +
       'Adapt or get launched.',
-    playable: false,
+    playable: true,
     // §4.3 Bar Rule teaser — surfaced on the mode card in the client (P7).
     mutators: [
       '🍺 Happy Hour — everyone plays 2+ cards, no singles',
       '🙊 Silent Round — chat & emotes disabled, poker faces only',
-      '🔄 Sticky Stool — turn order reverses every call',
+      '🔄 Sticky Stool — turn order runs backwards for the round',
       '🍋 Sour Table — the Table Fruit changes mid-round',
       '💣 Hair Trigger — cannon starts with 2 coconuts loaded',
       '👑 Royal Decree — the round winner picks the next Table Fruit',
@@ -66,7 +69,7 @@ export const MODES = [
     desc:
       'Host-tunable knobs over the Monkey Lies engine: hand size, cannon odds, timers, wilds. ' +
       'Break the game your way.',
-    playable: false,
+    playable: true,
   },
 ];
 

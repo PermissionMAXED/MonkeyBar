@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { createTable } from '../src/game/table.js';
 import { createMonkeyLiesEngine } from '../src/game/modes/monkeyLies.js';
 import { BAR_RULES, BAR_RULE_BY_ID, createEngine } from '../src/game/modes/kingOfTheBar.js';
+import { createBotBrain } from '../src/bots/botBrain.js';
 import { createBrain } from '../src/bots/brains/kingOfTheBar.js';
 import { PERSONALITY_IDS } from '../src/bots/personalities.js';
 import { BASIC_FRUITS, cardMatchesTableFruit } from '@monkeybar/shared/cards.js';
@@ -193,6 +194,111 @@ test('sour_table: the fruit re-rolls after every 3rd play, announced via fruitFl
       assert.equal(reveal.p.loserSeat, caller);
     }
   }
+});
+
+test('sour_table: an honest play made BEFORE a flip is NOT retroactively a lie (fruitAtPlay judging)', () => {
+  // The 3rd play carries the flip: the claim lands under the PRE-flip fruit,
+  // then the fruit re-rolls. A call on that play must judge the claim under
+  // the fruit at play time — the flip must not turn the truth into a lie.
+  for (let seed = 1; seed < 120; seed++) {
+    const { engine, table, events } = makeRuleGame(() => 'sour_table', { seed });
+    engine.start();
+
+    // Plays 1–2: shed arbitrary cards (no flip yet).
+    for (let i = 0; i < 2; i++) {
+      const s = engine.turnSeat;
+      assert.ok(engine.play(s, [table.get(s).hand[0].id]).ok);
+    }
+    // Play 3 (the flip rides it): needs a card that EXACTLY matches the
+    // pre-flip fruit (non-golden, so the re-rolled fruit cannot match it).
+    const preFlip = engine.tableFruit;
+    const seat = engine.turnSeat;
+    const honest = table.get(seat).hand.find((c) => c.fruit === preFlip);
+    if (!honest) continue; // this seed's hand can't stage the scenario
+
+    assert.ok(engine.play(seat, [honest.id]).ok);
+    const flip = modeEvents(events, KING_EVENTS.FRUIT_FLIP).at(-1);
+    assert.ok(flip, 'the 3rd play must carry a fruitFlip');
+    assert.notEqual(engine.tableFruit, preFlip, 're-roll must land on a different fruit');
+    assert.equal(engine.inspect().lastPlayFruit, preFlip, 'the claim keeps its at-play fruit stamp');
+
+    // The caller pounces on the flipped fruit — and loses: the play was honest.
+    const caller = engine.turnSeat;
+    assert.ok(engine.callLiar(caller).ok);
+    const reveal = byType(events, MSG.REVEAL).at(-1);
+    assert.equal(reveal.p.lie, false, 'honest pre-flip play must not be judged under the new fruit');
+    assert.equal(reveal.p.loserSeat, caller, 'the wrong caller faces the cannon');
+    return;
+  }
+  assert.fail('no scanned seed staged an honest play on the flip-carrying 3rd play');
+});
+
+test('sour_table: the ML brain stamps fruitAtPlay and judges pending plays under it after a flip', () => {
+  const oldFruit = BASIC_FRUITS[0];
+  const newFruit = BASIC_FRUITS[1];
+  // rng 0.999 defeats memErr corruption → estimates are fully deterministic.
+  const brain = createBotBrain({ seat: 0, personalityId: 'cautious', rng: () => 0.999 });
+
+  brain.observe({
+    t: MSG.ROUND_START,
+    p: {
+      roundNo: 1,
+      tableFruit: oldFruit,
+      firstSeat: 1,
+      seats: Array.from({ length: 4 }, (_, s) => ({ seat: s, alive: true, handCount: 5 })),
+    },
+  });
+  // The brain's whole hand matches the OLD fruit (its read on old-fruit claims
+  // is tight: few old-fruit cards can be elsewhere).
+  brain.observe({
+    t: MSG.HAND,
+    p: { cards: Array.from({ length: 5 }, (_, i) => ({ id: `k${i}`, fruit: oldFruit })) },
+  });
+
+  // Seat 1 plays 3 cards under the OLD fruit; the flip lands right after.
+  brain.observe({ t: MSG.PLAYED, p: { seat: 1, count: 3, handCount: 2 } });
+  const before = brain.estimateLieProbability();
+  brain.onTableFruitChanged(newFruit);
+
+  assert.equal(brain.inspect().tableFruit, newFruit, 'own future plays follow the new fruit');
+  assert.equal(brain.inspect().lastPlay.fruitAtPlay, oldFruit, 'the pending play keeps its stamp');
+  assert.equal(
+    brain.estimateLieProbability(),
+    before,
+    'the read on the pending play must not move with the flip'
+  );
+
+  // A NEW play after the flip is judged under the new fruit — the brain holds
+  // zero new-fruit cards, so the claim reads meaningfully more plausible.
+  brain.observe({ t: MSG.PLAYED, p: { seat: 2, count: 3, handCount: 2 } });
+  assert.equal(brain.inspect().lastPlay.fruitAtPlay, newFruit);
+  assert.notEqual(
+    brain.estimateLieProbability(),
+    before,
+    'post-flip plays must be judged under the new fruit'
+  );
+});
+
+test('sour_table: the King wrapper forwards FRUIT_FLIP to the inner brain', () => {
+  const oldFruit = BASIC_FRUITS[0];
+  const newFruit = BASIC_FRUITS[2];
+  const brain = createBrain({ seat: 0, personalityId: 'quiet', rng: () => 0.5 });
+
+  brain.observe({
+    t: MSG.ROUND_START,
+    p: {
+      roundNo: 1,
+      tableFruit: oldFruit,
+      firstSeat: 1,
+      seats: Array.from({ length: 4 }, (_, s) => ({ seat: s, alive: true, handCount: 5 })),
+    },
+  });
+  brain.observe({ t: MSG.PLAYED, p: { seat: 1, count: 2, handCount: 3 } });
+  brain.observe({ t: MSG.MODE_EVENT, p: { kind: KING_EVENTS.FRUIT_FLIP, fruit: newFruit, roundNo: 1 } });
+
+  const snap = brain.inspect();
+  assert.equal(snap.tableFruit, newFruit, 'wrapper AND inner brain track the flip');
+  assert.equal(snap.lastPlay.fruitAtPlay, oldFruit, 'the pending play keeps the pre-flip stamp');
 });
 
 // ---------------------------------------------------------------------------

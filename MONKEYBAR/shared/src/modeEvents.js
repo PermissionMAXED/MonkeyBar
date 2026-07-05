@@ -15,11 +15,13 @@
 /**
  * Banana Dice modeEvent kinds.
  * Payloads (in addition to `kind`):
- *   YOUR_DICE  — PRIVATE, per seat: `{ dice: number[] }` (your dice under the shell)
- *   BID        — `{ seat, count, face }`
- *   CHALLENGE  — `{ callerSeat, targetSeat, bid: {count, face} }`
- *   REVEAL     — `{ dice: Array<{seat, dice: number[]}>, face, matching, loserSeat }`
- *   DIE_LOST   — `{ seat, diceLeft }`
+ *   YOUR_DICE    — PRIVATE, per seat: `{ dice: number[] }` (your dice under the shell)
+ *   BID          — `{ seat, count, face }`
+ *   CHALLENGE    — `{ callerSeat, targetSeat, bid: {count, face} }`
+ *   REVEAL       — `{ dice: Array<{seat, dice: number[]}>, face, matching, loserSeat }`
+ *   DIE_LOST     — `{ seat, diceLeft }`
+ *   DIE_REGAINED — `{ seat, diceLeft }` (survived the cannon at 0 dice — the bar
+ *                  spots you one die, back to 1)
  */
 export const DICE_EVENTS = Object.freeze({
   YOUR_DICE: 'diceYourDice',
@@ -27,6 +29,7 @@ export const DICE_EVENTS = Object.freeze({
   CHALLENGE: 'diceChallenge',
   REVEAL: 'diceReveal',
   DIE_LOST: 'diceDieLost',
+  DIE_REGAINED: 'diceDieRegained',
 });
 
 /**
@@ -50,7 +53,10 @@ export const ROULETTE_EVENTS = Object.freeze({
  *   YOUR_CARDS — PRIVATE, per seat: `{ cards: PokerCard[] }`
  *   ANTE       — `{ pot, antes: Array<{seat, amount}> }`
  *   ACTION     — `{ seat, action: "fold"|"call"|"raise", amount?, pot, toCall }`
- *   SHOWDOWN   — `{ hands: Array<{seat, cards, rankClass, name}>, winnerSeat, pot }`
+ *   SHOWDOWN   — `{ hands: Array<{seat, cards, rankClass, name}>, winnerSeat,
+ *                  winnerSeats: number[], winners: Array<{seat, amount}>,
+ *                  refunds: Array<{seat, amount}>, pot }` (winnerSeat = the
+ *                  top winner for HUD compat; winners/refunds sum to pot)
  *   BUST       — `{ seat }`
  */
 export const POKER_EVENTS = Object.freeze({
@@ -66,10 +72,12 @@ export const POKER_EVENTS = Object.freeze({
  * Payloads:
  *   BAR_RULE     — `{ ruleId, name, desc, roundNo }` (this round's mutator)
  *   FRUIT_PICKED — `{ seat, fruit }` (Royal Decree: round winner picked next Table Fruit)
+ *   FRUIT_FLIP   — `{ fruit, roundNo }` (Sour Table: mid-round Table Fruit re-roll)
  */
 export const KING_EVENTS = Object.freeze({
   BAR_RULE: 'kingBarRule',
   FRUIT_PICKED: 'kingFruitPicked',
+  FRUIT_FLIP: 'fruitFlip',
 });
 
 /**

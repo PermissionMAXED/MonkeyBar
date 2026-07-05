@@ -18,8 +18,11 @@
 //    non-folded player has matched the highest bet (or is all-in).
 //  - One player left → wins the pot uncontested: NO reveal, folds stay muck.
 //  - Otherwise SHOWDOWN reveals the contenders' hands with evaluateHand
-//    names; the best hand takes the pot (ties split, odd chip to the
-//    earliest seat).
+//    names; the pot settles by LAYERED CONTRIBUTIONS (side-pot math): each
+//    winner's take is capped at the layers it funded (a short all-in cannot
+//    win chips it never covered), ties split per layer with the odd chip to
+//    the earliest seat, and layers no winner funded refund to the seats that
+//    over-contributed. Chips are conserved exactly.
 //  - A player who cannot ante faces the Coconut Cannon (ML penalty/chip/
 //    cannon/eliminated shapes + the table's chambers): survive → stack
 //    refunds to POKER_BUST_REFUND chips; hit → eliminated.
@@ -67,6 +70,50 @@ export function splitPot(pot, winnerSeats) {
 }
 
 /**
+ * Layered contribution settlement (side-pot math) for a contested showdown.
+ * The hand's pot is sliced into layers at every distinct contribution level;
+ * each layer is won by the best-hand seats that FUNDED it (equal shares, odd
+ * chip to the earliest seat via splitPot). A layer no winner funded — the
+ * uncalled excess over a short all-in winner — refunds to the seats that
+ * paid it. Every chip of the pot lands somewhere: conservation is exact.
+ * Pure, exported for tests.
+ *
+ * @param {Iterable<[number, number]>|Map<number, number>} contributions
+ *        seat → chips paid into this hand (antes + calls + raises)
+ * @param {number[]} winnerSeats  the best-hand seats at showdown
+ * @returns {{winners: Array<{seat: number, amount: number}>,
+ *            refunds: Array<{seat: number, amount: number}>}}
+ */
+export function settleContributions(contributions, winnerSeats) {
+  const paid = new Map(contributions);
+  /** @type {Map<number, number>} winner seat → total take (all winners listed) */
+  const winnerTake = new Map([...winnerSeats].sort((a, b) => a - b).map((s) => [s, 0]));
+  /** @type {Map<number, number>} seat → refunded chips */
+  const refundTo = new Map();
+
+  const levels = [...new Set([...paid.values()].filter((a) => a > 0))].sort((a, b) => a - b);
+  let prev = 0;
+  for (const level of levels) {
+    const slice = level - prev; // per-funder chips in this layer
+    const funders = [...paid].filter(([, a]) => a >= level).map(([s]) => s);
+    const eligible = [...winnerTake.keys()].filter((s) => (paid.get(s) ?? 0) >= level);
+    if (eligible.length > 0) {
+      for (const { seat, amount } of splitPot(slice * funders.length, eligible)) {
+        winnerTake.set(seat, winnerTake.get(seat) + amount);
+      }
+    } else {
+      // Nobody with the best hand covered this layer — the over-contributors
+      // take their own chips back.
+      for (const s of funders) refundTo.set(s, (refundTo.get(s) ?? 0) + slice);
+    }
+    prev = level;
+  }
+  const asList = (m) =>
+    [...m].map(([seat, amount]) => ({ seat, amount })).sort((a, b) => a.seat - b.seat);
+  return { winners: asList(winnerTake), refunds: asList(refundTo) };
+}
+
+/**
  * @param {Object} options
  * @param {ReturnType<import('../table.js').createTable>} options.table
  * @param {number} [options.seed]
@@ -110,6 +157,9 @@ export function createEngine({
   const stacks = new Map();
   /** @type {Map<number, number>} chips committed to the CURRENT betting round */
   const bets = new Map();
+  /** @type {Map<number, number>} TOTAL chips paid into the current hand
+   *  (ante + calls + raises) — drives the layered showdown settlement */
+  const contrib = new Map();
   /** @type {Set<number>} folded this hand */
   const folded = new Set();
   /** @type {Map<number, import('@monkeybar/shared/poker.js').PokerCard[]>} hole cards */
@@ -176,6 +226,7 @@ export function createEngine({
     currentBet = 0;
     raisesUsed = 0;
     bets.clear();
+    contrib.clear();
     folded.clear();
     holeCards.clear();
     inHand.clear();
@@ -216,6 +267,7 @@ export function createEngine({
       const seat = s.seat;
       inHand.add(seat);
       bets.set(seat, 0);
+      contrib.set(seat, POKER_ANTE);
       stacks.set(seat, (stacks.get(seat) ?? 0) - POKER_ANTE);
       pot += POKER_ANTE;
       antes.push({ seat, amount: POKER_ANTE });
@@ -346,6 +398,7 @@ export function createEngine({
     const pay = Math.min(owed, stacks.get(seat) ?? 0); // short stack → all-in call
     stacks.set(seat, (stacks.get(seat) ?? 0) - pay);
     bets.set(seat, (bets.get(seat) ?? 0) + pay);
+    contrib.set(seat, (contrib.get(seat) ?? 0) + pay);
     pot += pay;
     needAct.delete(seat);
     actionEvent(seat, POKER_ACTIONS.CALL, pay);
@@ -362,10 +415,15 @@ export function createEngine({
     const stack = stacks.get(seat) ?? 0;
     const owed = toCallOf(seat);
     if (stack <= owed) return err(ERROR_CODES.BAD_STATE); // can't top the bet — call or fold
+    // Mirror legalActions: raising into all-all-in opponents is illegal, not
+    // just hidden — nobody could pay, the raise would only donate dead money.
+    const someoneCanPay = contenders().some((s) => s !== seat && (stacks.get(s) ?? 0) > 0);
+    if (!someoneCanPay) return err(ERROR_CODES.BAD_STATE);
     const rise = Math.min(amount, stack - owed); // all-in allowed when short
     const pay = owed + rise;
     stacks.set(seat, stack - pay);
     bets.set(seat, (bets.get(seat) ?? 0) + pay);
+    contrib.set(seat, (contrib.get(seat) ?? 0) + pay);
     pot += pay;
     currentBet = bets.get(seat);
     raisesUsed += 1;
@@ -388,7 +446,8 @@ export function createEngine({
     const potWon = pot;
 
     if (live.length === 1) {
-      // Uncontested — NO reveal, folds stay private (hands: []).
+      // Uncontested — NO reveal, folds stay private (hands: []). The sole
+      // contender takes the whole pot: every fold surrendered its chips.
       const seat = live[0];
       stacks.set(seat, (stacks.get(seat) ?? 0) + potWon);
       pot = 0;
@@ -396,7 +455,9 @@ export function createEngine({
         uncontested: true,
         hands: [],
         winnerSeat: seat,
+        winnerSeats: [seat],
         winners: [{ seat, amount: potWon }],
+        refunds: [],
         pot: potWon,
         seats: pokerSeats(),
       });
@@ -404,7 +465,10 @@ export function createEngine({
       return;
     }
 
-    // Showdown: evaluate every contender, best hand(s) take the pot.
+    // Showdown: evaluate every contender; the pot settles by LAYERED
+    // CONTRIBUTIONS — each best-hand seat takes the layers it funded, and
+    // uncovered excess (bets over a short all-in winner) refunds to the
+    // over-contributors. Chips conserve exactly: winners + refunds = pot.
     const ranked = live.map((seat) => {
       const cards = holeCards.get(seat) ?? [];
       const rank = evaluateHand(cards);
@@ -413,9 +477,15 @@ export function createEngine({
     let best = ranked[0].rank;
     for (const r of ranked) if (compareHands(r.rank, best) > 0) best = r.rank;
     const winnerSeats = ranked.filter((r) => compareHands(r.rank, best) === 0).map((r) => r.seat);
-    const winners = splitPot(potWon, winnerSeats);
+    const { winners, refunds } = settleContributions(contrib, winnerSeats);
     for (const w of winners) stacks.set(w.seat, (stacks.get(w.seat) ?? 0) + w.amount);
+    for (const r of refunds) stacks.set(r.seat, (stacks.get(r.seat) ?? 0) + r.amount);
     pot = 0;
+
+    // HUD-compat `winnerSeat` = the top winner (largest take, earliest seat
+    // on ties — winners is seat-ascending so a stable pass keeps that order).
+    let top = winners[0];
+    for (const w of winners) if (w.amount > top.amount) top = w;
 
     emitMode(POKER_EVENTS.SHOWDOWN, {
       uncontested: false,
@@ -425,8 +495,10 @@ export function createEngine({
         rankClass: r.rank.rankClass,
         name: r.rank.name,
       })),
-      winnerSeat: winners[0].seat,
+      winnerSeat: top.seat,
+      winnerSeats,
       winners,
+      refunds,
       pot: potWon,
       seats: pokerSeats(),
     });
@@ -648,6 +720,7 @@ export function createEngine({
         firstSeat: firstSeatOfRound,
         stacks: new Map(stacks),
         bets: new Map(bets),
+        contrib: new Map(contrib),
         folded: new Set(folded),
         inHand: new Set(inHand),
         needAct: new Set(needAct),

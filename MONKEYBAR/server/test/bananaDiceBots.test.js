@@ -236,8 +236,12 @@ function runBotMatch({ seed, seatPersonalities }) {
   return { winnerSeat: engine.winnerSeat, stats };
 }
 
-test('120 seeded bot-vs-bot matches: all legal, none stall, win-rate spread < 35 pp', () => {
-  const N = 120;
+test('240 seeded bot-vs-bot matches: all legal, none stall, win-rate spread < 35 pp', () => {
+  // 240 matches (was 120): the same 35pp balance gate, but with half the
+  // sampling noise — at N=120 a single archetype's lucky streak could push
+  // the observed spread across the boundary while the true spread sits well
+  // inside it (asymptotically ~27pp with the face-1-skipping minimalRaise).
+  const N = 240;
   const wins = Object.fromEntries(PERSONALITY_IDS.map((p) => [p, 0]));
   const challengeOps = Object.fromEntries(PERSONALITY_IDS.map((p) => [p, 0]));
   const challenges = Object.fromEntries(PERSONALITY_IDS.map((p) => [p, 0]));

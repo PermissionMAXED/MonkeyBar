@@ -76,7 +76,11 @@ export function createBotBrain({ seat, personalityId = 'cautious', rng = Math.ra
   let deck = deckInfo(4);
   /** @type {Map<number, {alive: boolean, handCount: number}>} public seat facts */
   const seats = new Map();
-  /** @type {{seat: number, count: number, handAfter: number}|null} unresolved play (handAfter = player's hand count AFTER the play) */
+  /** @type {{seat: number, count: number, handAfter: number, fruitAtPlay: string|null}|null}
+   *  Unresolved play (handAfter = player's hand count AFTER the play).
+   *  `fruitAtPlay` = the Table Fruit the brain knew when the play landed —
+   *  call decisions judge against THAT, so a Sour Table flip after the play
+   *  does not skew the read (mirrors the engine's fruitAtPlay judging). */
   let lastPlay = null;
   /** @type {{callerSeat: number, targetSeat: number}|null} */
   let lastCalled = null;
@@ -142,14 +146,16 @@ export function createBotBrain({ seat, personalityId = 'cautious', rng = Math.ra
 
   // ---- suspicion model -------------------------------------------------------------
 
+  /** Truthiness against the CURRENT fruit — drives this brain's OWN plays. */
   const isTruthy = (card) => cardMatchesTableFruit(card, tableFruit);
 
-  /** Table Fruit + wild cards whose location this bot actually knows. */
-  function truthySeen() {
+  /** Table Fruit + wild cards whose location this bot actually knows,
+   *  counted against `fruit` (defaults to the current Table Fruit). */
+  function truthySeen(fruit = tableFruit) {
     let n = 0;
-    for (const c of hand) if (isTruthy(c)) n++;
-    for (const c of myPlayed) if (isTruthy(c)) n++;
-    for (const c of revealed) if (isTruthy(c)) n++;
+    for (const c of hand) if (cardMatchesTableFruit(c, fruit)) n++;
+    for (const c of myPlayed) if (cardMatchesTableFruit(c, fruit)) n++;
+    for (const c of revealed) if (cardMatchesTableFruit(c, fruit)) n++;
     return n;
   }
 
@@ -169,10 +175,15 @@ export function createBotBrain({ seat, personalityId = 'cautious', rng = Math.ra
    * Exposed for tests; deterministic given the injected rng.
    */
   function estimateLieProbability() {
-    if (!lastPlay || tableFruit === null) return 0;
+    if (!lastPlay) return 0;
+    // Judge the claim under the fruit AT PLAY TIME (Sour Table flips after
+    // the play don't change what the player claimed) — the engine's reveal
+    // judges the same way.
+    const fruit = lastPlay.fruitAtPlay ?? tableFruit;
+    if (fruit === null) return 0;
     const k = lastPlay.count;
     const truthyTotal = deck.perFruit + deck.golden; // table fruit + wilds in this round's deck
-    const truthyElsewhere = recall(Math.max(0, truthyTotal - truthySeen()));
+    const truthyElsewhere = recall(Math.max(0, truthyTotal - truthySeen(fruit)));
     if (k > truthyElsewhere) return 1; // infeasible claim — certain lie (as remembered)
     const hiddenPool = Math.max(1, deck.total - knownCount());
     let pAllRandom = 1;
@@ -397,7 +408,10 @@ export function createBotBrain({ seat, personalityId = 'cautious', rng = Math.ra
       case MSG.PLAYED: {
         const info = seats.get(p.seat);
         if (info) info.handCount = p.handCount;
-        lastPlay = { seat: p.seat, count: p.count, handAfter: p.handCount };
+        // Stamp the fruit at play time: the `played` frame always precedes any
+        // fruit-flip modeEvent riding the same play, so tableFruit is still
+        // the fruit the claim was made under.
+        lastPlay = { seat: p.seat, count: p.count, handAfter: p.handCount, fruitAtPlay: tableFruit };
         if (p.seat === seat) {
           // Normally our commit already moved the cards. If the server acted
           // for us (timeout race), reconcile what we can — identities of the
@@ -503,10 +517,16 @@ export function createBotBrain({ seat, personalityId = 'cautious', rng = Math.ra
     deck = deckInfo(Math.max(2, alive));
     if (snap.lastPlay) {
       // The snapshot's public seat facts already reflect the play — the
-      // player's current handCount IS their hand count after the play.
+      // player's current handCount IS their hand count after the play. The
+      // snapshot fruit is the best available stamp for the pending claim.
       const playerNow = snap.seats.find((s) => s.seat === snap.lastPlay.seat);
       const handAfter = playerNow ? playerNow.handCount : HAND_SIZE;
-      lastPlay = { seat: snap.lastPlay.seat, count: snap.lastPlay.count, handAfter };
+      lastPlay = {
+        seat: snap.lastPlay.seat,
+        count: snap.lastPlay.count,
+        handAfter,
+        fruitAtPlay: snap.tableFruit ?? null,
+      };
     } else {
       lastPlay = null;
     }
@@ -524,6 +544,18 @@ export function createBotBrain({ seat, personalityId = 'cautious', rng = Math.ra
     pendingPenalty = { chambers, coconuts, chipUsable: !!chipUsable };
   }
 
+  /**
+   * The Table Fruit changed mid-round (Sour Table flip) — update the fruit
+   * this brain uses for its OWN future plays. The pending lastPlay keeps its
+   * fruitAtPlay stamp, so call reads on pre-flip plays stay correct. Mode
+   * wrappers (brains/kingOfTheBar.js) call this on FRUIT_FLIP modeEvents;
+   * the core brain has no modeEvent vocabulary of its own.
+   * @param {string} fruit
+   */
+  function onTableFruitChanged(fruit) {
+    tableFruit = fruit;
+  }
+
   return {
     seat,
     personalityId: params.id,
@@ -534,11 +566,14 @@ export function createBotBrain({ seat, personalityId = 'cautious', rng = Math.ra
     onOwnActionApplied,
     primeFromSnapshot,
     primePenalty,
+    onTableFruitChanged,
     estimateLieProbability,
     /** Test/inspection hooks (server-side only — never sent to clients). */
     inspect() {
       return {
         handSize: hand.length,
+        tableFruit,
+        lastPlay: lastPlay ? { ...lastPlay } : null,
         tilt,
         dyn: { ...dyn },
         pendingTurn: pendingTurn ? { ...pendingTurn } : null,

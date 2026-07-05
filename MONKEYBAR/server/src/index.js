@@ -116,7 +116,10 @@ function createDispatcher(sessions, lobby, profileStore, log) {
     return conn.session;
   };
 
-  /** Send the session's current `profile` frame (R2 §10.1). */
+  /** Send the session's current `profile` frame (R2 §10.1). READ-ONLY:
+   *  payloadFor never creates or persists anything, so hello/welcome and
+   *  getProfile from anonymous visitors leave no trace in the store — a
+   *  profile is only persisted on its first real mutation (rewards/shop). */
   const sendProfile = (conn, session) => {
     conn.send(ServerMsg.profile(profileStore.payloadFor(session.playerId)));
   };
@@ -160,7 +163,8 @@ function createDispatcher(sessions, lobby, profileStore, log) {
         modes: decoratedModes(),
       })
     );
-    // R2 §10.1: the client learns its coins/level/cosmetics right after welcome.
+    // R2 §10.1: the client learns its coins/level/cosmetics right after
+    // welcome — a read-only peek; saying hello never persists a profile.
     sendProfile(conn, session);
 
     if (resumed && session.roomId) {

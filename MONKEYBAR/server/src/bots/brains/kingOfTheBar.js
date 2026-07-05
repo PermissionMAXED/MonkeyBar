@@ -13,8 +13,10 @@
 //                  bots reach for the Lucky Banana Chip sooner.
 //   royal_decree → a `turn` carrying actions:['pickFruit'] is answered with
 //                  `modeAction pickFruit {fruit}` — the most-held fruit.
-//   sour_table   → `fruitFlip` modeEvents keep the wrapper's Table Fruit
-//                  current (the pad-preference + decree picks use it).
+//   sour_table   → KING_EVENTS.FRUIT_FLIP modeEvents keep the wrapper's Table
+//                  Fruit current (the pad-preference + decree picks use it)
+//                  AND are forwarded to the inner brain via
+//                  onTableFruitChanged so its own future plays track the flip.
 //   silent_round → bots keep poker faces too: social reactions are muzzled
 //                  while the silent round is live (bot chatter bypasses the
 //                  room's seated-chat gate, so the brain self-censors).
@@ -46,7 +48,8 @@ export function createBrain({ seat, personalityId = 'cautious', rng = Math.rando
   // ---- wrapper knowledge (same per-seat feed the inner brain gets) ----------
   /** @type {import('@monkeybar/shared/protocol.js').Card[]} own tracked hand */
   let hand = [];
-  /** @type {string|null} CURRENT Table Fruit (fruitFlip-aware, unlike inner) */
+  /** @type {string|null} CURRENT Table Fruit (FRUIT_FLIP-aware; kept in sync
+   *  with the inner brain via onTableFruitChanged) */
   let tableFruit = null;
   /** @type {string|null} the active Bar Rule id (kingBarRule modeEvent) */
   let activeRuleId = null;
@@ -159,8 +162,14 @@ export function createBrain({ seat, personalityId = 'cautious', rng = Math.rando
         break;
       case MSG.MODE_EVENT:
         if (p.kind === KING_EVENTS.BAR_RULE) activeRuleId = p.ruleId;
-        else if (p.kind === 'fruitFlip') tableFruit = p.fruit; // Sour Table re-roll
-        // The inner ML brain has no modeEvent vocabulary — nothing to forward.
+        else if (p.kind === KING_EVENTS.FRUIT_FLIP) {
+          // Sour Table re-roll: track it here AND hand it to the inner brain
+          // (its future plays follow the new fruit; its read on the pending
+          // play keeps the fruitAtPlay stamp).
+          tableFruit = p.fruit;
+          inner.onTableFruitChanged(p.fruit);
+        }
+        // The inner ML brain has no modeEvent vocabulary — nothing else to forward.
         return null;
       default:
         break;

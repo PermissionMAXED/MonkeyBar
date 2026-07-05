@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createTable } from '../src/game/table.js';
-import { createEngine, splitPot, RAISE_MAX } from '../src/game/modes/junglePoker.js';
+import { createEngine, settleContributions, splitPot, RAISE_MAX } from '../src/game/modes/junglePoker.js';
 import { isModePlayable } from '../src/game/modes/index.js';
 import { createGameRoom } from '../src/game/gameRoom.js';
 import {
@@ -336,14 +336,165 @@ test('all-in: short calls clamp, all-in raises clamp, tapped-out tables stop rai
   assert.equal(act.p.amount, 1, 'short call must clamp to the remaining stack');
   assert.equal(act.p.allIn, true);
 
-  // No side pots: the whole 6-chip pot goes to the showdown winner.
+  // Layered settlement: winner payouts + refunds account for every chip of
+  // the 6-chip pot (a short all-in winner is capped at the layers it funded).
   sd = modeEvents(events, POKER_EVENTS.SHOWDOWN).at(-1);
   assert.equal(sd.p.uncontested, false);
   assert.equal(sd.p.hands.length, 2);
   assert.equal(sd.p.pot, 6);
+  assert.equal(
+    sd.p.winners.reduce((a, w) => a + w.amount, 0) + sd.p.refunds.reduce((a, r) => a + r.amount, 0),
+    6,
+    'winners + refunds must sum to the pot exactly'
+  );
   insp = engine.inspect();
   assert.equal(insp.stacks.get(sd.p.winnerSeat) + insp.stacks.get((sd.p.winnerSeat + 1) % 2), 6);
   assertNoLeakedCards(events);
+});
+
+test('short all-in winner is CAPPED at the layers it funded; the excess refunds (seed-pinned)', () => {
+  // Same staging as above with seed 5: hand 1 leaves the stacks at 4 / 2, hand
+  // 2 has F all-in for 3 on top of the ante (contrib 4) while G short-calls 1
+  // (contrib 2) — and under this seed G shows the best hand. G's take is
+  // capped at the 2-chip layers it funded (2 × 2 = 4); F's uncovered 2 chips
+  // come straight back. Chips conserve exactly: 4 + 2 = 6.
+  const game = makeGame({ players: 2, seed: 5, startStack: 3 });
+  const { engine, events } = game;
+  engine.start();
+  const f = engine.turnSeat;
+  const g = (f + 1) % 2;
+  assert.ok(engine.modeAction(f, 'raise', { amount: 1 }).ok);
+  assert.ok(engine.modeAction(g, 'fold').ok);
+  assert.ok(engine.onTimeout('intermission'));
+  assert.ok(engine.modeAction(g, 'call').ok); // check
+  assert.ok(engine.modeAction(f, 'raise', { amount: 3 }).ok); // all-in
+  assert.ok(engine.modeAction(g, 'call').ok); // short all-in call of 1
+
+  assert.deepEqual(engine.inspect().contrib, new Map([[f, 4], [g, 2]]));
+  const sd = modeEvents(events, POKER_EVENTS.SHOWDOWN).at(-1);
+  assert.equal(sd.p.uncontested, false);
+  assert.deepEqual(sd.p.winnerSeats, [g], 'this seed crowns the short caller');
+  assert.equal(sd.p.winnerSeat, g, 'HUD-compat top winner');
+  assert.deepEqual(sd.p.winners, [{ seat: g, amount: 4 }], 'take capped at the funded layers');
+  assert.deepEqual(sd.p.refunds, [{ seat: f, amount: 2 }], 'the uncovered excess refunds');
+  const insp = engine.inspect();
+  assert.equal(insp.stacks.get(g), 4);
+  assert.equal(insp.stacks.get(f), 2);
+});
+
+test('settleContributions: layered caps, tie splits, refunds — chips conserved exactly', () => {
+  const total = (contribs) => [...contribs.values()].reduce((a, v) => a + v, 0);
+  const settledSum = ({ winners, refunds }) =>
+    winners.reduce((a, w) => a + w.amount, 0) + refunds.reduce((a, r) => a + r.amount, 0);
+
+  // Equal contributions, single winner → takes the whole pot, no refunds.
+  let contribs = new Map([[0, 3], [1, 3], [2, 3]]);
+  let out = settleContributions(contribs, [1]);
+  assert.deepEqual(out, { winners: [{ seat: 1, amount: 9 }], refunds: [] });
+  assert.equal(settledSum(out), total(contribs));
+
+  // Tie split with an odd chip → earliest seat gets it.
+  out = settleContributions(contribs, [2, 1]);
+  assert.deepEqual(out.winners, [{ seat: 1, amount: 5 }, { seat: 2, amount: 4 }]);
+  assert.deepEqual(out.refunds, []);
+  assert.equal(settledSum(out), total(contribs));
+
+  // Short all-in winner capped; the over-contributor takes the excess back.
+  contribs = new Map([[0, 4], [1, 2]]);
+  out = settleContributions(contribs, [1]);
+  assert.deepEqual(out, {
+    winners: [{ seat: 1, amount: 4 }],
+    refunds: [{ seat: 0, amount: 2 }],
+  });
+  assert.equal(settledSum(out), total(contribs));
+
+  // Layered tie: the short co-winner shares only the layers it funded; the
+  // deep co-winner alone claims the top layer (funded by seat 2's calls).
+  contribs = new Map([[0, 5], [1, 3], [2, 5]]);
+  out = settleContributions(contribs, [0, 1]);
+  assert.deepEqual(out.winners, [{ seat: 0, amount: 9 }, { seat: 1, amount: 4 }]);
+  assert.deepEqual(out.refunds, []);
+  assert.equal(settledSum(out), total(contribs));
+
+  // No winner funded the top layer → its chips refund to the funders.
+  contribs = new Map([[0, 5], [1, 2], [2, 5]]);
+  out = settleContributions(contribs, [1]);
+  assert.deepEqual(out.winners, [{ seat: 1, amount: 6 }]);
+  assert.deepEqual(out.refunds, [{ seat: 0, amount: 3 }, { seat: 2, amount: 3 }]);
+  assert.equal(settledSum(out), total(contribs));
+
+  // Folded seats (in the contributions, never in winnerSeats) surrender their
+  // chips to the layers they funded — no refunds for folders.
+  contribs = new Map([[0, 3], [1, 1], [2, 3]]);
+  out = settleContributions(contribs, [0]);
+  assert.deepEqual(out, { winners: [{ seat: 0, amount: 7 }], refunds: [] });
+  assert.equal(settledSum(out), total(contribs));
+});
+
+test('doRaise: raising is rejected when every opponent is all-in (nobody left to pay)', () => {
+  // Stage: 2 players, startStack 3. Two uncontested fold-wins walk F up to 5
+  // and G down to 1 — hand 3's ante then puts G ALL-IN with 0 behind. F holds
+  // 4 with no bet to call: the OLD stack>owed guard would allow a raise, but
+  // nobody can pay it — legalActions must omit 'raise' AND doRaise must
+  // reject it (dead-money donation), then the check goes to showdown.
+  const game = makeGame({ players: 2, seed: 9, startStack: 3 });
+  const { engine, events } = game;
+  engine.start();
+  const f = engine.turnSeat;
+  const g = (f + 1) % 2;
+  assert.ok(engine.modeAction(f, 'raise', { amount: 1 }).ok);
+  assert.ok(engine.modeAction(g, 'fold').ok); // hand 1: F 4 / G 2
+  assert.ok(engine.onTimeout('intermission'));
+  assert.equal(engine.turnSeat, g);
+  assert.ok(engine.modeAction(g, 'fold').ok); // hand 2: F 5 / G 1
+  assert.ok(engine.onTimeout('intermission'));
+
+  // Hand 3: the ante leaves G at 0 (all-in ride-along), F to act with 4.
+  const insp = engine.inspect();
+  assert.equal(insp.stacks.get(g), 0);
+  assert.equal(insp.stacks.get(f), 4);
+  assert.equal(engine.turnSeat, f);
+  assert.deepEqual(lastTurn(events).actions, ['fold', 'call'], 'raise not offered');
+  assert.equal(
+    engine.modeAction(f, 'raise', { amount: 1 }).code,
+    ERROR_CODES.BAD_STATE,
+    'doRaise must mirror legalActions when no opponent can pay'
+  );
+  assert.ok(engine.modeAction(f, 'call').ok); // check → contested showdown
+  const sd = modeEvents(events, POKER_EVENTS.SHOWDOWN).at(-1);
+  assert.equal(sd.p.uncontested, false);
+  assert.equal(sd.p.pot, 2);
+  assert.equal(
+    sd.p.winners.reduce((a, w) => a + w.amount, 0) + sd.p.refunds.reduce((a, r) => a + r.amount, 0),
+    2
+  );
+});
+
+test('capped settlement invariants hold across raise-heavy seeded matches', () => {
+  for (const seed of [7, 41, 143]) {
+    const game = makeGame({ players: 4, seed });
+    const rng = mulberry32(seed * 17);
+    runMatch(game, () => randomPolicy(rng), { chipPolicy: () => rng() < 0.5 });
+    for (const sd of modeEvents(game.events, POKER_EVENTS.SHOWDOWN)) {
+      const { uncontested, winners, winnerSeat, winnerSeats, refunds, pot } = sd.p;
+      assert.equal(
+        winners.reduce((a, w) => a + w.amount, 0) + refunds.reduce((a, r) => a + r.amount, 0),
+        pot,
+        'every chip of the pot lands somewhere (winners + refunds)'
+      );
+      assert.deepEqual(
+        winners.map((w) => w.seat),
+        [...winnerSeats].sort((a, b) => a - b),
+        'winners lists exactly the winnerSeats'
+      );
+      assert.ok(winnerSeats.includes(winnerSeat), 'HUD winnerSeat is one of the winners');
+      const top = winners.reduce((a, w) => (w.amount > a.amount ? w : a), winners[0]);
+      assert.equal(winnerSeat, top.seat, 'winnerSeat = largest take (earliest seat on ties)');
+      if (!uncontested) {
+        for (const w of winners) assert.ok(w.amount >= 1, 'every showdown winner nets ≥ 1 chip');
+      }
+    }
+  }
 });
 
 test('all-in raise clamps to the stack and a raise below the bet is rejected', () => {
@@ -423,6 +574,9 @@ test('split pots happen in real matches: shares differ by ≤1, odd chip to the 
     runMatch(game, () => () => ({ action: 'call' }), { maxSteps: 20000 });
     for (const sd of modeEvents(game.events, POKER_EVENTS.SHOWDOWN)) {
       const { winners, pot, uncontested } = sd.p;
+      // Equal contributions (nobody raises) → the layered settlement never
+      // needs a refund and the winner payouts alone sum to the pot.
+      assert.deepEqual(sd.p.refunds, [], 'equal-contribution showdowns refund nothing');
       assert.equal(
         winners.reduce((a, w) => a + w.amount, 0),
         pot,

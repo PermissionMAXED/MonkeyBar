@@ -262,6 +262,81 @@ test('persist:false runs purely in memory', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Growth guard: hello/welcome reads are transient; loads prune stale defaults
+// ---------------------------------------------------------------------------
+
+test('growth guard: hello-path reads (peek/payloadFor/getEquipped/bindToken) never persist', async () => {
+  const file = tempFile();
+  const store = createProfileStore({ file, debounceMs: 10, log: quietLog });
+
+  // Everything the hello/welcome/getProfile path touches, for a stranger:
+  const transient = store.peek('anon-visitor');
+  assert.equal(transient.playerId, 'anon-visitor');
+  assert.deepEqual(store.payloadFor('anon-visitor').unlocked, []);
+  assert.deepEqual(store.getEquipped('anon-visitor'), {});
+  store.bindToken('tok-anon', 'anon-visitor'); // sessions.issue on hello
+  assert.equal(store.resolveToken('tok-anon'), 'anon-visitor', 'binding serves from memory');
+
+  assert.equal(store.size, 0, 'peek must not create records');
+  await store.flush();
+  assert.equal(existsSync(file), false, 'anonymous hellos never touch the disk');
+
+  // Even a getOrCreate that stays default writes nothing (mutators persist).
+  store.getOrCreate('lurker');
+  await store.flush();
+  assert.equal(existsSync(file), false, 'a default record is not worth a write');
+
+  // First MEANINGFUL mutation → the profile AND its token binding both land.
+  store.bindToken('tok-real', 'grinder');
+  store.addRewards('grinder', { coins: 9 });
+  await store.flush();
+  assert.equal(existsSync(file), true);
+  const onDisk = JSON.parse(readFileSync(file, 'utf8'));
+  assert.deepEqual(Object.keys(onDisk.profiles), ['grinder'], 'only the meaningful profile persists');
+  assert.deepEqual(onDisk.tokens, { 'tok-real': 'grinder' }, 'orphan/anon bindings stay off the disk');
+  await store.close();
+});
+
+test('growth guard: load prunes empty default profiles and orphan token bindings', async () => {
+  const file = tempFile();
+  const defaultRec = {
+    coins: 0, xp: 0, level: 1, wins: 0, matches: 0,
+    unlocked: [], equipped: {}, stats: { perMode: {} },
+    createdAt: 1, updatedAt: 1,
+  };
+  writeFileSync(
+    file,
+    JSON.stringify({
+      version: 1,
+      profiles: {
+        'stale-anon-1': defaultRec,
+        'stale-anon-2': defaultRec,
+        veteran: { ...defaultRec, coins: 120, matches: 3 },
+      },
+      tokens: {
+        't-stale': 'stale-anon-1',
+        't-ghost': 'player-never-existed',
+        't-vet': 'veteran',
+      },
+    }),
+    'utf8'
+  );
+
+  const store = createProfileStore({ file, debounceMs: 10, log: quietLog });
+  assert.equal(store.size, 1, 'empty defaults pruned on load');
+  assert.equal(store.getOrCreate('veteran').coins, 120, 'meaningful profiles survive');
+  assert.equal(store.resolveToken('t-vet'), 'veteran');
+  assert.equal(store.resolveToken('t-stale'), null, 'binding to a pruned profile is dropped');
+  assert.equal(store.resolveToken('t-ghost'), null, 'binding to a missing profile is dropped');
+
+  // The prune marked the store dirty: the file is rewritten clean.
+  await store.close();
+  const onDisk = JSON.parse(readFileSync(file, 'utf8'));
+  assert.deepEqual(Object.keys(onDisk.profiles), ['veteran']);
+  assert.deepEqual(onDisk.tokens, { 't-vet': 'veteran' });
+});
+
+// ---------------------------------------------------------------------------
 // Active-store accessor (index.js registers at boot; room.js reads)
 // ---------------------------------------------------------------------------
 

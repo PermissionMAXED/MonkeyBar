@@ -6,13 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createTable } from '../src/game/table.js';
-import {
-  createEngine,
-  DICE_EVENT_DIE_REGAINED,
-  minimalRaise,
-  MODE_ID,
-  PLAYABLE,
-} from '../src/game/modes/bananaDice.js';
+import { createEngine, minimalRaise, MODE_ID, PLAYABLE } from '../src/game/modes/bananaDice.js';
 import { isModePlayable } from '../src/game/modes/index.js';
 import { createGameRoom } from '../src/game/gameRoom.js';
 import { CHIP_BONUS_CHAMBERS, DICE_START, START_CHAMBERS } from '@monkeybar/shared/constants.js';
@@ -129,12 +123,15 @@ test('bananaDice: module is live and registered playable', () => {
   assert.ok(isModePlayable('bananaDice'), 'registry must report bananaDice playable');
 });
 
-test('minimalRaise: walks the strict (count, face) order and caps at the table total', () => {
-  assert.deepEqual(minimalRaise(null, 20), { count: 1, face: 1 }); // opener
+test('minimalRaise: walks the strict (count, face) order, skips face 1, caps at the table total', () => {
+  assert.deepEqual(minimalRaise(null, 20), { count: 1, face: 2 }, 'opener skips the wild face');
   assert.deepEqual(minimalRaise({ count: 2, face: 4 }, 20), { count: 2, face: 5 });
-  assert.deepEqual(minimalRaise({ count: 2, face: 6 }, 20), { count: 3, face: 1 });
+  assert.deepEqual(minimalRaise({ count: 2, face: 6 }, 20), { count: 3, face: 2 }, 'count bump lands on face 2, not 1');
   assert.equal(minimalRaise({ count: 20, face: 6 }, 20), null); // nothing beats the max
   assert.deepEqual(minimalRaise({ count: 20, face: 5 }, 20), { count: 20, face: 6 });
+  // Face-1 bids stay raisable — the helper walks up from wherever the bid is.
+  assert.deepEqual(minimalRaise({ count: 3, face: 1 }, 20), { count: 3, face: 2 });
+  assert.equal(minimalRaise(null, 0), null, 'no dice in play → no opener');
 });
 
 // ---------------------------------------------------------------------------
@@ -286,13 +283,13 @@ test('timeout: auto minimal legal raise, auto-challenge when the bid is maxed', 
   engine.start();
   const first = engine.turnSeat;
 
-  engine.onTimeout('turn'); // no bid → minimal opener {1,1}
+  engine.onTimeout('turn'); // no bid → minimal opener {1,2} (face 1 skipped)
   let bids = byKind(events, DICE_EVENTS.BID);
-  assert.deepEqual(bids.at(-1).p, { kind: DICE_EVENTS.BID, seat: first, count: 1, face: 1 });
+  assert.deepEqual(bids.at(-1).p, { kind: DICE_EVENTS.BID, seat: first, count: 1, face: 2 });
 
-  engine.onTimeout('turn'); // {1,1} → {1,2}
+  engine.onTimeout('turn'); // {1,2} → {1,3}
   bids = byKind(events, DICE_EVENTS.BID);
-  assert.deepEqual(bids.at(-1).p, { kind: DICE_EVENTS.BID, seat: 1 - first, count: 1, face: 2 });
+  assert.deepEqual(bids.at(-1).p, { kind: DICE_EVENTS.BID, seat: 1 - first, count: 1, face: 3 });
 
   // Jump to the absolute max bid (10 dice on the table) → next turn may ONLY challenge.
   assert.ok(engine.modeAction(engine.turnSeat, DICE_ACTIONS.BID, { count: 10, face: 6 }).ok);
@@ -350,9 +347,9 @@ test('0 dice → cannon: survive → chamber shrinks + dieRegained back to 1; hi
     ]
   );
 
-  const regained = byKind(events, DICE_EVENT_DIE_REGAINED);
+  const regained = byKind(events, DICE_EVENTS.DIE_REGAINED);
   assert.equal(regained.length, 1);
-  assert.deepEqual(regained[0].p, { kind: DICE_EVENT_DIE_REGAINED, seat: 0, diceLeft: 1 });
+  assert.deepEqual(regained[0].p, { kind: DICE_EVENTS.DIE_REGAINED, seat: 0, diceLeft: 1 });
 
   // After the regain, seat0 re-rolled exactly ONE die the next round.
   const afterRegain = byKind(events, DICE_EVENTS.YOUR_DICE)
