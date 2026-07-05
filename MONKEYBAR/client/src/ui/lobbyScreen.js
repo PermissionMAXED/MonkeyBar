@@ -4,6 +4,7 @@
 
 import { MSG } from '@shared/protocol.js';
 import { MIN_PLAYERS, TURN_SECONDS_MIN, TURN_SECONDS_MAX } from '@shared/constants.js';
+import { CHAOS_KNOB_KEYS, CHAOS_KNOB_SCHEMA, DEFAULT_KNOBS } from '@shared/chaos.js';
 import { el, clear, shortName } from './dom.js';
 import { portraitCanvas } from './portraits.js';
 import { createChatPanel } from './chat.js';
@@ -299,6 +300,70 @@ export function createLobbyScreen(ctx) {
         modeSelect,
       ])
     );
+
+    // §10.3 Custom Chaos knobs (R7): host-only slider editor, shown ONLY while
+    // the room's mode is customChaos (settings.chaos exists exactly then).
+    // Each change ships a partial updateSettings {chaos: {key}} patch; the
+    // server clamps through shared validateKnobs and re-broadcasts roomState,
+    // which re-renders these sliders to the clamped truth.
+    if (room.mode === 'customChaos') {
+      hostPanelEl.append(renderChaosKnobs(room));
+    }
+  }
+
+  /** The 🎛 Custom Chaos knob editor (host panel section). */
+  function renderChaosKnobs(room) {
+    const knobs = { ...DEFAULT_KNOBS, ...(room.settings?.chaos ?? {}) };
+
+    const rows = CHAOS_KNOB_KEYS.map((key) => {
+      const spec = CHAOS_KNOB_SCHEMA[key];
+      const value = knobs[key];
+      const out = el('output', {
+        text: String(value),
+        style: value !== spec.def ? { color: 'var(--banana)', fontWeight: '800' } : undefined,
+      });
+      const slider = el('input', {
+        className: 'slider chaos-knob',
+        type: 'range',
+        min: String(spec.min),
+        max: String(spec.max),
+        step: '1',
+        value: String(value),
+        title: spec.desc,
+        dataset: { knob: key },
+      });
+      slider.addEventListener('input', () => {
+        out.textContent = slider.value;
+      });
+      slider.addEventListener('change', () => {
+        socket.send(MSG.UPDATE_SETTINGS, {
+          patch: { chaos: { [key]: parseInt(slider.value, 10) } },
+        });
+      });
+      return el('div', { className: 'field', style: { marginBottom: '8px' } }, [
+        el('label', { text: `${spec.label} (${spec.min}–${spec.max})`, title: spec.desc }),
+        el('div', { className: 'turn-seconds-row' }, [slider, out]),
+      ]);
+    });
+
+    const resetBtn = el('button', {
+      className: 'btn small ghost',
+      type: 'button',
+      text: '↺ Reset knobs',
+      title: 'Back to the stock Monkey Lies numbers',
+      onClick: () => socket.send(MSG.UPDATE_SETTINGS, { patch: { chaos: { ...DEFAULT_KNOBS } } }),
+    });
+
+    return el('div', { className: 'chaos-knob-panel', style: { marginTop: '14px' } }, [
+      el('h3', { className: 'h-sub', text: '🎛 Chaos knobs' }),
+      el('div', {
+        className: 'muted',
+        style: { fontSize: '11.5px', marginBottom: '10px' },
+        text: 'Bend the house rules — every knob is clamped server-side.',
+      }),
+      ...rows,
+      resetBtn,
+    ]);
   }
 
   // ------------------------------------------------------------------

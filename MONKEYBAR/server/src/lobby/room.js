@@ -519,6 +519,16 @@ export function createRoom({
   // ---- chat / social ------------------------------------------------------------------------------
 
   /**
+   * Silent-round rule (King of the Bar): while the engine reports
+   * `socialMuted`, SEATED chat/quickPhrase/emote is rejected with BAD_STATE.
+   * Spectators and lobby members are never muzzled.
+   * @param {number} seat
+   */
+  function socialMutedFor(seat) {
+    return seat !== -1 && (gameRoom?.engine?.socialMuted ?? false);
+  }
+
+  /**
    * @param {string} playerId
    * @param {string} text
    */
@@ -527,6 +537,7 @@ export function createRoom({
     const isSpectator = spectators.has(playerId);
     if (!member && !isSpectator) return err(ERROR_CODES.BAD_STATE);
     const seat = state === 'inGame' && gameRoom && member ? gameRoom.table.seatOf(playerId) : -1;
+    if (socialMutedFor(seat)) return err(ERROR_CODES.BAD_STATE, 'silent round — no table talk');
     broadcast(
       ServerMsg.chat({
         seat: seat === -1 ? null : seat,
@@ -548,6 +559,7 @@ export function createRoom({
     const isSpectator = spectators.has(playerId);
     if (!member && !isSpectator) return err(ERROR_CODES.BAD_STATE);
     const seat = state === 'inGame' && gameRoom && member ? gameRoom.table.seatOf(playerId) : -1;
+    if (socialMutedFor(seat)) return err(ERROR_CODES.BAD_STATE, 'silent round — no table talk');
     broadcast(
       ServerMsg.quickPhrase({
         seat: seat === -1 ? null : seat,
@@ -562,6 +574,7 @@ export function createRoom({
     const member = members.get(playerId);
     if (!member) return err(ERROR_CODES.BAD_STATE, 'spectators cannot emote');
     const seat = state === 'inGame' && gameRoom ? gameRoom.table.seatOf(playerId) : -1;
+    if (socialMutedFor(seat)) return err(ERROR_CODES.BAD_STATE, 'silent round — no table talk');
     broadcast(
       ServerMsg.emote({
         seat: seat === -1 ? null : seat,
