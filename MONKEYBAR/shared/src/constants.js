@@ -34,8 +34,16 @@ export const CHIPS_PER_MATCH = 1;
 // ---- Deck & hand (§4.1) ----
 /** Cards dealt to every living player each round. */
 export const HAND_SIZE = 5;
-/** Maximum cards in a single PLAY. */
+/** Maximum cards in a single PLAY (stock Monkey Lies rules). */
 export const MAX_PLAY = 3;
+/**
+ * Protocol-level HARD cap on a play's cardIds — the outer wire safety bound.
+ * Custom Chaos can raise a room's maxPlay above the stock MAX_PLAY (up to
+ * CHAOS_KNOB_SCHEMA.maxPlay.max in chaos.js — keep the two in sync), so the
+ * `play` validator admits up to this many cards; the ENGINE enforces each
+ * room's actual per-mode/per-knob limit.
+ */
+export const MAX_PLAY_HARD = 4;
 /** Minimum cards in a single PLAY. */
 export const MIN_PLAY = 1;
 /** Each non-wild fruit makes up floor(P × HAND_SIZE × DECK_FRUIT_RATIO) of the deck. */

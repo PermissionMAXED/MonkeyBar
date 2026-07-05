@@ -10,7 +10,8 @@ import {
   encodeMsg,
   CLIENT_MSG_TYPES,
 } from '../src/protocol.js';
-import { MODE_ACTION_MAX_LENGTH } from '../src/constants.js';
+import { MAX_PLAY, MAX_PLAY_HARD, MODE_ACTION_MAX_LENGTH } from '../src/constants.js';
+import { CHAOS_KNOB_SCHEMA } from '../src/chaos.js';
 
 const enc = (t, p) => JSON.stringify({ t, p });
 
@@ -34,9 +35,18 @@ test('validateClientMsg accepts a valid createRoom', () => {
   assert.equal(res.t, MSG.CREATE_ROOM);
 });
 
-test('validateClientMsg accepts a valid play (1–3 unique card ids)', () => {
+test('validateClientMsg accepts a valid play (1–MAX_PLAY_HARD unique card ids)', () => {
   assert.equal(validateClientMsg(enc(MSG.PLAY, { aid: 'a1', cardIds: ['c1'] })).ok, true);
   assert.equal(validateClientMsg(enc(MSG.PLAY, { aid: 'a2', cardIds: ['c1', 'c2', 'c3'] })).ok, true);
+  // The wire cap is MAX_PLAY_HARD (4), not the stock MAX_PLAY (3): a Custom
+  // Chaos room with maxPlay 4 must get its 4-card play PAST the validator —
+  // standard modes still reject >3 in the ENGINE (rules.maxPlay).
+  assert.equal(validateClientMsg(enc(MSG.PLAY, { aid: 'a3', cardIds: ['c1', 'c2', 'c3', 'c4'] })).ok, true);
+});
+
+test('MAX_PLAY_HARD covers the chaos maxPlay bound (wire cap ≥ every legal play)', () => {
+  assert.equal(MAX_PLAY_HARD, CHAOS_KNOB_SCHEMA.maxPlay.max, 'wire cap must track the chaos schema max');
+  assert.ok(MAX_PLAY_HARD >= MAX_PLAY, 'wire cap must cover the stock rules too');
 });
 
 test('validateClientMsg accepts Buffer input', () => {
@@ -121,7 +131,7 @@ test('validateClientMsg rejects bad names with NAME_INVALID', () => {
 test('validateClientMsg rejects bad play payloads with INVALID_CARDS', () => {
   const cases = [
     { aid: 'a1', cardIds: [] }, // too few
-    { aid: 'a1', cardIds: ['c1', 'c2', 'c3', 'c4'] }, // too many
+    { aid: 'a1', cardIds: ['c1', 'c2', 'c3', 'c4', 'c5'] }, // above MAX_PLAY_HARD
     { aid: 'a1', cardIds: ['c1', 'c1'] }, // duplicates
     { aid: 'a1', cardIds: [1, 2] }, // non-strings
     { aid: 'a1', cardIds: 'c1' }, // not an array

@@ -4,7 +4,7 @@
 
 import {
   CHAT_MAX_LENGTH,
-  MAX_PLAY,
+  MAX_PLAY_HARD,
   MAX_PLAYERS,
   MIN_PLAY,
   MIN_PLAYERS,
@@ -502,7 +502,9 @@ const CLIENT_VALIDATORS = {
   [MSG.PLAY]: (p) => {
     if (!isStr(p.aid)) return ERROR_CODES.BAD_MSG;
     if (!Array.isArray(p.cardIds)) return ERROR_CODES.INVALID_CARDS;
-    if (p.cardIds.length < MIN_PLAY || p.cardIds.length > MAX_PLAY) return ERROR_CODES.INVALID_CARDS;
+    // MAX_PLAY_HARD is the wire safety bound (covers Custom Chaos maxPlay 4);
+    // the per-room/per-mode limit (stock 3) is the ENGINE's call, not ours.
+    if (p.cardIds.length < MIN_PLAY || p.cardIds.length > MAX_PLAY_HARD) return ERROR_CODES.INVALID_CARDS;
     if (!p.cardIds.every(isStr)) return ERROR_CODES.INVALID_CARDS;
     if (new Set(p.cardIds).size !== p.cardIds.length) return ERROR_CODES.INVALID_CARDS;
     return null;
