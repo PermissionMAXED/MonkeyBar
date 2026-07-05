@@ -1,6 +1,7 @@
 // Monkey Lies mode HUD module (R3) — the ML in-game controls, extracted
 // VERBATIM from the pre-R3 ui/hud.js so Monkey Lies stays pixel-and-behavior
-// identical: clickable hand fan (multi-select 1–3) + PLAY, the giant
+// identical: clickable hand fan (multi-select, stock band 1–3, wrapper HUDs
+// may reshape it via caps.getPlayLimits) + PLAY, the giant
 // "MONKEY LIES!" call button + last-play tag, the penalty overlay (chip +
 // fuse), the persistent Last-Monkey-Holding banner, FACE THE CANNON, and the
 // per-seat stats row (cards / chamber pips / Lucky Banana Chip).
@@ -16,9 +17,14 @@ import { el, clear, FRUIT_META, shortName } from '../dom.js';
 
 /**
  * @param {{store, socket, toast, go, back}} ctx
+ * @param {{getPlayLimits?: () => {minPlay: number, maxPlay: number}}} [caps]
+ *   optional capabilities supplied by wrapper HUDs (King of the Bar / Custom
+ *   Chaos): `getPlayLimits` reshapes the play band — the card-selection cap,
+ *   the PLAY button gate and the helper copy all derive from it, re-read on
+ *   EVERY render (limits can change per round). Default: {minPlay:1, maxPlay:3}.
  * @returns {import('./index.js').ModeHud}
  */
-export function createMonkeyLiesHud(ctx) {
+export function createMonkeyLiesHud(ctx, caps = {}) {
   const { store, socket, toast } = ctx;
 
   // ---------------------------------------------------------------------
@@ -90,6 +96,16 @@ export function createMonkeyLiesHud(ctx) {
   };
   /** C1: my turn is a pending Last-Monkey-Holding turn (no plays — call or fire). */
   const isMyLastHolderTurn = () => isMyTurn() && !!store.get('turnInfo')?.lastHolder;
+
+  /** This round's play band — re-read on every render (wrapper HUDs can move
+   *  it per round: Happy Hour minPlay 2, Chaos maxPlay 1–4). Sanitized so a
+   *  buggy/absent capability degrades to the stock 1–3 band. */
+  function playLimits() {
+    const lim = caps.getPlayLimits?.();
+    const minPlay = Number.isFinite(lim?.minPlay) ? Math.max(1, lim.minPlay) : MIN_PLAY;
+    const maxPlay = Number.isFinite(lim?.maxPlay) ? Math.max(minPlay, lim.maxPlay) : MAX_PLAY;
+    return { minPlay, maxPlay };
+  }
 
   // ---------------------------------------------------------------------
   // Per-seat stats row (rendered inside the shell's seat plates)
@@ -165,6 +181,10 @@ export function createMonkeyLiesHud(ctx) {
     // Last Monkey Holding: playing cards is no longer possible — the hand is
     // frozen, and the PLAY button becomes FACE THE CANNON (call stays live).
     const canInteract = myTurn && !pendingAction && !lastHolder;
+    const { minPlay, maxPlay } = playLimits();
+    // Happy Hour clause (mirrors the server): a hand holding fewer than
+    // minPlay may still shed what it has (never below 1 card).
+    const effMin = Math.max(1, Math.min(minPlay, hand.length));
 
     // prune selections that no longer exist in hand
     selectedIds = new Set([...selectedIds].filter((id) => hand.some((c) => c.id === id)));
@@ -183,7 +203,7 @@ export function createMonkeyLiesHud(ctx) {
             onClick: () => {
               if (!canInteract) return;
               if (selectedIds.has(card.id)) selectedIds.delete(card.id);
-              else if (selectedIds.size < MAX_PLAY) selectedIds.add(card.id);
+              else if (selectedIds.size < maxPlay) selectedIds.add(card.id);
               renderHand();
             },
           },
@@ -207,12 +227,14 @@ export function createMonkeyLiesHud(ctx) {
       : el('button', {
           className: 'btn primary play-btn',
           type: 'button',
-          disabled: canInteract && count >= MIN_PLAY && count <= MAX_PLAY ? undefined : 'true',
+          disabled: canInteract && count >= effMin && count <= maxPlay ? undefined : 'true',
           text: pendingAction?.kind === 'play'
             ? '…'
             : count > 0
               ? `PLAY ${count} CARD${count > 1 ? 'S' : ''} 🍌`
-              : 'PLAY (pick 1–3)',
+              : effMin === maxPlay
+                ? `PLAY (pick ${maxPlay})`
+                : `PLAY (pick ${effMin}–${maxPlay})`,
           onClick: onPlay,
         });
 
@@ -236,7 +258,9 @@ export function createMonkeyLiesHud(ctx) {
     const s = snap();
     if (!isMyTurn() || pendingAction || isMyLastHolderTurn()) return;
     const cardIds = [...selectedIds];
-    if (cardIds.length < MIN_PLAY || cardIds.length > MAX_PLAY) return;
+    const { minPlay, maxPlay } = playLimits();
+    const effMin = Math.max(1, Math.min(minPlay, (s?.yourHand ?? []).length));
+    if (cardIds.length < effMin || cardIds.length > maxPlay) return;
     const aid = socket.nextAid();
     trackAction({ aid, kind: 'play', cardIds });
     socket.send(MSG.PLAY, { aid, cardIds });

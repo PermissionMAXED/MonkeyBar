@@ -14,6 +14,7 @@
 // Module contract: ui/modes/index.js. Registered via this file's default.
 
 import { MSG } from '@shared/protocol.js';
+import { MAX_PLAY, MIN_PLAY } from '@shared/constants.js';
 import { BASIC_FRUITS } from '@shared/cards.js';
 import { KING_ACTIONS, KING_EVENTS } from '@shared/modeEvents.js';
 import { el, clear, FRUIT_META, shortName } from '../dom.js';
@@ -22,13 +23,29 @@ import { createMonkeyLiesHud } from './monkeyLiesHud.js';
 /** How long the round's Bar Rule banner holds the stage. */
 const RULE_BANNER_MS = 3200;
 
+/** Bar Rules that reshape the ML play band, by ruleId (mirrors the server's
+ *  kingOfTheBar.js BAR_RULES `rules` — snapshot.barRule ships only
+ *  ruleId/name/desc). Happy Hour: 2-card floor, so PLAY is disabled
+ *  client-side with a single card selected (the server enforces the same). */
+const RULE_PLAY_LIMITS = Object.freeze({
+  happy_hour: Object.freeze({ minPlay: 2, maxPlay: MAX_PLAY }),
+});
+
 /**
  * @param {{store, socket, toast, go, back}} ctx
  * @returns {import('./index.js').ModeHud}
  */
 export default function createKingOfTheBarHud(ctx) {
   const { store, socket, toast } = ctx;
-  const inner = createMonkeyLiesHud(ctx);
+  const inner = createMonkeyLiesHud(ctx, {
+    // Re-read on every inner render: the round's Bar Rule reshapes the play
+    // band (Happy Hour → minPlay 2); rules change per round, and the freshest
+    // rule comes from the kingBarRule modeEvent / snapshot.barRule on resyncs.
+    getPlayLimits() {
+      syncSnapshotRule();
+      return RULE_PLAY_LIMITS[activeRule?.ruleId] ?? { minPlay: MIN_PLAY, maxPlay: MAX_PLAY };
+    },
+  });
 
   // ---------------------------------------------------------------------
   // Layers (absolute children resolve against .hud, like the inner HUD's)
@@ -123,6 +140,18 @@ export default function createKingOfTheBarHud(ctx) {
   const subs = [];
 
   const snap = () => store.get('snapshot');
+
+  /** snapshot.barRule wins on (re)joins — it only refreshes on full state
+   *  resyncs, so it must win only when it CHANGES, never re-override fresher
+   *  kingBarRule modeEvents with a stale value. */
+  function syncSnapshotRule() {
+    const snapRule = snap()?.barRule;
+    if (snapRule && snapRule.ruleId !== snapRuleSeen) {
+      snapRuleSeen = snapRule.ruleId;
+      activeRule = snapRule;
+    }
+  }
+
   const roundLive = () => {
     const phase = snap()?.phase;
     return !!phase && !['roundEnd', 'matchEnd', 'dealing'].includes(phase);
@@ -335,7 +364,8 @@ export default function createKingOfTheBarHud(ctx) {
       renderPill();
       renderSilent();
       showRuleBanner(activeRule);
-    } else if (evt.kind === 'fruitFlip') {
+      inner.render?.(); // the new rule may reshape the play band (Happy Hour)
+    } else if (evt.kind === KING_EVENTS.FRUIT_FLIP) {
       // Sour Table: keep the client's authoritative-ish view current so the
       // shell's table-fruit banner and the inner claim tag re-render live.
       const s = snap();
@@ -376,13 +406,10 @@ export default function createKingOfTheBarHud(ctx) {
     // phase 'decree'; live `turn` frames patch the client phase to 'playing').
     isTurnPhase: (s) => (inner.isTurnPhase?.(s) ?? false) || s.phase === 'decree',
     render() {
+      // Reconcile the rule BEFORE the inner render so its play band (via
+      // getPlayLimits) is right on the very first post-resync render.
+      syncSnapshotRule();
       inner.render?.();
-      // snapshot.barRule wins on (re)joins — modeEvents keep it fresh mid-match.
-      const snapRule = snap()?.barRule;
-      if (snapRule && snapRule.ruleId !== snapRuleSeen) {
-        snapRuleSeen = snapRule.ruleId;
-        activeRule = snapRule;
-      }
       renderPill();
       renderSilent();
       renderDecree();

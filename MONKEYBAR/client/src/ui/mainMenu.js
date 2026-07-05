@@ -4,7 +4,7 @@
 // ⓘ button opening that mode's how-to-play overlay, and the searching state
 // recovers from server errors instead of spinning forever.
 
-import { MSG } from '@shared/protocol.js';
+import { ERROR_CODES, MSG } from '@shared/protocol.js';
 import { NAME_MAX_LENGTH } from '@shared/constants.js';
 import { el, clear } from './dom.js';
 import { portraitCanvas } from './portraits.js';
@@ -190,8 +190,15 @@ export function createMainMenu(ctx) {
 
   // R10: a server error mid-search must not leave the spinner up forever —
   // screens.js already toasts the message, we just recover the modal state.
-  socket.on(MSG.ERROR, () => {
-    if (store.get('quickSearching')) {
+  // Only search-fatal codes cancel the hunt; unrelated errors that happen to
+  // land while searching (e.g. a chat RATE_LIMIT) leave the search running.
+  const SEARCH_FATAL_CODES = new Set([
+    ERROR_CODES.BAD_STATE,
+    ERROR_CODES.NOT_FOUND,
+    ERROR_CODES.NOT_PLAYABLE,
+  ]);
+  socket.on(MSG.ERROR, (p) => {
+    if (store.get('quickSearching') && SEARCH_FATAL_CODES.has(p?.code)) {
       socket.send(MSG.CANCEL_QUICK, {});
       store.set('quickSearching', false); // closes the modal via the sub above
     }

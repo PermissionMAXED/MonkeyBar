@@ -21,17 +21,16 @@ import { bidBeats, DICE_FACES } from '@shared/dice.js';
 import { DICE_ACTIONS, DICE_EVENTS } from '@shared/modeEvents.js';
 import { el, clear, shortName } from '../dom.js';
 
-/** Survive-the-cannon regain — mode-local kind mirrored from the server
- *  engine (shared DICE_EVENTS is a frozen 1.0 contract). */
-const DIE_REGAINED = 'diceDieRegained';
-
 const FACE_GLYPH = ['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
 
-/** The minimal raise over `bid` (mirror of the server helper, UX only). */
+/** The minimal raise over `bid` (mirror of the server helper, UX only).
+ *  Like the server it SKIPS face 1 (1s are wild, so a face-1 claim is the
+ *  weakest possible): the opener is {1, 2}, and a count bump lands on face 2,
+ *  not 1 — face-1 bids stay legal via bidBeats, just never defaulted. */
 function minimalRaise(bid, totalDice) {
   if (!bid) return totalDice >= 1 ? { count: 1, face: 2 } : null;
   if (bid.face < DICE_FACES) return { count: bid.count, face: bid.face + 1 };
-  if (bid.count < totalDice) return { count: bid.count + 1, face: 1 };
+  if (bid.count < totalDice) return { count: bid.count + 1, face: 2 };
   return null;
 }
 
@@ -147,7 +146,7 @@ export function createBananaDiceHud(ctx) {
       case DICE_EVENTS.DIE_LOST:
         diceOverride.set(p.seat, p.diceLeft);
         break;
-      case DIE_REGAINED:
+      case DICE_EVENTS.DIE_REGAINED:
         diceOverride.set(p.seat, p.diceLeft ?? 1);
         break;
       default:

@@ -3,8 +3,10 @@
 //   · a knob summary row parked under the shell's table-fruit banner, fed by
 //     snapshot.knobs (echoed by the server) / the `modeEvent chaosKnobs`
 //     announcement; knobs turned away from their schema default glow,
-//   · a capture-phase guard on the hand fan so a tightened Max Play knob
-//     (maxPlay < 3) can't over-select cards the server would reject.
+//   · the play band: the inner HUD's selection cap / PLAY gate / helper copy
+//     all derive from caps.getPlayLimits, fed from the knobs — both TIGHTENED
+//     (maxPlay 1–2) and LOOSENED (maxPlay 4) bands work, plus a capture-phase
+//     toast when a click would over-select past the knob.
 // Module contract: ui/modes/index.js. Registered via this file's default.
 
 import { CHAOS_KNOB_SCHEMA, CHAOS_KNOB_KEYS } from '@shared/chaos.js';
@@ -29,7 +31,22 @@ const KNOB_GLYPHS = {
  */
 export default function createChaosHud(ctx) {
   const { store, toast } = ctx;
-  const inner = createMonkeyLiesHud(ctx);
+
+  /** @type {import('@shared/chaos.js').ChaosKnobs|null} */
+  let knobs = store.get('snapshot')?.knobs ?? null;
+  /** Freshest knob view: snapshot.knobs wins on (re)joins, the chaosKnobs
+   *  modeEvent covers live starts (folded into `knobs` by the sub below). */
+  const knobView = () => store.get('snapshot')?.knobs ?? knobs;
+
+  const inner = createMonkeyLiesHud(ctx, {
+    // Re-read on every inner render: the host's knobs bound the play band in
+    // BOTH directions (maxPlay 1–4; minPlay stays stock unless a knob ever
+    // supplies one).
+    getPlayLimits() {
+      const k = knobView();
+      return { minPlay: k?.minPlay ?? 1, maxPlay: k?.maxPlay ?? 3 };
+    },
+  });
 
   // ---------------------------------------------------------------------
   // Knob summary row (under the shell's table-fruit banner)
@@ -55,8 +72,6 @@ export default function createChaosHud(ctx) {
 
   const root = el('div', { className: 'mode-hud chaos-hud' }, [inner.el, knobRow]);
 
-  /** @type {import('@shared/chaos.js').ChaosKnobs|null} */
-  let knobs = store.get('snapshot')?.knobs ?? null;
   const subs = [];
 
   function renderKnobs() {
@@ -94,16 +109,16 @@ export default function createChaosHud(ctx) {
   }
 
   // ---------------------------------------------------------------------
-  // Max Play guard: the ML hand fan natively allows selecting up to 3 cards;
-  // when the knob tightens the band, block over-selection BEFORE the inner
-  // HUD's click handler runs (capture phase) instead of letting the server
-  // bounce the play.
+  // Max Play toast: the inner HUD already caps selection at the knob (via
+  // caps.getPlayLimits), so this capture-phase listener only adds feedback —
+  // whatever the knob (tightened OR loosened), an over-select click explains
+  // the house limit instead of silently doing nothing.
   // ---------------------------------------------------------------------
   root.addEventListener(
     'click',
     (e) => {
-      const maxPlay = knobs?.maxPlay;
-      if (!maxPlay || maxPlay >= 3) return;
+      const maxPlay = knobView()?.maxPlay;
+      if (!maxPlay) return;
       const card = typeof e.target?.closest === 'function' ? e.target.closest('.hand-card') : null;
       if (!card || card.classList.contains('selected') || card.classList.contains('disabled')) return;
       const selected = root.querySelectorAll('.hand-card.selected').length;
