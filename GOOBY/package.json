@@ -1,0 +1,28 @@
+{
+  "name": "gooby",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "GOOBY — a polished Pou/Talking-Tom-style virtual-pet game starring a fat rabbit (three.js web app, Capacitor iOS wrap)",
+  "scripts": {
+    "dev": "vite --port 5174 --strictPort --host",
+    "build": "vite build",
+    "preview": "vite preview --port 5174",
+    "test": "node --test \"test/*.test.js\"",
+    "lint": "eslint .",
+    "fetch-assets": "node scripts/fetch-kenney.mjs",
+    "icons": "node scripts/gen-icons.mjs",
+    "shot": "node scripts/screenshot.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9",
+    "eslint": "^9",
+    "vite": "^6"
+  }
+}
