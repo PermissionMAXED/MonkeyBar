@@ -23,6 +23,7 @@
 
 import { DRIVE, COIN_TABLE, MINIGAME } from '../data/constants.js';
 import { t } from '../data/strings.js';
+import { registerShopScreen } from '../ui/shopScreen.js';
 
 // ---------------------------------------------------------------------------
 // Pure state machine (§C4: home → driveOut → shop → home)
@@ -171,24 +172,16 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
     unmount() {},
   });
 
-  // G11 replaces: interim shop panel until ui/shopScreen.js lands in W4 —
-  // arrival then opens the real shop UI (§C5) instead of this placeholder.
-  ui.registerPanel('shopPlaceholder', {
-    /** @param {HTMLElement} el */
-    mount(el) {
-      const coins = lastArrival ? lastArrival.coins : 0;
-      el.innerHTML = `
-        <div style="text-align:center">
-          <h2 class="perm-title">${t('trip.shopTitle')}</h2>
-          <p class="perm-body">${t('trip.shopSoon')}</p>
-          <p class="perm-body" style="opacity:.65">${t('trip.earned', { coins })}</p>
-          <div class="mg-btn-row">
-            <button class="btn btn-teal trip-home-btn">${t('trip.goHome')}</button>
-          </div>
-        </div>`;
-      el.querySelector('.trip-home-btn').addEventListener('click', () => goHome());
-    },
-    unmount() {},
+  // G11: the real shop UI (§C5) — ui/shopScreen.js registers the 'shop'
+  // full-screen (trip + browse modes, quick-delivery order flow) and boots the
+  // decor wiring (home/decor.js). Arrival hands off via openShop() below.
+  registerShopScreen({
+    store,
+    ui,
+    audio,
+    goHome: () => goHome(),
+    getArrival: () => lastArrival,
+    isAtShop: () => machine.state() === TRIP_STATE.SHOP,
   });
 
   // ---------------------------------------------------------------- flow
@@ -204,7 +197,7 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
   /** Opens the shop over the parked-at-the-shop backdrop (state 'shop'). */
   function openShop() {
     ui.closeAll();
-    ui.openPanel('shopPlaceholder');
+    ui.showScreen('shop', { mode: 'trip' }); // G11: real shop UI (§C5)
   }
 
   // Autopilot (dev, §G G7 DoD): state-polled auto-advance results → shop →

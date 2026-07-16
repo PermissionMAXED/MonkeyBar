@@ -8,11 +8,11 @@
 
 import * as THREE from 'three';
 import { MINIGAME, ROOMS } from '../data/constants.js';
-import { getMinigame, computeCoins } from '../data/minigames.js';
+import { getMinigame } from '../data/minigames.js';
 import { t } from '../data/strings.js';
 import { clampStat, isExhausted } from '../systems/stats.js';
-import { applyXp, minigameXp, isMinigameUnlocked } from '../systems/leveling.js';
-import { localDay } from '../core/clock.js';
+import { isMinigameUnlocked } from '../systems/leveling.js';
+import { awardMinigame } from '../systems/economy.js';
 import { hasGame, loadGame } from './registry.js';
 import { icon } from '../ui/icons.js';
 
@@ -230,36 +230,19 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
       ended = true;
       running = false;
       const s = typeof finalScore === 'number' ? finalScore : score;
-      const today = localDay();
-      const gameId = meta.id;
-      const firstToday = store.get(`minigames.lastPlayDay.${gameId}`) !== today;
-      const coins = computeCoins(meta.coinTable, s, firstToday, coinsOverride);
-      const prevBest = store.get(`minigames.best.${gameId}`) ?? 0;
-      const newBest = s > prevBest;
-      const xpGain = minigameXp(coins);
 
-      // G11 replaces: direct coin/XP/stat award until systems/economy.js lands
-      // (economy.awardMinigame(id, score) becomes the single payout path).
-      store.update((state) => {
-        state.coins += coins;
-        state.stats.fun = clampStat(state.stats.fun + MINIGAME.FUN_REWARD);
-        state.minigames.plays[gameId] = (state.minigames.plays[gameId] ?? 0) + 1;
-        state.minigames.lastPlayDay[gameId] = today;
-        if (newBest) state.minigames.best[gameId] = s;
-        const progress = applyXp({ xp: state.xp, level: state.level }, xpGain);
-        state.xp = progress.xp;
-        state.level = progress.level;
-        state.coins += progress.coinsAwarded;
-      });
+      // G11: economy.awardMinigame is the single payout path (§C6 coins incl.
+      // daily ×2, +fun, XP + level-up coins, plays/best/lastPlayDay — §C1.5).
+      const reward = awardMinigame(store, meta.id, s, { coinsOverride });
 
       lastResult = {
-        gameId,
+        gameId: reward.gameId,
         titleKey: meta.titleKey,
-        score: s,
-        best: Math.max(prevBest, s),
-        newBest,
-        coins,
-        firstToday,
+        score: reward.score,
+        best: reward.best,
+        newBest: reward.newBest,
+        coins: reward.coins,
+        firstToday: reward.firstToday,
         launchParams,
       };
       audio.play('jingle.results');
