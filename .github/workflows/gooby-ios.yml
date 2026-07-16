@@ -16,8 +16,8 @@ jobs:
       run:
         working-directory: GOOBY
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -34,8 +34,8 @@ jobs:
       run:
         working-directory: GOOBY
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -59,7 +59,7 @@ jobs:
           mkdir Payload
           cp -R "$RUNNER_TEMP/dd/Build/Products/Release-iphoneos/App.app" Payload/
           zip -qry gooby-unsigned.ipa Payload
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: gooby-unsigned-ipa
           path: GOOBY/ios/App/gooby-unsigned.ipa

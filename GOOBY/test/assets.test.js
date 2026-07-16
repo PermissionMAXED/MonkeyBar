@@ -169,3 +169,87 @@ test('every asset key referenced in data/minigames.js resolves to a file', async
     );
   }
 });
+
+// ---------------------------------------------------------------------------
+// Loader cache behaviour (F5 fix, eval E18): a rejected load must NOT stay
+// cached — the failed promise is evicted so the next preload retries, while
+// concurrent callers of the SAME in-flight load still coalesce onto one fetch.
+// ---------------------------------------------------------------------------
+
+test('assets cache: rejected loads are evicted and retried; in-flight loads coalesce', async (t) => {
+  const assets = await import('../src/core/assets.js');
+  t.after(() => assets._setLoaderForTests(null));
+
+  const key = 'food-kit/__f5-transient-test';
+  const fakeScene = {
+    name: 'master',
+    clone() {
+      return { name: '' };
+    },
+  };
+  let calls = 0;
+  /** @type {(v: {scene: object}) => void} */
+  let resolveInFlight;
+  assets._setLoaderForTests({
+    loadAsync() {
+      calls += 1;
+      if (calls === 1) return Promise.reject(new Error('boom: transient network failure'));
+      return new Promise((resolve) => {
+        resolveInFlight = resolve;
+      });
+    },
+  });
+
+  // 1. First preload fails → rejection propagates, nothing cached.
+  await assert.rejects(assets.preload([key]), /transient network failure/);
+  assert.equal(assets.isLoaded(key), false, 'failed load must not be cached');
+  assert.equal(calls, 1);
+
+  // 2. Retry after failure: the poisoned promise was evicted → loader called
+  //    again; two overlapping preloads coalesce onto ONE in-flight fetch.
+  const p1 = assets.preload([key]);
+  const p2 = assets.preload([key]);
+  assert.equal(calls, 2, 'concurrent preloads must share one in-flight load');
+  resolveInFlight({ scene: fakeScene });
+  await Promise.all([p1, p2]);
+  assert.equal(assets.isLoaded(key), true);
+  assert.equal(calls, 2);
+
+  // 3. Settled successful loads stay permanently cached — no further fetches.
+  await assets.preload([key]);
+  assert.equal(calls, 2, 'successful load must stay cached');
+  assert.equal(assets.getModel(key).name, key, 'getModel returns a named clone');
+});
+
+test('assets cache: concurrent callers share one rejection, then recover', async (t) => {
+  const assets = await import('../src/core/assets.js');
+  t.after(() => assets._setLoaderForTests(null));
+
+  const key = 'food-kit/__f5-shared-rejection-test';
+  let calls = 0;
+  /** @type {(e: Error) => void} */
+  let rejectInFlight;
+  assets._setLoaderForTests({
+    loadAsync() {
+      calls += 1;
+      if (calls === 1) {
+        return new Promise((resolve, reject) => {
+          rejectInFlight = reject;
+        });
+      }
+      return Promise.resolve({ scene: { name: 'master', clone: () => ({ name: '' }) } });
+    },
+  });
+
+  // Two callers race on the same key while the load is in flight…
+  const p1 = assert.rejects(assets.preload([key]), /shared boom/);
+  const p2 = assert.rejects(assets.preload([key]), /shared boom/);
+  assert.equal(calls, 1, 'in-flight load must be shared, not duplicated');
+  rejectInFlight(new Error('shared boom'));
+  await Promise.all([p1, p2]);
+
+  // …and a later preload retries fresh and succeeds.
+  await assets.preload([key]);
+  assert.equal(calls, 2);
+  assert.equal(assets.isLoaded(key), true);
+});

@@ -23,12 +23,23 @@ const AUDIO_PACK_SLUGS = new Set([
 // (tests) has no env object, so fall back to '/'.
 const baseUrl = () => import.meta.env?.BASE_URL ?? '/';
 
-const loader = new GLTFLoader();
+let loader = new GLTFLoader();
 
 /** Permanent cache: key → loaded gltf.scene (master copy, never handed out). */
 const modelCache = new Map();
 /** In-flight/settled load promises so concurrent preloads coalesce. */
 const loadPromises = new Map();
+
+/**
+ * Test seam: swap the loader (must expose `loadAsync(url) → Promise<{scene}>`).
+ * Used by `test/assets.test.js` to simulate transient load failures without
+ * network/GLTFLoader; production code never calls this.
+ * @param {{loadAsync: (url: string) => Promise<{scene: object}>}|null} l
+ *   replacement loader, or null to restore the real GLTFLoader
+ */
+export function _setLoaderForTests(l) {
+  loader = l ?? new GLTFLoader();
+}
 
 /**
  * Split an asset key into { slug, name }.
@@ -67,10 +78,20 @@ export function getAudioUrl(key) {
 function loadModel(key) {
   let p = loadPromises.get(key);
   if (!p) {
-    p = loader.loadAsync(getModelUrl(key)).then((gltf) => {
-      modelCache.set(key, gltf.scene);
-      return gltf.scene;
-    });
+    p = loader.loadAsync(getModelUrl(key)).then(
+      (gltf) => {
+        modelCache.set(key, gltf.scene);
+        return gltf.scene;
+      },
+      (err) => {
+        // Evict the rejected promise so a later preload retries the fetch —
+        // otherwise one transient failure (network blip, mid-load reload)
+        // would poison the key for the whole session. Concurrent callers of
+        // the SAME in-flight load still share this one promise/rejection.
+        if (loadPromises.get(key) === p) loadPromises.delete(key);
+        throw err;
+      }
+    );
     loadPromises.set(key, p);
   }
   return p;
@@ -92,6 +113,13 @@ export async function preload(keys) {
  * (safe to reposition/rename/add per scene) while geometries and materials
  * stay shared with the cached master (three.js `Object3D.clone()` semantics)
  * to keep memory + draw setup cheap.
+ *
+ * Disposal caveat (F5/E14): because geometries/materials are SHARED with the
+ * permanent cache, calling `.dispose()` on a clone's geometry/material (e.g.
+ * a blanket scene sweep) releases the cached master's GPU buffers/programs
+ * too. three.js re-uploads them on next render (CPU-side data is retained),
+ * so this is safe but causes re-upload churn — prefer disposing only
+ * resources you created, like `roomManager`'s `disposeIfOwned` does.
  * @param {string} key e.g. 'food-kit/carrot'
  * @returns {import('three').Group}
  */

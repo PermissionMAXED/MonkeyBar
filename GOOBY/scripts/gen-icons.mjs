@@ -62,28 +62,51 @@ function pngChunk(type, data) {
 }
 
 /**
- * Encode an RGBA byte image as a PNG (8-bit, color type 6, filter None).
+ * Encode an RGBA byte image as a PNG (8-bit, filter None).
+ *
+ * `colorType` 6 (RGBA, default) keeps the alpha channel; `colorType` 2 emits
+ * opaque RGB — required for the App Store icon, which App Store Connect
+ * rejects if the PNG carries ANY alpha channel (even a fully-opaque one).
+ * For color type 2 every pixel is composited onto `background` first, so
+ * semi-transparent input still flattens correctly.
  * @param {number} width
  * @param {number} height
  * @param {Uint8Array} rgba `width * height * 4` bytes
+ * @param {{colorType?: 2|6, background?: [number, number, number]}} [opts]
  * @returns {Buffer} complete PNG file bytes
  */
-export function encodePng(width, height, rgba) {
+export function encodePng(width, height, rgba, { colorType = 6, background = [255, 246, 236] } = {}) {
   if (rgba.length !== width * height * 4) {
     throw new Error(`encodePng: expected ${width * height * 4} bytes, got ${rgba.length}`);
   }
+  if (colorType !== 6 && colorType !== 2) {
+    throw new Error(`encodePng: unsupported color type ${colorType} (only 6=RGBA, 2=RGB)`);
+  }
+  const channels = colorType === 6 ? 4 : 3;
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8; // bit depth
-  ihdr[9] = 6; // color type: RGBA
+  ihdr[9] = colorType; // 6 = RGBA, 2 = RGB (no alpha channel)
   // bytes 10–12 stay 0: deflate compression, adaptive filter, no interlace
-  const stride = width * 4;
+  const stride = width * channels;
   const raw = Buffer.alloc((stride + 1) * height);
   for (let y = 0; y < height; y++) {
     const pos = y * (stride + 1);
     raw[pos] = 0; // filter: None
-    raw.set(rgba.subarray(y * stride, (y + 1) * stride), pos + 1);
+    if (colorType === 6) {
+      raw.set(rgba.subarray(y * width * 4, (y + 1) * width * 4), pos + 1);
+    } else {
+      for (let x = 0; x < width; x++) {
+        const s = (y * width + x) * 4;
+        const a = rgba[s + 3] / 255;
+        const ia = 1 - a;
+        const d = pos + 1 + x * 3;
+        raw[d] = Math.round(rgba[s] * a + background[0] * ia);
+        raw[d + 1] = Math.round(rgba[s + 1] * a + background[1] * ia);
+        raw[d + 2] = Math.round(rgba[s + 2] * a + background[2] * ia);
+      }
+    }
   }
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -307,8 +330,11 @@ function main() {
   mkdirSync(iconDir, { recursive: true });
   mkdirSync(splashDir, { recursive: true });
 
+  // App Store Connect rejects the 1024² marketing icon if the PNG has an
+  // alpha channel → encode as opaque RGB (color type 2), flattened onto the
+  // brand cream just in case any pixel were ever non-opaque.
   const icon = renderIcon();
-  const iconPng = encodePng(icon.w, icon.h, icon.data);
+  const iconPng = encodePng(icon.w, icon.h, icon.data, { colorType: 2, background: rgb('#FFF6EC') });
   writeFileSync(join(iconDir, 'AppIcon-512@2x.png'), iconPng);
   writeFileSync(
     join(iconDir, 'Contents.json'),
