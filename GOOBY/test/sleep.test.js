@@ -221,6 +221,30 @@ test('grumpyDebuff tolerates missing/zero grumpyUntil', () => {
   assert.equal(grumpyDebuff({}, T0), 0);
 });
 
+test('currentMood clamps to the valid 0–100 range under the debuff', () => {
+  // rock-bottom stats: raw mood 0 − 15 must clamp at 0, never go negative
+  const low = state(
+    { hunger: 0, energy: 0, hygiene: 0, fun: 0 },
+    { grumpyUntil: T0 + 10 * MIN }
+  );
+  assert.equal(currentMood(low, T0), 0);
+  const high = state({ hunger: 100, energy: 100, hygiene: 100, fun: 100 });
+  assert.equal(currentMood(high, T0), 100); // no debuff → formula clamps high end
+});
+
+test('early wake → currentMood shows −15 until grumpyUntil expires, then recovers', () => {
+  // The display path (home/homeScene.js refreshEmotionInputs + home/
+  // interactions.js restoreEmotion) reads currentMood — this pins the contract.
+  const s0 = sleepingState({ hunger: 80, energy: 60, hygiene: 80, fun: 80 });
+  const wakeAt = T0 + 6 * MIN;
+  const { state: s } = wakeUp(tickSleep(s0, wakeAt).state, wakeAt, { early: true });
+  const plain = currentMood({ ...s, grumpyUntil: 0 }, wakeAt);
+  assert.equal(currentMood(s, wakeAt), plain - SLEEP.EARLY_WAKE_MOOD_DEBUFF);
+  const expiry = wakeAt + SLEEP.EARLY_WAKE_DEBUFF_MIN * MIN;
+  assert.equal(currentMood(s, expiry - 1), plain - SLEEP.EARLY_WAKE_MOOD_DEBUFF);
+  assert.equal(currentMood(s, expiry), plain); // debuff over — mood recovers
+});
+
 // ------------------------------------------------------- full-cycle integration
 
 test('full cycle: start → partial ticks → auto-wake, energy ends at 100', () => {

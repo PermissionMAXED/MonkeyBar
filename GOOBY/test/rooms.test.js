@@ -155,6 +155,33 @@ test('fixed interactables declare their tap events (§C2)', () => {
   }
 });
 
+test('variant piece layouts (piecesByItem) keep pieces inside the shell', () => {
+  // P2-6: per-variant offsets/scales exist to keep oversized variants (corner
+  // sofa, drawer cabinet, square rug…) from sinking into walls or hanging off
+  // the floor — sanity-check the layout tables stay inside the §C2 footprint.
+  const HALF_W = 2.0;
+  const HALF_D = 1.5;
+  for (const def of DEFS) {
+    for (const entry of def.furniture) {
+      const sets = [
+        ...(entry.pieces ? [['pieces', entry.pieces]] : []),
+        ...Object.entries(entry.piecesByItem ?? {}),
+      ];
+      for (const [variant, pieces] of sets) {
+        for (const piece of pieces) {
+          const x = entry.at[0] + piece.at[0];
+          const z = entry.at[2] + piece.at[2];
+          assert.ok(Math.abs(x) <= HALF_W + 0.01, `${def.id}.${variant}: piece '${piece.item}' x=${x} outside shell`);
+          assert.ok(Math.abs(z) <= HALF_D + 0.01, `${def.id}.${variant}: piece '${piece.item}' z=${z} outside shell`);
+          if (piece.scale != null) {
+            assert.ok(Number.isFinite(piece.scale) && piece.scale > 0, `${def.id}.${variant}: piece '${piece.item}' bad scale`);
+          }
+        }
+      }
+    }
+  }
+});
+
 test('furniture placements sit inside the 4×3 m room shell (§C2)', () => {
   // shell half-extents (SHELL in roomManager.js — kept in sync by hand since
   // that module imports three.js; §C2 fixes the 4×3 m footprint)

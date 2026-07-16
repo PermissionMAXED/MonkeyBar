@@ -34,8 +34,8 @@ import { ROOM as BEDROOM } from './rooms/bedroom.js';
  * @property {string} [item]      Kenney furniture-kit GLB name (auto-grounded)
  * @property {string} [proc]      procedural builder id: 'door'|'window'|'lampSwitch'
  * @property {string} [slot]      §C5.2 decor slot id (registers a slot anchor)
- * @property {Array<{item: string, at: number[], rotY?: number}>} [pieces] multi-piece slot (table set)
- * @property {Record<string, Array>} [piecesByItem] variant piece layouts (G11 decor swaps)
+ * @property {Array<{item: string, at: number[], rotY?: number, scale?: number}>} [pieces] multi-piece slot (table set)
+ * @property {Record<string, Array>} [piecesByItem] variant piece layouts (G11 decor swaps — piece `at`/`rotY`/`scale` are holder-local, so they compose with the entry-level holder transform)
  * @property {number[]} at        room-local [x, yLift, z]
  * @property {number} [rotY]      degrees
  * @property {number|number[]} [scale]
@@ -439,6 +439,7 @@ export function createRoomManager({ scene, camera, assets, store }) {
           const pieceHolder = new THREE.Group();
           pieceHolder.position.set(piece.at[0], piece.at[1], piece.at[2]);
           pieceHolder.rotation.y = ((piece.rotY ?? 0) * Math.PI) / 180;
+          if (piece.scale != null) pieceHolder.scale.setScalar(piece.scale);
           pieceHolder.add(model);
           holder.add(pieceHolder);
         }

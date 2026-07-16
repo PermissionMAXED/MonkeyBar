@@ -33,9 +33,27 @@ export const ROOM = Object.freeze({
     // sits only ~2 cm in front of its shelf — closer and it sinks into the wall)
     Object.freeze({ item: 'bathroomMirror', at: Object.freeze([0.45, 1.05, -1.36]), rotY: 0 }),
     // wall shelf between mirror and toilet (decor slot)
-    Object.freeze({ slot: 'shelf', item: 'bathroomCabinet', at: Object.freeze([1.1, 1.3, -1.34]), rotY: 0 }),
+    Object.freeze({
+      slot: 'shelf', item: 'bathroomCabinet', at: Object.freeze([1.1, 1.3, -1.34]), rotY: 0,
+      // the drawer cabinet is 0.5 m deep (vs 0.2) — unshifted its back sinks
+      // 9 cm into the back wall (bbox z −1.59), so bring it forward
+      piecesByItem: Object.freeze({
+        bathroomCabinetDrawer: Object.freeze([
+          Object.freeze({ item: 'bathroomCabinetDrawer', at: Object.freeze([0, 0, 0.11]), rotY: 0 }),
+        ]),
+      }),
+    }),
     // bath mat in front of the tub (rug decor slot)
-    Object.freeze({ slot: 'rug', item: 'rugDoormat', at: Object.freeze([-0.5, 0, 0.6]), rotY: 0, scale: 1.6, noShadow: true }),
+    Object.freeze({
+      slot: 'rug', item: 'rugDoormat', at: Object.freeze([-0.5, 0, 0.6]), rotY: 0, scale: 1.6, noShadow: true,
+      // the holder's ×1.6 doormat scale makes rugSquare a 2.2 m giant hanging
+      // past the floor's front edge (bbox z 1.74 > 1.5) — counter-scale it
+      piecesByItem: Object.freeze({
+        rugSquare: Object.freeze([
+          Object.freeze({ item: 'rugSquare', at: Object.freeze([0, 0, 0]), rotY: 0, scale: 0.62 }),
+        ]),
+      }),
+    }),
     // little plant on the sink top (plant decor slot)
     Object.freeze({ slot: 'plant', item: 'plantSmall2', at: Object.freeze([0.58, 0.88, -1.2]), rotY: 0 }),
   ]),

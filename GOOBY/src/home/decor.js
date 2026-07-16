@@ -28,7 +28,7 @@ import {
   slotDefault,
   slotOptions,
 } from '../systems/furniturePlacement.js';
-import { getRoomManager } from './homeScene.js';
+import { getCamera, getGooby, getRoomManager } from './homeScene.js';
 import { ROOM_DEFS, FURNITURE_SCALE } from './roomManager.js';
 import { standardMat, goobyMat, disposeIfOwned, PALETTE } from '../gfx/materials.js';
 import { SLOT_EMOJI, furnEmoji } from '../ui/shopScreen.js';
@@ -54,6 +54,14 @@ export function initDecor({ store, ui, audio }) {
   let applied = new Map();
   /** disposal records per slot key: geometries/materials/textures we created */
   let built = new Map();
+  /**
+   * Holders WE created for slots the roomManager starts empty (wallArt):
+   * 'roomId:slotId' → THREE.Group. Reused across re-applies — creating a fresh
+   * holder per apply would leave the old one (with its disposed meshes)
+   * parented in the scene → unbounded scene-graph growth + the renderer
+   * re-uploading disposed GPU resources.
+   */
+  let createdHolders = new Map();
   /** serialized apply runs (GLB preloads are async) */
   let applying = Promise.resolve();
 
@@ -68,6 +76,7 @@ export function initDecor({ store, ui, audio }) {
 
   function resetForInstance(nextRm) {
     for (const key of [...built.keys()]) disposeBuilt(key); // old scene is gone
+    createdHolders = new Map(); // holders belonged to the old scene graph
     applied = new Map();
     for (const def of ROOM_DEFS) {
       for (const slotId of Object.keys(def.slots)) {
@@ -105,8 +114,14 @@ export function initDecor({ store, ui, audio }) {
     applied.set(key, itemId);
 
     const defEntry = def.furniture.find((f) => f.slot === slotId);
-    let holder = rm.getSlotHolder(roomId, slotId);
-    if (!holder) holder = createSlotHolder(roomId, slotId, defEntry);
+    // Reuse any holder we created earlier for this slot (wallArt) — never
+    // stack a fresh holder next to the old one (§E1 dispose discipline).
+    let holder = rm.getSlotHolder(roomId, slotId) ?? createdHolders.get(key) ?? null;
+    if (holder && holder.parent == null) holder = null; // stale (scene rebuilt)
+    if (!holder) {
+      holder = createSlotHolder(roomId, slotId, defEntry);
+      if (holder) createdHolders.set(key, holder);
+    }
     if (!holder) return;
 
     // clear previous contents + our owned GPU resources (GLB clones share
@@ -152,6 +167,7 @@ export function initDecor({ store, ui, audio }) {
         const pieceHolder = new THREE.Group();
         pieceHolder.position.set(piece.at[0], piece.at[1], piece.at[2]);
         pieceHolder.rotation.y = ((piece.rotY ?? 0) * Math.PI) / 180;
+        if (piece.scale != null) pieceHolder.scale.setScalar(piece.scale);
         pieceHolder.add(model);
         holder.add(pieceHolder);
       }
@@ -195,6 +211,19 @@ export function initDecor({ store, ui, audio }) {
   // ------------------------------------------------- long-press → decorate
   const canvas = typeof document !== 'undefined' ? document.getElementById('scene') : null;
   if (canvas) {
+    const pickRay = new THREE.Raycaster();
+    const pickNdc = new THREE.Vector2();
+    /** Presses that start on Gooby are care gestures (§C3), never decorate. */
+    const onGooby = (clientX, clientY) => {
+      const gooby = getGooby();
+      const camera = getCamera();
+      if (!gooby?.group || !camera) return false;
+      const w = typeof innerWidth !== 'undefined' ? innerWidth : 1;
+      const h = typeof innerHeight !== 'undefined' ? innerHeight : 1;
+      pickNdc.set((clientX / w) * 2 - 1, -(clientY / h) * 2 + 1);
+      pickRay.setFromCamera(pickNdc, camera);
+      return pickRay.intersectObject(gooby.group, true).length > 0;
+    };
     let timer = null;
     let downAt = null;
     const cancel = () => {
@@ -204,19 +233,29 @@ export function initDecor({ store, ui, audio }) {
     };
     canvas.addEventListener('pointerdown', (e) => {
       cancel();
-      downAt = { x: e.clientX, y: e.clientY };
+      // Long-press must be a genuinely still hold on furniture/empty space —
+      // slow pet strokes over Gooby must never open the decorate picker.
+      if (onGooby(e.clientX, e.clientY)) return;
+      downAt = { x: e.clientX, y: e.clientY, path: 0 };
       timer = setTimeout(() => {
         timer = null;
         const live = getRoomManager();
         if (!live) return; // only over the home scene
+        // §C8.1: don't let the player wander off the scripted first-run flow —
+        // no decorate mode while the onboarding tutorial overlay is active.
+        if (!store.get('onboarding.done') && document.querySelector('.g14-ob')) return;
         audio.play('ui.open');
         ui.openPanel('decorate', { roomId: live.activeRoom() });
       }, ENGINE.HOLD_MS + 60);
     });
     canvas.addEventListener('pointermove', (e) => {
-      if (downAt && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > ENGINE.TAP_MAX_PX) {
-        cancel();
-      }
+      if (!downAt) return;
+      // Cumulative path (not net displacement): a slow back-and-forth pet
+      // stroke returns near its origin but is still a drag, not a hold.
+      downAt.path += Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
+      downAt.x = e.clientX;
+      downAt.y = e.clientY;
+      if (downAt.path > ENGINE.TAP_MAX_PX) cancel();
     });
     canvas.addEventListener('pointerup', cancel);
     canvas.addEventListener('pointercancel', cancel);

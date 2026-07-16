@@ -22,7 +22,7 @@
 import * as THREE from 'three';
 import { ROOMS } from '../data/constants.js';
 import { now } from '../core/clock.js';
-import { mood } from '../systems/stats.js';
+import { currentMood } from '../systems/sleep.js';
 import { createGooby } from '../character/gooby.js';
 import { createEmotionMachine } from '../character/emotions.js';
 import { createParticles } from '../gfx/particles.js';
@@ -47,6 +47,11 @@ export function getGooby() {
 /** @returns {object|null} the live room manager — null outside the home scene */
 export function getRoomManager() {
   return activeInstance?.getRoomManager() ?? null;
+}
+
+/** @returns {THREE.PerspectiveCamera|null} the live home camera — null outside the home scene */
+export function getCamera() {
+  return activeInstance?.camera ?? null;
 }
 
 /**
@@ -112,9 +117,12 @@ export function createHomeScene(ctx) {
   }
 
   function refreshEmotionInputs(machine) {
-    const stats = store.get('stats');
-    machine.setStats(stats);
-    machine.setMood(mood(stats));
+    const state = store.get();
+    machine.setStats(state.stats);
+    // currentMood (systems/sleep.js) is the canonical mood reader: it applies
+    // the §C1.4 early-wake grumpy debuff (−15 while grumpyUntil is active) and
+    // clamps to the valid 0–100 range.
+    machine.setMood(currentMood(state, now()));
   }
 
   const api = {
@@ -166,6 +174,9 @@ export function createHomeScene(ctx) {
       refreshEmotionInputs(machine);
       gooby.setEmotion(machine.get());
       subs.push(store.on('statsChanged', () => refreshEmotionInputs(machine)));
+      // sleep transitions set/clear grumpyUntil without touching stats — refresh
+      // so the §C1.4 grumpy face shows immediately after an early wake.
+      subs.push(store.on('sleepChanged', () => refreshEmotionInputs(machine)));
 
       // --- room navigation: arrows + dots (ui/roomNav.js) + swipe ---
       roomNav = createRoomNav({ onNavigate: (roomId) => api.goToRoom(roomId) });

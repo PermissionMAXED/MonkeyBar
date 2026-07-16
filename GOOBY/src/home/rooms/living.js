@@ -29,6 +29,14 @@ export const ROOM = Object.freeze({
     Object.freeze({
       slot: 'sofa', item: 'loungeSofa', at: Object.freeze([-0.9, 0, -1.05]),
       rotY: 0, anchor: 'sofa', hitSize: Object.freeze([1.5, 0.8, 0.7]),
+      // §C5.2 variant layouts: the corner sofa is a 1.5×1.5 m L-shape — its
+      // footprint center sits 0.38 m deeper than the straight sofas, so
+      // unshifted its backrest sinks through the back wall (bbox z −1.81).
+      piecesByItem: Object.freeze({
+        loungeSofaCorner: Object.freeze([
+          Object.freeze({ item: 'loungeSofaCorner', at: Object.freeze([0, 0, 0.38]), rotY: 0 }),
+        ]),
+      }),
     }),
     // coffee table in front of the sofa + a book on top (set dressing)
     Object.freeze({ item: 'tableCoffee', at: Object.freeze([-0.85, 0, 0.3]), rotY: 0 }),
@@ -38,6 +46,13 @@ export const ROOM = Object.freeze({
     Object.freeze({
       slot: 'tv', item: 'televisionVintage', at: Object.freeze([0.5, 0.49, -1.24]),
       rotY: 0, interact: 'tv', anchor: 'tv', hitSize: Object.freeze([0.75, 0.85, 0.6]),
+      // the modern flat-screen is 1.06 m wide — full size it overlaps the
+      // potted plant on the cabinet (x 0.86+), so nudge left + scale down
+      piecesByItem: Object.freeze({
+        televisionModern: Object.freeze([
+          Object.freeze({ item: 'televisionModern', at: Object.freeze([-0.1, 0, 0]), rotY: 0, scale: 0.85 }),
+        ]),
+      }),
     }),
     // front door on the back wall right (procedural — starts the shop trip §C4)
     Object.freeze({

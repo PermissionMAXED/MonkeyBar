@@ -22,7 +22,8 @@
 
 import { INTERACT, XP, CARE_TUNING } from '../data/constants.js';
 import { getFood } from '../data/foods.js';
-import { applyDeltas, clampStat, mood } from '../systems/stats.js';
+import { applyDeltas, clampStat } from '../systems/stats.js';
+import { currentMood } from '../systems/sleep.js';
 import { remove as invRemove, list as invList } from '../systems/inventory.js';
 import { applyXp } from '../systems/leveling.js';
 import { deriveEmotion } from '../character/emotions.js';
@@ -683,8 +684,10 @@ function mouthWorld(s) {
 /** Restore Gooby's default emotion from mood + stats (§D2.5). */
 function restoreEmotion(s) {
   if (!s.gooby || s.disposed) return;
-  const stats = s.store.get('stats');
-  s.gooby.setEmotion(deriveEmotion({ mood: mood(stats), stats }));
+  const state = s.store.get();
+  // currentMood (systems/sleep.js) applies the §C1.4 early-wake grumpy debuff
+  // (−15 while grumpyUntil is active) and clamps to the valid range.
+  s.gooby.setEmotion(deriveEmotion({ mood: currentMood(state, now()), stats: state.stats }));
 }
 
 function laterTimer(s, fn, ms) {
@@ -1245,10 +1248,11 @@ function setupBall(s) {
 }
 
 function inLivingRoom(s) {
-  const rm = s.roomManager;
-  const room =
-    rm?.currentRoom?.() ?? rm?.getCurrentRoom?.() ?? rm?.current ?? rm?.activeRoom ?? null;
-  return room == null || room === 'living' || room?.id === 'living';
+  // roomManager exposes the active room id via the activeRoom() METHOD (§C2 —
+  // see roomManager.js JSDoc); guard the call so a missing manager stays
+  // permissive (dev harness / degraded wiring).
+  const room = typeof s.roomManager?.activeRoom === 'function' ? s.roomManager.activeRoom() : null;
+  return room == null || room === 'living';
 }
 
 /** Gooby chases the resting ball, headbutts it back, +3 fun, 15 s cooldown (§C3). */
