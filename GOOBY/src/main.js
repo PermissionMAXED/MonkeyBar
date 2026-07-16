@@ -140,7 +140,8 @@ async function boot() {
   installNotificationHooks({ store });
   // Permission soft-ask flow (§C7), settings screen, sleep flow (§C1.4 — the
   // lamp/bed taps self-wire to G4's home scene via sleepFlow's guarded hook).
-  initPermissionFlow({ store, ui });
+  // F2: sceneManager lets the soft-ask defer while a minigame/shop trip runs.
+  initPermissionFlow({ store, ui, sceneManager });
   ui.registerScreen('settings', createSettingsScreen({ store, ui }));
   initSleepFlow({ store, ui });
   // ---- end G6 block ----

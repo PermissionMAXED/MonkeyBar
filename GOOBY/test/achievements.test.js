@@ -18,6 +18,9 @@ import { EN, DE } from '../src/data/strings.js';
 import { MINIGAME_IDS } from '../src/data/minigames.js';
 import { defaultState } from '../src/core/save.js';
 import { createStore } from '../src/core/store.js';
+// F2 (E11): read-only import — the regression test builds furniture.placed
+// through the real placement API so the persisted §E3 shape is what's tested.
+import * as furniturePlacement from '../src/systems/furniturePlacement.js';
 
 /** §C8.3 binding table: id → coin reward. */
 const SPEC_COINS = {
@@ -117,14 +120,22 @@ test('fullOutfit: hat + glasses + neck equipped simultaneously', () => {
 test('decorator: ≥10 placed non-default items (furniture + wallpaper + floor)', () => {
   const def = ACHIEVEMENTS_BY_ID.decorator;
   const state = freshState();
-  // §C5.2 free defaults never count
-  state.furniture.placed = { living: { sofa: 'loungeSofa', rug: 'rugRounded' } };
+  // §C5.2 free defaults never count (guard only — the real placement API
+  // never stores a slot's free default in the flat map)
+  state.furniture.placed = { 'living:sofa': 'loungeSofa', 'living:rug': 'rugRounded' };
   assert.equal(countNonDefaultDecor(state), 0);
-  // 8 paid furniture pieces + 1 wallpaper + 1 floor = 10
+  // 8 paid furniture placements + 1 wallpaper + 1 floor = 10. F2 (E11):
+  // furniture.placed is the FLAT §E3 map { 'roomId:slotId': itemId } that
+  // systems/furniturePlacement.js persists — not a nested {room:{slot:id}}.
   state.furniture.placed = {
-    living: { sofa: 'loungeDesignSofa', rug: 'rugRound', plant: 'plantSmall1', tv: 'televisionModern' },
-    kitchen: { fridge: 'kitchenFridgeLarge', appliance: 'toaster' },
-    bedroom: { bed: 'bedDouble', plushie: 'bear' },
+    'living:sofa': 'loungeDesignSofa',
+    'living:rug': 'rugRound',
+    'living:plant': 'plantSmall1',
+    'living:tv': 'televisionModern',
+    'kitchen:fridge': 'kitchenFridgeLarge',
+    'kitchen:appliance': 'kitchenCoffeeMachine',
+    'bedroom:bed': 'bedDouble',
+    'bedroom:plushie': 'proc:miniGooby',
   };
   state.decor.wallpaper = { living: 'mint', kitchen: 'cream' }; // cream = default
   state.decor.floor = { bathroom: 'tile' };
@@ -133,6 +144,69 @@ test('decorator: ≥10 placed non-default items (furniture + wallpaper + floor)'
   state.decor.floor = {};
   assert.equal(countNonDefaultDecor(state), 9);
   assert.equal(isSatisfied(def, state), false);
+});
+
+// F2 (E11) regression: drive furniture.placed through the REAL placement API
+// (read-only import) so the counter is tested against the persisted §E3 shape.
+test('decorator regression (F2/E11): furniturePlacement API drives progress to unlock', () => {
+  resetAchievementsEngineForTests();
+  const def = ACHIEVEMENTS_BY_ID.decorator;
+  const store = createStore(freshState(), { autosave: false });
+  store.set('coins', 5000);
+  assert.equal(countNonDefaultDecor(store.get()), 0); // defaults only
+
+  const placements = [
+    ['loungeDesignSofa', 'living', 'sofa'],
+    ['televisionModern', 'living', 'tv'],
+    ['rugRound', 'living', 'rug'],
+    ['plantSmall1', 'living', 'plant'],
+    ['lampSquareFloor', 'living', 'lamp'],
+    ['bookcaseClosedWide', 'living', 'bookcase'],
+    ['kitchenFridgeLarge', 'kitchen', 'fridge'],
+    ['bedDouble', 'bedroom', 'bed'],
+  ];
+  let expected = 0;
+  for (const [itemId, roomId, slotId] of placements) {
+    assert.equal(furniturePlacement.buyFurniture(store, itemId).ok, true, `buy ${itemId}`);
+    assert.equal(furniturePlacement.place(store, itemId, roomId, slotId).ok, true, `place ${itemId}`);
+    expected += 1;
+    assert.equal(countNonDefaultDecor(store.get()), expected, `progress after ${itemId}`);
+    assert.deepEqual(progressOf(def, store.get()), { current: expected, target: 10 });
+  }
+  // the persisted shape really is the flat 'roomId:slotId' → itemId map
+  assert.equal(store.get('furniture.placed')['living:sofa'], 'loungeDesignSofa');
+
+  // non-default wallpaper + floor complete the 10 (§C8.3 intent)
+  assert.equal(furniturePlacement.buySurface(store, 'wallpaper', 'mint').ok, true);
+  assert.equal(furniturePlacement.applySurface(store, 'wallpaper', 'living', 'mint').ok, true);
+  assert.equal(countNonDefaultDecor(store.get()), 9);
+  assert.equal(isSatisfied(def, store.get()), false);
+  assert.equal(furniturePlacement.buySurface(store, 'floor', 'tile').ok, true);
+  assert.equal(furniturePlacement.applySurface(store, 'floor', 'bathroom', 'tile').ok, true);
+  assert.equal(countNonDefaultDecor(store.get()), 10);
+  assert.equal(isSatisfied(def, store.get()), true);
+
+  // the engine unlocks it at the threshold (store 'change' wiring)
+  const coinsBefore = store.get('coins');
+  initAchievements({ store });
+  store.flush();
+  assert.equal(store.get('achievements.unlocked.decorator') > 0, true);
+  assert.equal(store.get('coins') >= coinsBefore + 80, true, '§C8.3 +80c reward paid');
+
+  // placing the free default back collapses the override; the unlock stays
+  furniturePlacement.place(store, 'loungeSofa', 'living', 'sofa');
+  assert.equal(countNonDefaultDecor(store.get()), 9);
+  assert.equal(store.get('achievements.unlocked.decorator') > 0, true);
+  resetAchievementsEngineForTests();
+});
+
+test('decorator: shared rug placed in two rooms counts per placement (F2/E11)', () => {
+  const store = createStore(freshState(), { autosave: false });
+  store.set('coins', 1000);
+  assert.equal(furniturePlacement.buyFurniture(store, 'rugRectangle').ok, true);
+  assert.equal(furniturePlacement.place(store, 'rugRectangle', 'living', 'rug').ok, true);
+  assert.equal(furniturePlacement.place(store, 'rugRectangle', 'bedroom', 'rug').ok, true);
+  assert.equal(countNonDefaultDecor(store.get()), 2);
 });
 
 test('streak7: daily streak ≥ 7', () => {
@@ -192,9 +266,9 @@ test('every one of the 16 achievements is unlockable through applyUnlocks', () =
     feeds: 100, washes: 50, sleeps: 20, trips: 25, cleanTrips: 1, tickles: 100,
   });
   state.outfits.equipped = { hat: 'crown', glasses: 'starGlasses', neck: 'scarfRed' };
-  state.furniture.placed = { living: Object.fromEntries(
-    Array.from({ length: 10 }, (_, i) => [`slot${i}`, `fancyItem${i}`])
-  ) };
+  state.furniture.placed = Object.fromEntries(
+    Array.from({ length: 10 }, (_, i) => [`living:slot${i}`, `fancyItem${i}`])
+  );
   state.daily.streak = 7;
   for (const id of MINIGAME_IDS) state.minigames.plays[id] = 1;
   const r = applyUnlocks(state, 7);

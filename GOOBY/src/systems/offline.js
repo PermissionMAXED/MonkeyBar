@@ -38,6 +38,15 @@ export function simulateOffline(state, nowMs) {
   let awakeMs = elapsedMs;
 
   if (isSleeping(s)) {
+    // F2 (E4): this branch is also the recovery path for a sleep that
+    // completed while the app was hidden and then KILLED — the time engine
+    // holds a finished sleep at the wakeAt boundary while hidden (store
+    // events cannot flush without rAF, so sleepFlow's grant observer never
+    // runs there), leaving `sleeping: true, lastTickAt == wakeAt` in the
+    // persisted save. On the next boot the wakeUp() below applies the
+    // completion grants (energy fill happened during the asleep segment;
+    // XP + sleeps counter here) exactly once, and the 'wokeUp' event feeds
+    // the welcome-back summary.
     const asleepMs = Math.max(0, Math.min(elapsedMs, s.sleep.wakeAt - last));
     s = { ...s, stats: applyTick(s.stats, asleepMs / 60000, { asleep: true }) };
     if (nowMs >= s.sleep.wakeAt) {

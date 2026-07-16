@@ -162,7 +162,10 @@ export async function rescheduleAll(state) {
  * Install the §C7 reschedule hooks (called once from main.js's marked G6
  * block): on open → cancelAll; visibilitychange→hidden → rescheduleAll;
  * back to visible → cancelAll; save flush (approximated by a 1 s-debounced
- * store 'change' while hidden) → rescheduleAll.
+ * store 'change' while hidden) → rescheduleAll. On native the §C7
+ * `App.addListener('appStateChange')` path (F2) re-runs the same scheduling
+ * entry points on background/resume — WKWebView visibility events are not
+ * guaranteed around app suspension.
  * @param {{store: object}} deps
  */
 export function installNotificationHooks({ store }) {
@@ -182,4 +185,30 @@ export function installNotificationHooks({ store }) {
       if (document.hidden) rescheduleAll(store.get());
     }, 1000);
   });
+
+  // F2 (E5): native appStateChange listener (§C7) — guarded dynamic import
+  // like every other Capacitor usage; pure no-op on web. On resume the
+  // schedule is refreshed by re-running the §C7 entry point for an open app
+  // (cancelAll — pending notifications are stale once the player is back);
+  // on background rescheduleAll recomputes from the live state. This also
+  // puts the shipped @capacitor/app dependency to use.
+  (async () => {
+    const cap = globalThis.Capacitor;
+    if (!cap?.isNativePlatform?.()) return;
+    try {
+      let appPlugin = cap.Plugins?.App ?? null;
+      if (!appPlugin) {
+        // Non-literal specifier so Rollup/Vite never resolve it at build time.
+        const specifier = '@capacitor/app';
+        const mod = await import(/* @vite-ignore */ specifier);
+        appPlugin = mod?.App ?? null;
+      }
+      appPlugin?.addListener?.('appStateChange', ({ isActive }) => {
+        if (isActive) cancelAll();
+        else rescheduleAll(store.get());
+      });
+    } catch (err) {
+      console.warn('[notifications] @capacitor/app unavailable:', err?.message);
+    }
+  })();
 }

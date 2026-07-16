@@ -116,26 +116,43 @@ export const migrations = [
 ];
 
 /**
- * Deep-merge `src` over `defaults` (objects only — arrays/primitives replace).
- * Guarantees every schema key exists after load.
+ * Deep-merge `src` over `defaults`. Guarantees every schema key exists after
+ * load. F2 (E12): structural type mismatches against the schema (a container
+ * that should be an object/array arriving as a string/number, or a primitive
+ * arriving as an object — e.g. `stats: "nope"`, `coins: {}`) THROW so load()
+ * treats the payload as corrupt and recovers (backup + fresh state) instead
+ * of booting into a state that crashes later. `null` never clobbers a
+ * structured default; primitive leaves keep the lenient Number() coercion in
+ * validate().
  * @param {object} defaults
  * @param {object} src
+ * @param {string} [path] error-message breadcrumb
  * @returns {object}
  */
-function mergeDefaults(defaults, src) {
-  if (src == null || typeof src !== 'object' || Array.isArray(src)) return src ?? defaults;
+function mergeDefaults(defaults, src, path = 'save') {
   const out = { ...defaults };
   for (const [k, v] of Object.entries(src)) {
-    if (
-      v != null &&
-      typeof v === 'object' &&
-      !Array.isArray(v) &&
-      out[k] != null &&
-      typeof out[k] === 'object' &&
-      !Array.isArray(out[k])
-    ) {
-      out[k] = mergeDefaults(out[k], v);
+    const d = defaults[k];
+    const here = `${path}.${k}`;
+    if (d != null && typeof d === 'object' && !Array.isArray(d)) {
+      if (v == null) continue; // structured defaults survive null/undefined
+      if (typeof v !== 'object' || Array.isArray(v)) {
+        throw new TypeError(`${here} must be an object, got ${Array.isArray(v) ? 'array' : typeof v}`);
+      }
+      out[k] = mergeDefaults(d, v, here);
+    } else if (Array.isArray(d)) {
+      if (v == null) continue;
+      if (!Array.isArray(v)) {
+        throw new TypeError(`${here} must be an array, got ${typeof v}`);
+      }
+      out[k] = v;
     } else {
+      // Primitive/null defaults and unknown keys. A non-null object where the
+      // schema expects a primitive is structural corruption; everything else
+      // passes through (validate() clamps/coerces the numeric leaves).
+      if (d != null && typeof d !== 'object' && v != null && typeof v === 'object') {
+        throw new TypeError(`${here} must be a ${typeof d}, got ${Array.isArray(v) ? 'array' : 'object'}`);
+      }
       out[k] = v;
     }
   }
@@ -160,8 +177,13 @@ function validate(state) {
 }
 
 /**
- * Load the save. Never throws: corrupt JSON and forward-version saves are
- * backed up under `gooby.save.corrupt` and replaced with a fresh state.
+ * Load the save. Never throws: the ENTIRE parse → version-check → migrate →
+ * validate pipeline is exception-safe (F2/E12 — previously the migration loop
+ * and validate() ran outside the try, so valid-JSON-wrong-types payloads like
+ * `{"v":1,"stats":"nope"}` threw on every boot and permanently bricked the
+ * game). On any failure the raw payload is backed up under
+ * `gooby.save.corrupt` and a fresh state is returned (main.js surfaces the
+ * 'boot.saveCorrupt' recovery toast via `recovered`).
  * @returns {{state: object, fresh: boolean, recovered: boolean}}
  *   fresh: no prior save existed; recovered: prior save was corrupt/unreadable.
  */
@@ -170,15 +192,35 @@ export function load() {
   if (raw == null) {
     return { state: defaultState(), fresh: true, recovered: false };
   }
-  let parsed;
   try {
-    parsed = JSON.parse(raw);
+    const parsed = JSON.parse(raw);
     if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('save is not an object');
     }
-    if (Number(parsed.v) > SAVE.VERSION) {
-      throw new Error(`forward version ${parsed.v} > ${SAVE.VERSION}`);
+    // Version sanity (F2): a missing v counts as v0 (pre-versioned save); an
+    // absurd PRESENT v (negative, fractional, non-numeric junk) is corruption
+    // — never index migrations[] with it or loop on it.
+    let v = 0;
+    if (parsed.v !== undefined) {
+      v = Number(parsed.v);
+      if (!Number.isInteger(v) || v < 0) {
+        throw new Error(`absurd save version ${JSON.stringify(parsed.v)}`);
+      }
+      if (v > SAVE.VERSION) {
+        throw new Error(`forward version ${parsed.v} > ${SAVE.VERSION}`);
+      }
     }
+    let state = parsed;
+    while (v < SAVE.VERSION) {
+      state = migrations[v](state);
+      const next = Number(state?.v);
+      // Guard against a stuck chain: every migration must advance v.
+      if (!Number.isInteger(next) || next <= v) {
+        throw new Error(`migration from v${v} did not advance (got ${state?.v})`);
+      }
+      v = next;
+    }
+    return { state: validate(state), fresh: false, recovered: false };
   } catch (err) {
     console.warn('[save] corrupt save, starting fresh:', err?.message);
     try {
@@ -186,13 +228,6 @@ export function load() {
     } catch { /* backup is best-effort */ }
     return { state: defaultState(), fresh: false, recovered: true };
   }
-  let state = parsed;
-  let v = Number(state.v) || 0;
-  while (v < SAVE.VERSION) {
-    state = migrations[v](state);
-    v = Number(state.v);
-  }
-  return { state: validate(state), fresh: false, recovered: false };
 }
 
 /**

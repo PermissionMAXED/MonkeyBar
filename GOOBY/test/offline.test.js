@@ -1,5 +1,8 @@
 // Offline catch-up simulation (§E4): ×0.3 awake decay, 480-min cap, sleep
-// completing while closed (uncapped), event emission + ordering.
+// completing while closed (uncapped), event emission + ordering. Also the F2
+// time-engine surface: tick split at wakeAt (E4) and completed-sleep grants
+// surviving a kill-while-hidden (E4 — engine holds the sleep at the boundary,
+// offline catch-up grants on next boot).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -7,6 +10,9 @@ import { simulateOffline, offlineToastVars } from '../src/systems/offline.js';
 import { startSleep } from '../src/systems/sleep.js';
 import { OFFLINE, STATS, XP } from '../src/data/constants.js';
 import { defaultState } from '../src/core/save.js';
+import { createStore } from '../src/core/store.js';
+import { createTimeEngine } from '../src/core/timeEngine.js';
+import * as clock from '../src/core/clock.js';
 
 const T0 = Date.UTC(2026, 6, 16, 12, 0, 0);
 const MIN = 60000;
@@ -148,6 +154,128 @@ test("event order: 'wokeUp' always precedes statLow crossings", () => {
   const { events } = simulateOffline(s0, T0 + 8 * H); // fun crosses during remainder
   assert.equal(events[0], 'wokeUp');
   assert.ok(events.includes('statLow:fun'), `events: ${events}`);
+});
+
+// -------------------------------------- F2 (E4): time-engine wakeAt tick split
+
+/** Pin the game clock and run one engine tick against a fresh store. */
+function tickOnce(s0, nowMs) {
+  clock.configure({ now: nowMs });
+  const store = createStore(s0, { autosave: false });
+  createTimeEngine(store).tick();
+  return store.get();
+}
+
+test('timeEngine: tick spanning wakeAt splits — asleep before, awake after (F2/E4)', () => {
+  // Asleep since T0 with a 20-min wakeAt; the next tick lands ~40 min later.
+  const s0 = state({ energy: 10, hunger: 80, hygiene: 85, fun: 70 });
+  s0.sleep = { sleeping: true, startedAt: T0, wakeAt: T0 + 20 * MIN };
+  const s = tickOnce(s0, T0 + 40 * MIN);
+
+  assert.equal(s.sleep.sleeping, false, 'woke at the boundary');
+  // awake remainder measured from wakeAt to the actual tick time
+  const awakeMin = (s.lastTickAt - (T0 + 20 * MIN)) / 60000;
+  assert.ok(awakeMin >= 20, 'tick covered the post-wake stretch');
+  // energy: 20 asleep min fill, then awake decay — NOT 40 min of fill
+  near(s.stats.energy, 10 + 3.334 * 20 - 0.25 * awakeMin, 'energy split at wakeAt');
+  // hunger: 20 min at asleep half-rate, then awake rate
+  near(s.stats.hunger, 80 - 0.175 * 20 - 0.35 * awakeMin, 'hunger split at wakeAt');
+  // hygiene/fun are frozen asleep but decay for the post-wake stretch
+  near(s.stats.hygiene, 85 - 0.15 * awakeMin, 'hygiene decays only after wake');
+  near(s.stats.fun, 70 - 0.5 * awakeMin, 'fun decays only after wake');
+});
+
+test('timeEngine: tick fully inside the sleep window keeps sleeping (F2/E4)', () => {
+  const s0 = state({ energy: 10, hunger: 80 });
+  s0.sleep = { sleeping: true, startedAt: T0, wakeAt: T0 + 30 * MIN };
+  const s = tickOnce(s0, T0 + 10 * MIN);
+  assert.equal(s.sleep.sleeping, true);
+  const asleepMin = (s.lastTickAt - T0) / 60000;
+  near(s.stats.energy, 10 + 3.334 * asleepMin, 'pure asleep fill');
+  near(s.stats.hunger, 80 - 0.175 * asleepMin, 'asleep half-rate hunger');
+});
+
+// ------------------- F2 (E4): completed-sleep grants survive kill-while-hidden
+
+/** Install a fake hidden document (store/timeEngine feature-detect it). */
+function withHiddenDocument(fn) {
+  const had = 'document' in globalThis;
+  const prev = globalThis.document;
+  globalThis.document = { hidden: true, addEventListener() {}, querySelector: () => null };
+  try {
+    return fn();
+  } finally {
+    if (had) globalThis.document = prev;
+    else delete globalThis.document;
+  }
+}
+
+test('timeEngine: hidden tick past wakeAt holds the sleep at the boundary (F2/E4)', () => {
+  const s0 = state({ energy: 10, hunger: 80, hygiene: 85, fun: 70 });
+  s0.sleep = { sleeping: true, startedAt: T0, wakeAt: T0 + 20 * MIN };
+  const s = withHiddenDocument(() => tickOnce(s0, T0 + 50 * MIN));
+
+  // Held: still sleeping, clock parked exactly at wakeAt — store events can't
+  // flush while hidden (no rAF), so waking here would lose sleepFlow's grants.
+  assert.equal(s.sleep.sleeping, true, 'sleep held while hidden');
+  assert.equal(s.lastTickAt, T0 + 20 * MIN, 'lastTickAt parked at wakeAt');
+  near(s.stats.energy, 10 + 3.334 * 20, 'fill stops at the boundary');
+  near(s.stats.hunger, 80 - 0.175 * 20, 'asleep decay stops at the boundary');
+  near(s.stats.hygiene, 85, 'frozen asleep');
+  near(s.stats.fun, 70, 'frozen asleep');
+
+  // App killed → next boot: offline catch-up applies the completion grants
+  // exactly once and reflects the wake in the welcome-back summary.
+  const before = { ...s.stats };
+  const sim = simulateOffline(s, T0 + 140 * MIN);
+  assert.equal(sim.events[0], 'wokeUp');
+  assert.equal(sim.state.sleep.sleeping, false);
+  assert.equal(sim.state.xp, XP.COMPLETED_SLEEP, 'XP granted once');
+  assert.equal(sim.state.achievements.counters.sleeps, 1, 'sleeps counter granted once');
+  // remainder decays awake at ×0.3 from the boundary (120 min)
+  near(sim.state.stats.hunger, before.hunger - 0.35 * 120 * 0.3, 'post-wake ×0.3 decay');
+  near(sim.state.stats.fun, before.fun - 0.5 * 120 * 0.3, 'post-wake ×0.3 decay');
+  const vars = offlineToastVars(before, sim);
+  assert.ok(vars, 'welcome-back summary present');
+  assert.match(vars.summary, /Gooby woke up!/);
+
+  // idempotence: a second catch-up on the woken state must not re-grant
+  const again = simulateOffline(sim.state, T0 + 150 * MIN);
+  assert.equal(again.state.xp, XP.COMPLETED_SLEEP);
+  assert.equal(again.state.achievements.counters.sleeps, 1);
+  assert.ok(!again.events.includes('wokeUp'));
+});
+
+test('timeEngine: resume after a hidden hold wakes with the correct split (F2/E4)', () => {
+  const s0 = state({ energy: 10, hunger: 80, hygiene: 85, fun: 70 });
+  s0.sleep = { sleeping: true, startedAt: T0, wakeAt: T0 + 20 * MIN };
+  const held = withHiddenDocument(() => tickOnce(s0, T0 + 50 * MIN));
+  assert.equal(held.sleep.sleeping, true);
+
+  // Back to visible: the next tick wakes at the boundary and decays the
+  // post-wake stretch with awake rules (grants ride the now-flushable
+  // 'sleepChanged' event via ui/sleepFlow.js).
+  const s = tickOnce(held, T0 + 60 * MIN);
+  assert.equal(s.sleep.sleeping, false, 'woke on the visible tick');
+  const awakeMin = (s.lastTickAt - (T0 + 20 * MIN)) / 60000;
+  near(s.stats.energy, 10 + 3.334 * 20 - 0.25 * awakeMin, 'no double fill');
+  near(s.stats.hunger, 80 - 0.175 * 20 - 0.35 * awakeMin, 'awake decay from wakeAt');
+  near(s.stats.hygiene, 85 - 0.15 * awakeMin, 'awake decay from wakeAt');
+});
+
+test('offline: persisted boundary-held sleep (lastTickAt == wakeAt) grants once (F2/E4)', () => {
+  // The exact shape the engine persists when killed while hidden past wakeAt.
+  const wakeAt = T0 + 20 * MIN;
+  const s0 = state({ energy: 76.68, hunger: 76.5, hygiene: 85, fun: 70 });
+  s0.sleep = { sleeping: true, startedAt: T0, wakeAt };
+  s0.lastTickAt = wakeAt;
+  const { state: s, events } = simulateOffline(s0, wakeAt + 60 * MIN);
+  assert.deepEqual(events, ['wokeUp']);
+  assert.equal(s.xp, XP.COMPLETED_SLEEP);
+  assert.equal(s.achievements.counters.sleeps, 1);
+  // zero asleep time left — the whole hour decays awake at ×0.3
+  near(s.stats.energy, 76.68 - 0.25 * 60 * 0.3, 'no extra fill');
+  near(s.stats.hunger, 76.5 - 0.35 * 60 * 0.3, 'awake ×0.3');
 });
 
 // ---------------------------------------------------------------- toast summary

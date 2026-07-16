@@ -30,17 +30,21 @@ const DEFAULT_ITEM_SET = new Set(DECOR_DEFAULT_ITEMS);
  * 'decorator' progress (§C8.3): number of placed non-default items — placed
  * furniture whose item id is not a §C5.2 free default, plus every room with a
  * non-default wallpaper or floor. Fired by G11's 'decorChanged' store event.
+ *
+ * F2 (E11): `furniture.placed` is a FLAT `{ 'roomId:slotId': itemId }` map
+ * (see systems/furniturePlacement.js §E3 header — it only ever stores
+ * non-default overrides; placing a slot's free default deletes the key).
+ * The previous nested `{room:{slot:id}}` iteration counted nothing, making
+ * the achievement unreachable. The DEFAULT_ITEM_SET filter stays as a guard
+ * against hand-edited/legacy saves.
  * @param {object} state save state (§E3: furniture.placed, decor)
  * @returns {number}
  */
 export function countNonDefaultDecor(state) {
   let n = 0;
   const placed = state?.furniture?.placed ?? {};
-  for (const room of Object.values(placed)) {
-    if (room == null || typeof room !== 'object') continue;
-    for (const itemId of Object.values(room)) {
-      if (itemId && !DEFAULT_ITEM_SET.has(itemId)) n += 1;
-    }
+  for (const itemId of Object.values(placed)) {
+    if (typeof itemId === 'string' && itemId && !DEFAULT_ITEM_SET.has(itemId)) n += 1;
   }
   for (const id of Object.values(state?.decor?.wallpaper ?? {})) {
     if (id && id !== DECOR_DEFAULT_WALLPAPER) n += 1;

@@ -122,6 +122,101 @@ test('forward-version save (v > current) is refused: backup + fresh state', () =
   assert.equal(backing.get(SAVE.CORRUPT_KEY), future); // preserved for a newer build
 });
 
+// ------------------------------------- F2 (E12): wrong types / absurd versions
+
+test('wrong-typed fields (valid JSON): recovery with backup, never a throw', () => {
+  const hostile = [
+    { v: 1, stats: 'nope' }, // stats as string (the E12 repro)
+    { v: 1, coins: { a: 1 } }, // coins as object
+    { v: 1, furniture: 7 }, // room placements as number
+    { v: 1, stats: [1, 2, 3] }, // stats as array
+    { v: 1, settings: 'granted' }, // settings as string
+    { v: 1, achievements: { counters: 'many' } }, // nested container wrong type
+    { v: 1, furniture: { owned: 'loungeSofa', placed: {} } }, // array field as string
+  ];
+  for (const payload of hostile) {
+    wipe();
+    const raw = JSON.stringify(payload);
+    backing.set(SAVE.KEY, raw);
+    let result;
+    assert.doesNotThrow(() => {
+      result = load();
+    }, `load() must not throw for ${raw}`);
+    assert.equal(result.recovered, true, `${raw} should recover`);
+    assert.equal(result.fresh, false);
+    assert.equal(backing.get(SAVE.CORRUPT_KEY), raw, `${raw} backup preserved`);
+    // fresh, usable state
+    assert.deepEqual(result.state.stats, { hunger: 80, energy: 90, hygiene: 85, fun: 70 });
+    assert.equal(result.state.coins, ECONOMY.STARTING_COINS);
+    assert.deepEqual(result.state.furniture, { owned: [], placed: {} });
+  }
+});
+
+test('absurd version values: recovery with backup, no infinite migration loop', () => {
+  for (const v of [-3, 9999, 'x', 0.5, -1]) {
+    wipe();
+    const raw = JSON.stringify({ v, coins: 42 });
+    backing.set(SAVE.KEY, raw);
+    let result;
+    assert.doesNotThrow(() => {
+      result = load();
+    }, `load() must not throw for v=${JSON.stringify(v)}`);
+    assert.equal(result.recovered, true, `v=${JSON.stringify(v)} should recover`);
+    assert.equal(result.state.coins, ECONOMY.STARTING_COINS, 'fresh defaults, hostile coins ignored');
+    assert.equal(backing.get(SAVE.CORRUPT_KEY), raw, 'raw payload backed up');
+  }
+});
+
+test('truncated JSON: recovery with backup, never a throw', () => {
+  wipe();
+  const raw = JSON.stringify(defaultState()).slice(0, 47);
+  backing.set(SAVE.KEY, raw);
+  let result;
+  assert.doesNotThrow(() => {
+    result = load();
+  });
+  assert.equal(result.recovered, true);
+  assert.equal(backing.get(SAVE.CORRUPT_KEY), raw);
+  assert.equal(result.state.v, SAVE.VERSION);
+});
+
+test('null containers do not clobber structured defaults (usable, no recovery)', () => {
+  wipe();
+  backing.set(SAVE.KEY, JSON.stringify({ v: 1, sleep: null, coins: 55, stats: null }));
+  const { state, recovered } = load();
+  assert.equal(recovered, false);
+  assert.deepEqual(state.sleep, { sleeping: false, startedAt: 0, wakeAt: 0 });
+  assert.deepEqual(state.stats, { hunger: 80, energy: 90, hygiene: 85, fun: 70 });
+  assert.equal(state.coins, 55); // valid fields kept
+});
+
+test('load() never throws across a hostile-payload battery (E12 acceptance)', () => {
+  const battery = [
+    '{"v":1,"stats":"nope"}',
+    '{"v":-3}',
+    '{"v":9999}',
+    '{"v":"x"}',
+    '{"v":1,"coins"',
+    '{"v":1,"sleep":42}',
+    '{"v":0,"stats":{"hunger":{}}}',
+    '"just a string"',
+    '[]',
+    'NaN',
+    '',
+  ];
+  for (const raw of battery) {
+    wipe();
+    backing.set(SAVE.KEY, raw);
+    let result;
+    assert.doesNotThrow(() => {
+      result = load();
+    }, `load() threw for ${raw}`);
+    assert.ok(result.state, `usable state for ${raw}`);
+    assert.equal(result.state.v, SAVE.VERSION);
+    assert.equal(typeof result.state.stats, 'object');
+  }
+});
+
 // ---------------------------------------------------------------- migrations
 
 test('migration chain: v0 (pre-versioned) save migrates to v1, keeps data, fills gaps', () => {
