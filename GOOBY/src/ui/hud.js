@@ -133,11 +133,11 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
   }, 'g5-btn-yellow');
 
   button('wardrobe', 'shirt', 'hud.wardrobe', () => {
-    ui.toast('toast.comingSoon'); // G12 replaces: ui.showScreen('wardrobe')
+    ui.showScreen('wardrobe'); // G12: ui/wardrobeScreen.js (§C5.3)
   });
 
   button('achievements', 'trophy', 'hud.achievements', () => {
-    ui.toast('toast.comingSoon'); // G12 replaces: ui.showScreen('achievements')
+    ui.showScreen('achievements'); // G12: ui/achievementsScreen.js (§C8.3)
   });
 
   button('settings', 'gear', 'hud.settings', () => {

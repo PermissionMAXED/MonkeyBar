@@ -22,6 +22,13 @@ import { initPermissionFlow } from './ui/permissionPrompt.js';
 import { createSettingsScreen } from './ui/settingsScreen.js';
 import { initSleepFlow } from './ui/sleepFlow.js';
 // end G6 imports
+// G12: wardrobe/outfits, achievements, daily bonus — imports for the marked block
+import { initAchievements } from './systems/achievementsEngine.js';
+import { initOutfitSync } from './character/outfitAttach.js';
+import { registerWardrobe } from './ui/wardrobeScreen.js';
+import { registerAchievementsScreen } from './ui/achievementsScreen.js';
+import { initDailyBonus } from './ui/dailyBonusPopup.js';
+// end G12 imports
 
 // Agent G2's core/assets.js is discovered at transform time; the empty-map
 // fallback keeps boot working until it lands (coordination note — the glob
@@ -136,6 +143,19 @@ async function boot() {
   ui.registerScreen('settings', createSettingsScreen({ store, ui }));
   initSleepFlow({ store, ui });
   // ---- end G6 block ----
+
+  // ---- G12: wardrobe/outfits, achievements, daily bonus (single marked G12 block) ----
+  // Achievements engine (§C8.3): store-event unlock detection + rewards; the
+  // framework handle enables the noCrash shop-trip tap. Wardrobe + achievements
+  // screens register early so G11's shop Outfits tab can feature-detect them.
+  // Outfit sync keeps the home Gooby dressed (§C5.3); daily bonus (§C8.2)
+  // auto-shows its popup on the first open per local day.
+  initAchievements({ store, ui, audio, framework });
+  registerWardrobe({ store, ui, audio });
+  registerAchievementsScreen({ store, ui, audio });
+  initOutfitSync({ store });
+  initDailyBonus({ store, ui, audio, sceneManager });
+  // ---- end G12 block ----
 
   const timeEngine = createTimeEngine(store);
   timeEngine.start();
