@@ -351,3 +351,163 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.45; }
 }
+
+/* ---------- G6: sleep flow — countdown chip + wake sheet (§C1.4) ---------- */
+
+/* G6 */
+.sleep-chip {
+  position: absolute;
+  top: calc(14px + var(--safe-top));
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(38, 42, 66, 0.88);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 800;
+  border-radius: 999px;
+  padding: 10px 18px;
+  min-height: 48px;
+  box-shadow: var(--shadow-soft);
+  pointer-events: auto;
+  cursor: pointer;
+  z-index: 60;
+  animation: toast-in 180ms ease-out;
+}
+.sleep-chip .sleep-chip-zzz {
+  animation: sleep-zzz 2.2s ease-in-out infinite;
+  display: inline-block;
+}
+.sleep-chip .sleep-chip-energy {
+  font-size: 13px;
+  opacity: 0.85;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+@keyframes sleep-zzz {
+  0%, 100% { transform: translateY(0); opacity: 0.75; }
+  50% { transform: translateY(-3px); opacity: 1; }
+}
+
+/* G6 — permission soft-ask + wake-confirm sheets */
+.perm-panel,
+.wake-confirm {
+  text-align: center;
+}
+.perm-icon {
+  color: var(--pink);
+  margin-bottom: 4px;
+}
+.perm-title {
+  font-size: 24px;
+  font-weight: 800;
+  margin: 0 0 8px;
+}
+.perm-body {
+  font-size: 16px;
+  line-height: 1.45;
+  opacity: 0.8;
+  margin: 0 0 18px;
+}
+.btn[disabled] {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* G6 — settings screen */
+.settings-wrap {
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-self: center;
+}
+.settings-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.settings-title {
+  font-size: 30px;
+  font-weight: 800;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 4px;
+  border-bottom: 2px solid rgba(74, 59, 54, 0.07);
+  flex-wrap: wrap;
+}
+.settings-row:last-child {
+  border-bottom: none;
+}
+.settings-label {
+  font-size: 17px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.settings-status {
+  font-size: 14px;
+  font-weight: 700;
+  opacity: 0.6;
+}
+.settings-danger {
+  justify-content: center;
+}
+.settings-danger .btn {
+  background: #e0655f;
+  border-bottom-color: #b84943;
+}
+.settings-footer {
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  opacity: 0.45;
+}
+.seg {
+  display: inline-flex;
+  background: rgba(74, 59, 54, 0.08);
+  border-radius: 14px;
+  padding: 3px;
+  gap: 3px;
+}
+.seg-btn {
+  border: none;
+  background: transparent;
+  color: var(--brown);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  min-height: 42px;
+  min-width: 52px;
+  padding: 6px 12px;
+  border-radius: 11px;
+  cursor: pointer;
+}
+.seg-btn.seg-on {
+  background: var(--white);
+  box-shadow: 0 2px 8px rgba(74, 59, 54, 0.16);
+  color: var(--pink-dark);
+}
+/* ---------- end G6 ---------- */

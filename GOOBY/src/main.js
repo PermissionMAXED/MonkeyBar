@@ -15,6 +15,13 @@ import { createUi } from './ui/ui.js';
 import audio from './audio/audio.js';
 import { createMinigameFramework } from './minigames/framework.js';
 import { createHomeScene, HOME_ASSET_KEYS } from './home/homeScene.js';
+// G6: offline sim + notification hooks — imports for the marked block in boot()
+import { simulateOffline, offlineToastVars } from './systems/offline.js';
+import { installNotificationHooks } from './core/notifications.js';
+import { initPermissionFlow } from './ui/permissionPrompt.js';
+import { createSettingsScreen } from './ui/settingsScreen.js';
+import { initSleepFlow } from './ui/sleepFlow.js';
+// end G6 imports
 
 // Agent G2's core/assets.js is discovered at transform time; the empty-map
 // fallback keeps boot working until it lands (coordination note — the glob
@@ -114,9 +121,22 @@ async function boot() {
   }
   // ---- end G5 wiring hook ----
 
-  // G6 wires systems/offline.js catch-up here (simulateOffline before the
-  // first render). Until then, elapsed offline time is skipped, not decayed.
-  store.set('lastTickAt', now());
+  // ---- G6: offline sim + notification hooks (single marked G6 block) ----
+  // Offline catch-up (§E4) BEFORE the first render, with welcome-back toast.
+  const beforeOffline = { ...store.get('stats') };
+  const offlineSim = simulateOffline(store.get(), now());
+  store.update((state) => Object.assign(state, offlineSim.state));
+  const offlineVars = offlineToastVars(beforeOffline, offlineSim);
+  if (offlineVars) ui.toast('offline.welcomeBack', offlineVars);
+  // Notifications (§C7/§E7): cancel-on-open + background/save reschedule hooks.
+  installNotificationHooks({ store });
+  // Permission soft-ask flow (§C7), settings screen, sleep flow (§C1.4 — the
+  // lamp/bed taps self-wire to G4's home scene via sleepFlow's guarded hook).
+  initPermissionFlow({ store, ui });
+  ui.registerScreen('settings', createSettingsScreen({ store, ui }));
+  initSleepFlow({ store, ui });
+  // ---- end G6 block ----
+
   const timeEngine = createTimeEngine(store);
   timeEngine.start();
 

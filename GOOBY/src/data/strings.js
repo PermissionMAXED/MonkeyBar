@@ -180,6 +180,44 @@ export const EN = {
   'toast.toiletCooldown': 'The toilet needs a little break…',
   'toast.toiletNoNeed': 'Gooby doesn’t need to go right now',
 
+  // --- G6: sleep flow (§C1.4) ---
+  'toast.fellAsleep': 'Gooby fell asleep… 💤',
+  'toast.wokeEarly': 'Gooby is up — and a little grumpy… 😾',
+  'toast.notSleepy': 'Gooby is not sleepy yet!',
+  'sleep.wakeConfirm.title': 'Wake Gooby up?',
+  'sleep.wakeConfirm.body': 'Gooby is sleeping deeply. Waking him early makes him a bit grumpy for a while.',
+  'sleep.wakeConfirm.tooEarly': 'Gooby just fell asleep — let him rest at least {min} minutes.',
+  'sleep.wakeConfirm.wake': 'Wake up',
+  'sleep.wakeConfirm.letSleep': 'Keep sleeping',
+
+  // --- G6: offline catch-up (§E4) ---
+  'offline.welcomeBack': 'While you were away: {summary}',
+  'offline.wokeUp': 'Gooby woke up!',
+
+  // --- G6: notification permission soft-ask (§C7) ---
+  'perm.title': 'Little notes from Gooby?',
+  'perm.body': 'Gooby would love to tell you when he wakes up or needs you — just a few gentle notes, never at night.',
+  'perm.yes': 'Yes, notify me',
+  'perm.grantedToast': 'Gooby will keep you posted! 🔔',
+
+  // --- G6: settings screen (G14 adds audio toggles) ---
+  'settings.title': 'Settings',
+  'settings.language': 'Language',
+  'settings.lang.auto': 'Auto',
+  'settings.lang.en': 'English',
+  'settings.lang.de': 'German',
+  'settings.notifications': 'Notifications',
+  'settings.notif.granted': 'On',
+  'settings.notif.denied': 'Off',
+  'settings.notif.unasked': 'Not set up',
+  'settings.notif.later': 'Asking later',
+  'settings.notif.enable': 'Enable',
+  'settings.notif.disable': 'Turn off',
+  'settings.notif.blocked': 'Notifications are blocked — allow them for Gooby in your device settings.',
+  'settings.reset': 'Reset save',
+  'settings.reset.confirm1': 'Really reset? Tap again!',
+  'settings.reset.confirm2': 'Last chance — delete everything?',
+  'settings.version': 'GOOBY v{v}',
 };
 
 /** @type {Record<string, string>} */
@@ -360,6 +398,44 @@ export const DE = {
   'toast.toiletCooldown': 'Die Toilette braucht eine kleine Pause…',
   'toast.toiletNoNeed': 'Gooby muss gerade nicht',
 
+  // --- G6: sleep flow (§C1.4) ---
+  'toast.fellAsleep': 'Gooby ist eingeschlafen… 💤',
+  'toast.wokeEarly': 'Gooby ist wach – und etwas brummig… 😾',
+  'toast.notSleepy': 'Gooby ist noch gar nicht müde!',
+  'sleep.wakeConfirm.title': 'Gooby aufwecken?',
+  'sleep.wakeConfirm.body': 'Gooby schläft tief. Wenn du ihn zu früh weckst, ist er eine Weile brummig.',
+  'sleep.wakeConfirm.tooEarly': 'Gooby ist gerade erst eingeschlafen – lass ihn mindestens {min} Minuten ruhen.',
+  'sleep.wakeConfirm.wake': 'Aufwecken',
+  'sleep.wakeConfirm.letSleep': 'Weiterschlafen',
+
+  // --- G6: offline catch-up (§E4) ---
+  'offline.welcomeBack': 'Während du weg warst: {summary}',
+  'offline.wokeUp': 'Gooby ist aufgewacht!',
+
+  // --- G6: notification permission soft-ask (§C7) ---
+  'perm.title': 'Kleine Nachrichten von Gooby?',
+  'perm.body': 'Gooby würde dir gern Bescheid geben, wenn er aufwacht oder dich braucht – nur ein paar liebe Nachrichten, nie nachts.',
+  'perm.yes': 'Ja, benachrichtige mich',
+  'perm.grantedToast': 'Gooby hält dich auf dem Laufenden! 🔔',
+
+  // --- G6: settings screen (G14 adds audio toggles) ---
+  'settings.title': 'Einstellungen',
+  'settings.language': 'Sprache',
+  'settings.lang.auto': 'Auto',
+  'settings.lang.en': 'Englisch',
+  'settings.lang.de': 'Deutsch',
+  'settings.notifications': 'Benachrichtigungen',
+  'settings.notif.granted': 'An',
+  'settings.notif.denied': 'Aus',
+  'settings.notif.unasked': 'Nicht eingerichtet',
+  'settings.notif.later': 'Später fragen',
+  'settings.notif.enable': 'Aktivieren',
+  'settings.notif.disable': 'Ausschalten',
+  'settings.notif.blocked': 'Benachrichtigungen sind blockiert – erlaube sie für Gooby in den Geräteeinstellungen.',
+  'settings.reset': 'Spielstand zurücksetzen',
+  'settings.reset.confirm1': 'Wirklich zurücksetzen? Nochmal tippen!',
+  'settings.reset.confirm2': 'Letzte Chance – alles löschen?',
+  'settings.version': 'GOOBY v{v}',
 };
 
 const DICTS = { en: EN, de: DE };
