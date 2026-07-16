@@ -213,6 +213,13 @@ export const EN = {
   'perm.yes': 'Yes, notify me',
   'perm.grantedToast': 'Gooby will keep you posted! 🔔',
 
+  // --- G8: minigames A (§C6.1 #2–5) ---
+  'mg.hop.crash': 'Bonk!',
+  'mg.guard.steal': 'A carrot got stolen!',
+  'mg.guard.combo': 'Combo! +3',
+  'mg.guard.empty': 'All carrots gone!',
+  'mg.memory.cleared': 'All pairs found!',
+
   // --- G6: settings screen (G14 adds audio toggles) ---
   'settings.title': 'Settings',
   'settings.language': 'Language',
@@ -452,6 +459,13 @@ export const DE = {
   'perm.body': 'Gooby würde dir gern Bescheid geben, wenn er aufwacht oder dich braucht – nur ein paar liebe Nachrichten, nie nachts.',
   'perm.yes': 'Ja, benachrichtige mich',
   'perm.grantedToast': 'Gooby hält dich auf dem Laufenden! 🔔',
+
+  // --- G8: minigames A (§C6.1 #2–5) ---
+  'mg.hop.crash': 'Rums!',
+  'mg.guard.steal': 'Eine Karotte geklaut!',
+  'mg.guard.combo': 'Kombo! +3',
+  'mg.guard.empty': 'Alle Karotten weg!',
+  'mg.memory.cleared': 'Alle Paare gefunden!',
 
   // --- G6: settings screen (G14 adds audio toggles) ---
   'settings.title': 'Einstellungen',
