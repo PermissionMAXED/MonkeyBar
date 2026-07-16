@@ -16,6 +16,7 @@ import { tween, easings } from '../../gfx/tween.js';
 import { createParticles } from '../../gfx/particles.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
+import { clampFloatTextToView } from '../framework.js'; // F4 P2-3
 import {
   TRAMP,
   windowSecFor,
@@ -47,7 +48,7 @@ function fitModel(model, targetSize) {
 }
 
 /** Tiny floating score text (canvas sprites, self-disposing). */
-function createFloatTexts(scene) {
+function createFloatTexts(scene, camera) {
   const active = new Set();
   return {
     spawn(text, pos, color = '#4A3B36') {
@@ -66,7 +67,8 @@ function createFloatTexts(scene) {
       const tex = new THREE.CanvasTexture(canvas);
       const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
       const sprite = new THREE.Sprite(mat);
-      sprite.position.copy(pos);
+      // F4 P2-3: high-apex trick popups must not clip past the top edge
+      sprite.position.copy(clampFloatTextToView(pos.clone(), camera, { halfW: 0.8, halfH: 0.25 }));
       sprite.scale.set(1.6, 0.5, 1);
       scene.add(sprite);
       active.add({ sprite, mat, tex, age: 0, life: 0.9 });
@@ -226,7 +228,7 @@ export default {
 
     // --- Gooby on a trick wrapper (rotation pivot at his belly) ---
     this.particles = createParticles(scene);
-    this.floats = createFloatTexts(scene);
+    this.floats = createFloatTexts(scene, ctx.camera);
     this.gooby = createGooby({ particles: this.particles });
     applyEquippedOutfits(this.gooby); // G14: cameo wears the equipped outfits
     this.gooby.group.position.set(0, -0.52, 0);

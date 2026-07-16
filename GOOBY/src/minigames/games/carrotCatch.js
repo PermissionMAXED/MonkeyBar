@@ -12,6 +12,7 @@ import { createParticles } from '../../gfx/particles.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
 import { getMinigame, computeCoins } from '../../data/minigames.js'; // G14: tutorial coin floor (§C8.1)
+import { clampFloatTextToView } from '../framework.js'; // F4 P2-3
 import {
   CATCH,
   GOOD_FOODS,
@@ -42,7 +43,7 @@ function fitModel(model, targetSize) {
 }
 
 /** Tiny floating score text (canvas-texture sprites, self-disposing). */
-function createFloatTexts(scene) {
+function createFloatTexts(scene, camera) {
   const active = new Set();
   return {
     spawn(text, pos, color = '#4A3B36') {
@@ -61,7 +62,8 @@ function createFloatTexts(scene) {
       const tex = new THREE.CanvasTexture(canvas);
       const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
       const sprite = new THREE.Sprite(mat);
-      sprite.position.copy(pos);
+      // F4 P2-3: keep edge-of-screen catch popups inside the safe viewport
+      sprite.position.copy(clampFloatTextToView(pos.clone(), camera, { halfW: 0.55, halfH: 0.28 }));
       sprite.scale.set(1.1, 0.55, 1);
       scene.add(sprite);
       active.add({ sprite, mat, tex, age: 0, life: 0.85 });
@@ -164,7 +166,7 @@ export default {
 
     // --- Gooby (the real rig, small) + basket held above his head ---
     this.particles = createParticles(scene);
-    this.floats = createFloatTexts(scene);
+    this.floats = createFloatTexts(scene, ctx.camera);
     this.gooby = createGooby({ particles: this.particles });
     applyEquippedOutfits(this.gooby); // G14: cameo wears the equipped outfits
     this.gooby.group.scale.setScalar(0.85);

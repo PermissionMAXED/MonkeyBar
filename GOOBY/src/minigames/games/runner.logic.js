@@ -65,6 +65,14 @@ export const RUNNER = Object.freeze({
   STUMBLE_INVULN_SEC: 1.6,
   /** Max hits — first = stumble, second = end (§C6.1 #6). */
   MAX_HITS: 2,
+  /**
+   * Anti-tunneling (F4 P2-4): largest obstacle advance between collision
+   * samples (m). The smallest full collision window is a cone/barrier:
+   * 2 × (0.22 + 0.28) = 1.0 m — at MAX_SPEED 13 m/s a 0.1 s frame (the
+   * sceneManager dt clamp) advances 1.3 m, which could skip clean past it.
+   * 0.35 m guarantees ≥ 2 samples inside every window at any dt.
+   */
+  MAX_SWEEP_STEP_M: 0.35,
 });
 
 /**
@@ -169,6 +177,29 @@ export function hitsObstacle(player, obstacle, tune = RUNNER) {
     return !(player.sliding && player.y + tune.SLIDE_HEIGHT <= def.gapY);
   }
   return true; // car — same lane always hits
+}
+
+/**
+ * Swept collision test for one frame (F4 P2-4 anti-tunneling): the obstacle
+ * advances by `dz` this frame — at low FPS (15–20 fps ⇒ dt 50–66 ms, and the
+ * sceneManager clamps dt at 100 ms) a single end-of-frame hitsObstacle check
+ * can skip clean across the ±(halfDepth + PLAYER_HALF_DEPTH) window. Samples
+ * the advance every ≤ MAX_SWEEP_STEP_M (endpoint inclusive; the start point
+ * was the previous frame's endpoint) so no window can be jumped.
+ * @param {{lane: number, y: number, sliding: boolean}} player
+ * @param {{lane: number, kind: string, z: number}} obstacle PRE-advance z
+ * @param {number} dz obstacle z advance this frame (m, usually speed × dt)
+ * @param {object} [tune]
+ * @returns {boolean} true when any sample along the advance is a hit
+ */
+export function sweepHitsObstacle(player, obstacle, dz, tune = RUNNER) {
+  const steps = Math.max(1, Math.ceil(Math.abs(dz) / tune.MAX_SWEEP_STEP_M));
+  for (let i = 1; i <= steps; i += 1) {
+    if (hitsObstacle(player, { ...obstacle, z: obstacle.z + (dz * i) / steps }, tune)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------

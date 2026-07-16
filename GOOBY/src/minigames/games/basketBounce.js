@@ -12,6 +12,7 @@ import { t } from '../../data/strings.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
 import { createParticles } from '../../gfx/particles.js';
+import { clampFloatTextToView } from '../framework.js'; // F4 P2-3
 import {
   BASKET,
   hoopSlideX,
@@ -200,7 +201,8 @@ export default {
     const S = this.S;
     const mat = new THREE.SpriteMaterial({ map: floatTexture(text, color), transparent: true, depthWrite: false });
     const sprite = new THREE.Sprite(mat);
-    sprite.position.copy(pos);
+    // F4 P2-3: hoop popups after it slides to an edge must stay on screen
+    sprite.position.copy(clampFloatTextToView(pos.clone(), S.ctx.camera, { halfW: 0.7, halfH: 0.28 }));
     sprite.scale.set(1.4, 0.56, 1);
     S.ctx.scene.add(sprite);
     S.floaters.push({ sprite, t: 0, life: 0.9 });

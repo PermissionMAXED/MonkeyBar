@@ -14,6 +14,7 @@ import {
   runnerScore,
   actionPasses,
   hitsObstacle,
+  sweepHitsObstacle,
   maxLaneShift,
   passableLanes,
   isPatternSurvivable,
@@ -112,6 +113,38 @@ test('runner: collision windows — lane, z-window, jump clearance (§C6.1 #6)',
   const far = RUNNER.OBSTACLES.cone.halfDepth + RUNNER.PLAYER_HALF_DEPTH + 0.01;
   assert.equal(hitsObstacle({ lane: 1, y: 0, sliding: false }, { ...cone, z: far }), false);
   assert.equal(hitsObstacle({ lane: 1, y: 0, sliding: false }, { ...cone, z: -far }), false);
+});
+
+test('runner: low-FPS dt cannot tunnel a collision window (fix F4 P2-4)', () => {
+  const player = { lane: 1, y: 0, sliding: false };
+  // Smallest window: cone reach = halfDepth + player half-depth (±0.5 m).
+  const reach = RUNNER.OBSTACLES.cone.halfDepth + RUNNER.PLAYER_HALF_DEPTH;
+  // A 0.15 s hitch at MAX_SPEED advances ~1.95 m — clean across the window.
+  const dz = RUNNER.MAX_SPEED * 0.15;
+  const cone = { lane: 1, kind: 'cone', z: -reach - 0.4 }; // just short of it
+  assert.ok(dz > 2 * reach + 0.4, 'frame advance spans the whole window');
+  // the old single end-of-frame check misses (this WAS the tunneling bug) …
+  assert.equal(hitsObstacle(player, { ...cone, z: cone.z + dz }), false);
+  // … the swept check catches it
+  assert.equal(sweepHitsObstacle(player, cone, dz), true);
+  // sweeping keeps the pass rules: other lane / high jump still clear it
+  assert.equal(sweepHitsObstacle({ ...player, lane: 0 }, cone, dz), false);
+  assert.equal(
+    sweepHitsObstacle({ ...player, y: RUNNER.OBSTACLES.cone.clearY + 0.01 }, cone, dz),
+    false
+  );
+  // no window survives any frame length 15–60 fps at any live speed
+  for (const fps of [15, 18, 20, 30, 60]) {
+    for (const speed of [RUNNER.BASE_SPEED, 10, RUNNER.MAX_SPEED]) {
+      const step = speed / fps;
+      const start = { lane: 1, kind: 'barrier', z: -step - reach - 0.01 };
+      let hitAny = false;
+      for (let z = start.z; z < reach + step; z += step) {
+        if (sweepHitsObstacle(player, { ...start, z }, step)) hitAny = true;
+      }
+      assert.ok(hitAny, `tunneled at ${fps} fps / ${speed} m/s`);
+    }
+  }
 });
 
 test('runner: overhead needs a grounded slide; cars always hit in-lane', () => {

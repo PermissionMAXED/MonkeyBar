@@ -39,6 +39,15 @@ export const DANCE_TUNING = Object.freeze({
   TIER_COMBOS: Object.freeze([4, 8, 16]),
   /** Ending celebration length before the results screen (s). */
   END_DELAY_SEC: 1.6,
+  /**
+   * F4 P2-5 drift correction: real frame gaps up to this long (s) advance the
+   * song clock by their TRUE duration — the framework clock loses time on
+   * clamped long frames (sceneManager caps dt at 0.1 s) while the dance-track
+   * sequencer follows the WebAudio clock, so notes drift late vs the music.
+   * Gaps beyond this are pauses/backgrounding (update not called), which must
+   * NOT advance the chart.
+   */
+  DRIFT_MAX_FRAME_GAP_SEC: 0.45,
 });
 
 /**

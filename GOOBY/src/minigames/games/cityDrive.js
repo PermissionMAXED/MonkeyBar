@@ -12,7 +12,9 @@
 //
 // Dev flags (dev builds only, §G G7 DoD): ?topcam=1 top-down city overview,
 // ?autopilot=1 steers along the route so a full trip completes headlessly,
-// ?mode=shopTrip forces the trip mode when launched via ?minigame=cityDrive.
+// ?mode=shopTrip forces the trip mode when launched via ?minigame=cityDrive,
+// ?wedge=1 parks the car throttle-on against the nearest building face so
+// the F4 P1-1 stuck-rescue can be reproduced deterministically.
 //
 // City assembly lives here (buildCity) and consumes city/cityBuilder.js's
 // PURE layout — buildings/trees/roads render as InstancedMesh per GLB
@@ -282,6 +284,9 @@ export default {
   init(ctx) {
     this.ctx = ctx;
     this.mode = ctx.params.mode === 'shopTrip' || devParam('mode') === 'shopTrip' ? 'shopTrip' : 'arcade';
+    // F4 P2-6: reflect a dev-forced trip (?mode=shopTrip) back into the launch
+    // params so the framework results screen picks the trip layout too.
+    if (this.mode === 'shopTrip') ctx.params.mode = 'shopTrip';
     this.topcam = devParam('topcam') === '1';
     this.autopilot = devParam('autopilot') === '1';
 
@@ -305,14 +310,41 @@ export default {
 
     // --- player car + Gooby (sitDrive, §D2.4) -------------------------------
     const spawn = { x: layout.lane[0].x, z: layout.lane[0].z, heading: layout.home.heading };
+    const colliders = layoutColliders(layout);
     this.car = createCarController({
       scene,
       assets: ctx.assets,
       uiRoot: document.getElementById('ui') ?? document.body,
       spawn,
-      colliders: layoutColliders(layout),
+      colliders,
       onWallHit: () => ctx.audio.play('bump'),
+      // F4 P1-1: sustained throttle-on standstill (wedged off-road) → rescue
+      onStuck: () => this.startRescue(),
     });
+    // F4 P1-1 dev repro (?wedge=1): park the car nose-first (heading east)
+    // against a building's west face — throttle-on, zero displacement — so
+    // the stuck watchdog + rescue can be exercised deterministically over
+    // CDP. The spawn z sits exactly on the lane-snap lateral target of its
+    // tile so the assist adds no sideways slide that would mask the wedge.
+    if (devParam('wedge') === '1') {
+      const half = (T.GRID - 1) / 2;
+      const candidates = colliders
+        .filter((box) => box.maxX - box.minX > 6 && box.maxZ - box.minZ > 6)
+        .map((box) => {
+          const zc = (box.minZ + box.maxZ) / 2;
+          const row = Math.round(zc / T.TILE_M + half);
+          const restZ = (row - half) * T.TILE_M + T.LANE_OFFSET_M; // east → right lane
+          return { box, restZ };
+        })
+        .filter(({ box, restZ }) => restZ > box.minZ + 1.2 && restZ < box.maxZ - 1.2)
+        .sort((a, bb) => {
+          const da = Math.hypot(a.box.minX - spawn.x, a.restZ - spawn.z);
+          const db = Math.hypot(bb.box.minX - spawn.x, bb.restZ - spawn.z);
+          return da - db;
+        });
+      const spot = candidates[0];
+      if (spot) this.car.teleport(spot.box.minX - 2, spot.restZ, Math.PI / 2);
+    }
     this.gooby = createGooby();
     applyEquippedOutfits(this.gooby); // G14: cameo wears the equipped outfits
     this.gooby.group.scale.setScalar(1.15);
@@ -363,8 +395,9 @@ export default {
     this.collected = 0;
     this.towed = false;
     this.arrived = false;
-    this.phase = 'drive'; // 'drive' | 'tow' | 'fanfare'
+    this.phase = 'drive'; // 'drive' | 'tow' | 'rescue' | 'fanfare'
     this.phaseT = 0;
+    this.rescueDone = false;
     this.progress = 0;
     this.shake = 0;
     this.emotionT = 0;
@@ -459,6 +492,55 @@ export default {
     document.body.appendChild(this.veil);
   },
 
+  /** F4 P1-1: nearest sensible road point to drop a wedged car back onto. */
+  rescueSpot() {
+    const layout = this.layout;
+    if (this.mode === 'shopTrip') {
+      // back onto the guided route at the driver's current progress (§C4)
+      const q = pointAtLength(layout.lane, Math.min(layout.laneLength, this.progress));
+      return { x: q.x, z: q.z, heading: Math.atan2(q.dx, q.dz) };
+    }
+    // arcade: nearest road tile center, keeping the cardinal travel direction
+    const p = this.car.position;
+    let best = null;
+    let bestD = Infinity;
+    layout.grid.forEach((row, r) =>
+      row.forEach((tile, c) => {
+        if (tile.kind !== 'road') return;
+        const w = tileToWorld(r, c);
+        const d = (w.x - p.x) ** 2 + (w.z - p.z) ** 2;
+        if (d < bestD) {
+          bestD = d;
+          best = w;
+        }
+      })
+    );
+    const cardinal = Math.round(this.car.heading() / (Math.PI / 2)) * (Math.PI / 2);
+    return best
+      ? { x: best.x, z: best.z, heading: cardinal }
+      : { x: layout.lane[0].x, z: layout.lane[0].z, heading: layout.home.heading };
+  },
+
+  /**
+   * F4 P1-1 unstick (both modes): sustained throttle-on standstill → short
+   * veil dip + teleport back to the nearest road point. Gentle by design —
+   * no crash counted, no bonus lost (§C4.5 crash rules stay traffic-only).
+   */
+  startRescue() {
+    if (this.phase !== 'drive' || this.arrived) return;
+    this.phase = 'rescue';
+    this.phaseT = 0;
+    this.rescueDone = false;
+    this.car.setFrozen(true);
+    this.ctx.audio.play('tow');
+    this.gooby.setEmotion('dizzy');
+    this.emotionT = 1.5;
+    this.veil = document.createElement('div');
+    this.veil.style.cssText = 'position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;z-index:45;';
+    document.body.appendChild(this.veil);
+    if (import.meta.env?.DEV) console.info('[cityDrive] wedge detected → rescue started');
+  },
+
   /** Arrival (parking trigger radius 4 m — §C4.3): fanfare, then results. */
   arrive() {
     if (this.arrived) return;
@@ -535,6 +617,37 @@ export default {
       if (this.phaseT >= 1.7) {
         this.phase = 'done';
         ctx.onEnd({ score: this.result.coins, coins: this.result.coins });
+      }
+      return;
+    } else if (this.phase === 'rescue') {
+      // F4 P1-1: veil dips to black, the car reappears on the nearest road
+      // point, veil lifts — then straight back to driving.
+      this.phaseT += dt;
+      this.traffic.update(dt);
+      this.particles.update?.(dt);
+      if (this.veil) {
+        this.veil.style.opacity = String(
+          this.phaseT < 0.45
+            ? Math.min(1, this.phaseT / 0.45)
+            : Math.max(0, 1 - (this.phaseT - 0.45) / 0.55)
+        );
+      }
+      if (!this.rescueDone && this.phaseT >= 0.45) {
+        this.rescueDone = true;
+        const spot = this.rescueSpot();
+        this.car.teleport(spot.x, spot.z, spot.heading);
+        this.invuln = T.CRASH_INVULN_SEC; // no chained traffic hit on re-entry
+        if (!this.topcam) this.car.updateChaseCam(ctx.camera, 10);
+        if (import.meta.env?.DEV) {
+          console.info(`[cityDrive] rescue → road point x=${spot.x.toFixed(1)} z=${spot.z.toFixed(1)}`);
+        }
+      }
+      if (this.phaseT >= 1.05) {
+        this.veil?.remove();
+        this.veil = null;
+        this.car.setFrozen(false);
+        this.phase = 'drive';
+        this.phaseT = 0;
       }
       return;
     }

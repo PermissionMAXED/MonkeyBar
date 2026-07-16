@@ -1,8 +1,9 @@
 // Dance Party (§C6.1 #9, agent G10): 3-lane note-tap rhythm at 100 BPM on a
 // disco stage. The seeded 75 s pattern comes from danceParty.logic.js
-// (DANCE.PATTERN_SEED — the §D6/G14 music contract); note timing is driven
-// purely from the framework clock (dt/elapsed) at DANCE.BPM, so when G14's
-// real 100 BPM track lands it lines up. Hit windows perfect ≤70 ms (+4) /
+// (DANCE.PATTERN_SEED — the §D6/G14 music contract); note timing follows the
+// framework clock (dt) at DANCE.BPM with real-frame-gap drift correction
+// (F4 P2-5) so it stays in tempo with G14's WebAudio-clocked 100 BPM track
+// across clamped slow frames. Hit windows perfect ≤70 ms (+4) /
 // good ≤140 ms (+2) / miss (combo reset); score = sum − 2×misses. Gooby
 // dances center-stage — dance energy follows the combo (bigger moves, fever
 // confetti at high tiers). Disco: colored sweeping spot lights, procedural
@@ -18,6 +19,7 @@ import { tween, easings } from '../../gfx/tween.js';
 import { createParticles } from '../../gfx/particles.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
+import { clampFloatTextToView } from '../framework.js'; // F4 P2-3
 import {
   DANCE_TUNING,
   generatePattern,
@@ -37,7 +39,7 @@ const LANE_COLORS = [UI_COLORS.PRIMARY_PINK, UI_COLORS.TEAL, UI_COLORS.YELLOW];
 const TILE_COLORS = [0xff7ba9, 0x59c9b9, 0xffd166, 0x9b8cff];
 
 /** Tiny floating score text (canvas-texture sprites, self-disposing). */
-function createFloatTexts(scene) {
+function createFloatTexts(scene, camera) {
   const active = new Set();
   return {
     spawn(text, pos, color = '#FFFFFF') {
@@ -56,7 +58,8 @@ function createFloatTexts(scene) {
       const tex = new THREE.CanvasTexture(canvas);
       const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
       const sprite = new THREE.Sprite(mat);
-      sprite.position.copy(pos);
+      // F4 P2-3: keep edge-lane popups fully inside the safe viewport
+      sprite.position.copy(clampFloatTextToView(pos.clone(), camera, { halfW: 0.8, halfH: 0.25 }));
       sprite.scale.set(1.6, 0.5, 1);
       scene.add(sprite);
       active.add({ sprite, mat, tex, age: 0, life: 0.8 });
@@ -195,7 +198,7 @@ export default {
 
     // --- Gooby center-stage (dance clip loops; energy scales with combo) ---
     this.particles = createParticles(scene);
-    this.floats = createFloatTexts(scene);
+    this.floats = createFloatTexts(scene, camera);
     this.danceGrp = new THREE.Group(); // external energy bob/pulse wrapper
     this.gooby = createGooby({ particles: this.particles });
     applyEquippedOutfits(this.gooby); // G14: cameo wears the equipped outfits
@@ -240,6 +243,7 @@ export default {
     // city/carController.js thumb zones — ctx.input's 'tap' fires on
     // pointer-UP which is too late for a rhythm judgment) ---
     this.songTime = -DANCE_TUNING.LEAD_IN_SEC;
+    this.lastFrameAt = null; // F4 P2-5: real-frame-gap drift correction anchor
     this.onPointerDown = (e) => {
       if (this.phase !== 'play' || this.autoplay) return;
       const lane = Math.min(DANCE.LANES - 1, Math.max(0, Math.floor((e.clientX / innerWidth) * DANCE.LANES)));
@@ -370,6 +374,24 @@ export default {
 
   update(dt, elapsed) {
     const ctx = this.ctx;
+    // F4 P2-5: keep the pattern clock from drifting against the 100 BPM
+    // track. The music sequencer runs on the WebAudio clock (real time) but
+    // `elapsed` accumulates rAF dt CLAMPED at 0.1 s (core/sceneManager.js),
+    // so every slow frame loses real time and the notes creep late. audio.js
+    // exposes no public time base (getStats() has no clock — see the F4
+    // report: a getMusicTime() accessor would enable true phase lock), so the
+    // best local correction is to step the song clock by the REAL frame gap
+    // whenever the gap is plausibly a rendered frame; longer gaps are pauses/
+    // backgrounding (update not called) and keep frozen-clock semantics.
+    const nowSec = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    let step = dt;
+    if (this.lastFrameAt != null) {
+      const gap = nowSec - this.lastFrameAt;
+      if (gap > dt && gap <= DANCE_TUNING.DRIFT_MAX_FRAME_GAP_SEC) step = gap;
+    }
+    this.lastFrameAt = nowSec;
+    if (this.phase === 'play') this.songTime += step;
+
     this.gooby.update(dt);
     this.particles.update(dt);
     this.floats.update(dt);
@@ -416,8 +438,7 @@ export default {
       return;
     }
 
-    // song clock: pure framework time (§D6 contract — no wall clock)
-    this.songTime = elapsed - DANCE_TUNING.LEAD_IN_SEC;
+    // song clock: stepped above (framework dt + F4 P2-5 drift correction)
     ctx.hud.setTime(DANCE.DURATION_SEC - this.songTime);
 
     // autoplay taps

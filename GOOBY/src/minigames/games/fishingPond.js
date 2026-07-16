@@ -15,6 +15,7 @@ import { t } from '../../data/strings.js';
 import { createParticles } from '../../gfx/particles.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
+import { clampFloatTextToView } from '../framework.js'; // F4 P2-3
 import {
   FISHING,
   lowerDepth,
@@ -39,7 +40,7 @@ function depthToY(depth) {
 }
 
 /** Tiny floating score text (canvas sprites, self-disposing). */
-function createFloatTexts(scene) {
+function createFloatTexts(scene, camera) {
   const active = new Set();
   return {
     spawn(text, pos, color = '#FFF6EC') {
@@ -58,7 +59,8 @@ function createFloatTexts(scene) {
       const tex = new THREE.CanvasTexture(canvas);
       const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
       const sprite = new THREE.Sprite(mat);
-      sprite.position.copy(pos);
+      // F4 P2-3: catches at the pond edges must not clip their popups
+      sprite.position.copy(clampFloatTextToView(pos.clone(), camera, { halfW: 0.85, halfH: 0.27 }));
       sprite.scale.set(1.7, 0.53, 1);
       scene.add(sprite);
       active.add({ sprite, mat, tex, age: 0, life: 0.95 });
@@ -242,7 +244,7 @@ export default {
     bridge.position.set(1.45, SURFACE_Y + 0.32, -1.0);
     scene.add(bridge);
     this.particles = createParticles(scene);
-    this.floats = createFloatTexts(scene);
+    this.floats = createFloatTexts(scene, ctx.camera);
     this.gooby = createGooby({ particles: this.particles });
     applyEquippedOutfits(this.gooby); // G14: cameo wears the equipped outfits
     this.gooby.group.scale.setScalar(0.62);

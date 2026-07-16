@@ -13,12 +13,13 @@ import { t } from '../../data/strings.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
 import { createParticles } from '../../gfx/particles.js';
+import { clampFloatTextToView } from '../framework.js'; // F4 P2-3
 import {
   RUNNER,
   speedAt,
   comboMultiplier,
   runnerScore,
-  hitsObstacle,
+  sweepHitsObstacle,
   passableLanes,
   generateRow,
 } from './runner.logic.js';
@@ -305,7 +306,8 @@ export default {
     const S = this.S;
     const mat = new THREE.SpriteMaterial({ map: floatTexture(text, color), transparent: true, depthWrite: false });
     const sprite = new THREE.Sprite(mat);
-    sprite.position.copy(pos);
+    // F4 P2-3: outer-lane coin popups must not clip past the screen edges
+    sprite.position.copy(clampFloatTextToView(pos.clone(), S.ctx.camera, { halfW: 0.45, halfH: 0.23 }));
     sprite.scale.set(0.9, 0.45, 1);
     S.ctx.scene.add(sprite);
     S.floaters.push({ sprite, t: 0, life: 0.8 });
@@ -472,15 +474,19 @@ export default {
     if (S.invulnT > 0) S.invulnT -= dt;
     for (let i = S.obstacles.length - 1; i >= 0; i -= 1) {
       const ob = S.obstacles[i];
-      ob.z += speed * dt;
+      // F4 P2-4: sweep the advance BEFORE applying it — a single post-move
+      // check tunnels through collision windows on large (low-FPS) dt frames.
+      const dz = speed * dt;
+      const hit = !S.ending && S.invulnT <= 0 &&
+        sweepHitsObstacle({ lane: laneNow, y, sliding }, ob, dz);
+      ob.z += dz;
       ob.obj.position.z = ob.z;
       if (ob.z > DESPAWN_Z) {
         S.ctx.scene.remove(ob.obj);
         S.obstacles.splice(i, 1);
         continue;
       }
-      if (!S.ending && S.invulnT <= 0 &&
-          hitsObstacle({ lane: laneNow, y, sliding }, ob)) {
+      if (hit) {
         this.onHit(ob);
         if (S.ending) break;
       }

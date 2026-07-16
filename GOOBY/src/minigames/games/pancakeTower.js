@@ -13,6 +13,7 @@ import { t } from '../../data/strings.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
 import { createParticles } from '../../gfx/particles.js';
+import { clampFloatTextToView } from '../framework.js'; // F4 P2-3
 import {
   PANCAKE,
   isToppingLayer,
@@ -307,7 +308,8 @@ export default {
     const S = this.S;
     const mat = new THREE.SpriteMaterial({ map: floatTexture(text, color), transparent: true, depthWrite: false });
     const sprite = new THREE.Sprite(mat);
-    sprite.position.copy(pos);
+    // F4 P2-3: popups near the tall-stack top must not clip past the edge
+    sprite.position.copy(clampFloatTextToView(pos.clone(), S.ctx.camera, { halfW: 0.55, halfH: 0.22 }));
     sprite.scale.set(1.1, 0.44, 1);
     S.ctx.scene.add(sprite);
     S.floaters.push({ sprite, t: 0, life: 0.9 });

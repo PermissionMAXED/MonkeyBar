@@ -14,6 +14,7 @@ import { tween, easings } from '../../gfx/tween.js';
 import { createParticles } from '../../gfx/particles.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
+import { clampFloatTextToView } from '../framework.js'; // F4 P2-3
 import {
   BUBBLE,
   riseSpeedAt,
@@ -42,7 +43,7 @@ function fitModel(model, targetSize) {
 }
 
 /** Tiny floating score text (canvas sprites, self-disposing). */
-function createFloatTexts(scene) {
+function createFloatTexts(scene, camera) {
   const active = new Set();
   return {
     spawn(text, pos, color = '#4A3B36') {
@@ -61,7 +62,8 @@ function createFloatTexts(scene) {
       const tex = new THREE.CanvasTexture(canvas);
       const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
       const sprite = new THREE.Sprite(mat);
-      sprite.position.copy(pos);
+      // F4 P2-3: edge-of-screen bubble pops must not clip their popups
+      sprite.position.copy(clampFloatTextToView(pos.clone(), camera, { halfW: 0.63, halfH: 0.25 }));
       sprite.scale.set(1.25, 0.5, 1);
       scene.add(sprite);
       active.add({ sprite, mat, tex, age: 0, life: 0.85 });
@@ -160,7 +162,7 @@ export default {
 
     // --- Gooby (bottom corner, watching) ---
     this.particles = createParticles(scene);
-    this.floats = createFloatTexts(scene);
+    this.floats = createFloatTexts(scene, ctx.camera);
     this.gooby = createGooby({ particles: this.particles });
     applyEquippedOutfits(this.gooby); // G14: cameo wears the equipped outfits
     this.gooby.group.scale.setScalar(0.72);

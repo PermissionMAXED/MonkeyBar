@@ -13,6 +13,19 @@ import { t } from '../data/strings.js';
 const T = DRIVE_TUNING;
 const HALF_PI = Math.PI / 2;
 
+// F4 P1-1 wedge watchdog: off-road pockets (building/prop AABB clusters) can
+// pin the car so the auto-throttle pushes but the position no longer moves —
+// with no reverse gear that soft-locks the run. Compare the COMMANDED speed
+// against the ACTUAL per-frame displacement (the internal `speed` stays high
+// while wedged, so displacement is the only reliable signal) and fire
+// `onStuck` after a sustained standstill. Wall slides keep tangential
+// displacement and brief bumps recover in well under the trigger window, so
+// neither trips it. (Tuning here, not constants.js — that file is owned by
+// another agent; move into DRIVE_TUNING on the next constants pass.)
+const STUCK_MIN_CMD_SPEED = 2; //   m/s throttle target before we even look
+const STUCK_MAX_MOVE_SPEED = 0.55; // m/s actual displacement = "not moving"
+const STUCK_TRIGGER_SEC = 2.6; //   sustained standstill before the rescue
+
 /** Wrap an angle to (-π, π]. @param {number} a @returns {number} */
 export function wrapAngle(a) {
   while (a > Math.PI) a -= 2 * Math.PI;
@@ -75,7 +88,10 @@ const CONTROLS_CSS = `
  *   spawn: {x: number, z: number, heading: number},
  *   colliders: Array<{minX: number, maxX: number, minZ: number, maxZ: number}>,
  *   onWallHit?: () => void,
+ *   onStuck?: () => void,
  * }} deps heading: rotation.y radians, forward = (sin h, 0, cos h); east = π/2.
+ *   onStuck (F4 P1-1): fired once per sustained throttle-on standstill
+ *   (> STUCK_TRIGGER_SEC) so the game can play a rescue/unstick treatment.
  * @returns {{
  *   group: import('three').Group, position: import('three').Vector3,
  *   heading: () => number, speed: () => number,
@@ -88,7 +104,7 @@ const CONTROLS_CSS = `
  *   dispose: () => void,
  * }}
  */
-export function createCarController({ scene, assets, uiRoot, spawn, colliders, onWallHit }) {
+export function createCarController({ scene, assets, uiRoot, spawn, colliders, onWallHit, onStuck }) {
   // ---------------------------------------------------------------- meshes
   const group = new THREE.Group();
   group.name = 'playerCar';
@@ -114,6 +130,10 @@ export function createCarController({ scene, assets, uiRoot, spawn, colliders, o
   let rampTime = 0;
   let crashRecover = 0; // seconds left of the §C4.5 30%-speed recovery
   let wallContact = false;
+  // F4 P1-1: wedge watchdog state (see STUCK_* above)
+  let stuckT = 0;
+  let prevX = spawn.x;
+  let prevZ = spawn.z;
 
   // ---------------------------------------------------------------- controls
   if (!document.querySelector('style[data-owner="g7-drive"]')) {
@@ -289,6 +309,9 @@ export function createCarController({ scene, assets, uiRoot, spawn, colliders, o
       group.position.set(x, T.ROAD_Y, z);
       if (typeof h === 'number') heading = h;
       speed = 0;
+      stuckT = 0; // F4 P1-1: a teleport is never a standstill
+      prevX = x;
+      prevZ = z;
     },
 
     /**
@@ -333,7 +356,23 @@ export function createCarController({ scene, assets, uiRoot, spawn, colliders, o
         group.position.x += Math.sin(heading) * speed * dt;
         group.position.z += Math.cos(heading) * speed * dt;
         collide();
+        // F4 P1-1 wedge watchdog: throttle commands motion but the resolved
+        // position barely changed → wedged. Braking is an intentional stop.
+        if (dt > 0) {
+          const moved = Math.hypot(group.position.x - prevX, group.position.z - prevZ);
+          if (!braking && speed > STUCK_MIN_CMD_SPEED && moved < STUCK_MAX_MOVE_SPEED * dt) {
+            stuckT += dt;
+            if (stuckT >= STUCK_TRIGGER_SEC) {
+              stuckT = 0;
+              onStuck?.();
+            }
+          } else {
+            stuckT = 0;
+          }
+        }
       }
+      prevX = group.position.x;
+      prevZ = group.position.z;
       group.rotation.y = heading;
       // a touch of arcade body roll
       model.rotation.z = -steer * Math.min(1, speed / DRIVE.MAX_SPEED) * 0.06;
