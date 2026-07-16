@@ -239,10 +239,18 @@ export function initOnboarding({ store, ui, audio, sceneManager, framework }) {
       });
       audio.play('gooby.squeakHappy');
     } else if (stepId === 'feed') {
-      // Open the tray for the forced carrot feed (§C8.1 #3).
-      setTimeout(() => ui.openPanel('foodTray'), 350);
+      // Open the tray for the forced carrot feed (§C8.1 #3). The poll below
+      // re-opens it if dismissed, so guard against double-opening here (F3).
+      setTimeout(() => {
+        if (!trayOpen()) ui.openPanel('foodTray');
+      }, 350);
     }
     renderCard();
+  }
+
+  /** F3: is the fridge food-tray sheet currently mounted? */
+  function trayOpen() {
+    return !!document.querySelector('.panel-backdrop-foodTray');
   }
 
   function completeStep() {
@@ -336,7 +344,19 @@ export function initOnboarding({ store, ui, audio, sceneManager, framework }) {
     if (!onHome) return;
     const stepId = machine.current();
     const now = snapshotProgress(store.get(), await activeRoom());
-    if (stepSatisfied(stepId, baseline, now)) completeStep();
+    if (stepSatisfied(stepId, baseline, now)) {
+      completeStep();
+      return;
+    }
+    // F3 dead-end guard (§C8.1 #3): the forced-feed step NEEDS the tray. If it
+    // gets dismissed (backdrop tap, or a drag that missed Gooby's mouth closed
+    // it), auto-reopen so the tutorial can never soft-lock. Never fights an
+    // in-flight food drag (.g5-ghost) or another open sheet (permission etc.).
+    if (stepId === 'feed' && !busy
+      && !document.querySelector('.panel-backdrop')
+      && !document.querySelector('.g5-ghost')) {
+      ui.openPanel('foodTray');
+    }
   }, POLL_MS);
 
   onEnterStep(machine.current());

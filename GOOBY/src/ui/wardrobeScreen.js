@@ -21,29 +21,30 @@ const PREVIEW_H = 280;
 const THUMB_SIZE = 108;
 
 const WARDROBE_CSS = `
-.screen-wardrobe{justify-content:flex-start;overflow-y:auto;}
-.g12-wr-head{width:100%;max-width:440px;display:flex;align-items:center;gap:10px;margin:6px 0 10px;}
-.g12-wr-title{flex:1;margin:0;font-size:30px;font-weight:800;color:var(--brown);}
-.g12-wr-coins{display:inline-flex;align-items:center;gap:6px;background:var(--white);border-radius:999px;padding:8px 14px;font-size:16px;font-weight:800;color:var(--brown);box-shadow:var(--shadow-soft);}
+.screen-wardrobe{justify-content:flex-start;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+.g12-wr-head{width:100%;max-width:440px;display:flex;align-items:center;gap:10px;margin:6px 0 10px;flex:none;}
+/* F3: the title shrinks/ellipsizes at narrow widths — never the coins pill */
+.g12-wr-title{flex:1;min-width:0;margin:0;font-size:clamp(21px,7.5vw,30px);font-weight:800;color:var(--brown);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.g12-wr-coins{flex:none;display:inline-flex;align-items:center;gap:6px;background:var(--white);border-radius:999px;padding:8px 14px;font-size:16px;font-weight:800;color:var(--brown);box-shadow:var(--shadow-soft);}
 .g12-wr-coins svg{color:var(--yellow);}
 .g12-wr-stage{position:relative;width:100%;max-width:440px;height:${PREVIEW_H}px;border-radius:24px;overflow:hidden;background:linear-gradient(#DFF3F0,#FFF6EC);box-shadow:var(--shadow-soft);flex:none;}
 .g12-wr-stage canvas{display:block;width:100%;height:100%;}
 .g12-wr-tryon{position:absolute;top:10px;left:12px;background:rgba(255,255,255,.9);border-radius:999px;padding:6px 12px;font-size:13px;font-weight:800;color:var(--pink-dark);box-shadow:var(--shadow-soft);}
-.g12-wr-tabs{width:100%;max-width:440px;display:flex;gap:6px;margin:12px 0 10px;}
-.g12-wr-tab{flex:1;border:none;border-radius:16px;background:rgba(255,255,255,.75);border-bottom:4px solid rgba(74,59,54,.12);color:var(--brown);font-family:inherit;font-size:14px;font-weight:800;min-height:46px;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+.g12-wr-tabs{width:100%;max-width:440px;display:flex;gap:6px;margin:12px 0 10px;flex:none;}
+.g12-wr-tab{flex:1;min-width:0;border:none;border-radius:16px;background:rgba(255,255,255,.75);border-bottom:4px solid rgba(74,59,54,.12);color:var(--brown);font-family:inherit;font-size:clamp(12px,3.9vw,14px);font-weight:800;min-height:46px;padding:4px 2px;cursor:pointer;-webkit-tap-highlight-color:transparent;}
 .g12-wr-tab.g12-on{background:var(--pink);border-bottom-color:var(--pink-dark);color:#fff;}
-.g12-wr-grid{width:100%;max-width:440px;display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding-bottom:18px;}
-.g12-wr-item{position:relative;display:flex;flex-direction:column;align-items:center;gap:4px;border:3px solid transparent;border-radius:18px;background:var(--white);box-shadow:var(--shadow-soft);font-family:inherit;color:var(--brown);cursor:pointer;padding:8px 6px 10px;-webkit-tap-highlight-color:transparent;transition:transform 90ms ease;}
+.g12-wr-grid{width:100%;max-width:440px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding-bottom:18px;flex:none;}
+.g12-wr-item{position:relative;display:flex;flex-direction:column;align-items:center;gap:4px;min-width:0;border:3px solid transparent;border-radius:18px;background:var(--white);box-shadow:var(--shadow-soft);font-family:inherit;color:var(--brown);cursor:pointer;padding:8px 4px 10px;-webkit-tap-highlight-color:transparent;transition:transform 90ms ease;}
 .g12-wr-item:active{transform:scale(.95);}
 .g12-wr-item.g12-equipped{border-color:var(--pink);}
 .g12-wr-item.g12-tryon{border-color:var(--teal);}
 .g12-wr-item img{width:${THUMB_SIZE / 2}px;height:${THUMB_SIZE / 2}px;border-radius:12px;background:#FDF3E7;}
-.g12-wr-item-name{font-size:11.5px;font-weight:800;line-height:1.15;text-align:center;max-height:27px;overflow:hidden;}
+.g12-wr-item-name{font-size:11.5px;font-weight:800;line-height:1.15;text-align:center;max-width:100%;max-height:27px;overflow:hidden;overflow-wrap:anywhere;}
 .g12-wr-item-sub{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:800;opacity:.75;min-height:16px;}
 .g12-wr-item-sub svg{color:var(--yellow);}
 .g12-wr-item-sub.g12-sub-equipped{color:var(--pink-dark);opacity:1;}
 .g12-wr-item-sub.g12-sub-owned{color:var(--teal-dark);opacity:1;}
-.g12-wr-buy{margin-top:2px;min-height:34px;padding:4px 14px;font-size:13px;border-radius:12px;}
+.g12-wr-buy{margin-top:2px;min-height:44px;padding:4px 14px;font-size:13px;border-radius:12px;} /* F3: ≥44px touch target */
 .g12-wr-hint{width:100%;max-width:440px;text-align:center;font-size:12.5px;font-weight:700;opacity:.55;padding-bottom:14px;}
 `;
 
@@ -127,7 +128,10 @@ export function registerWardrobe({ store, ui, audio }) {
     backBtn.innerHTML = icon('arrowLeft', 22);
     backBtn.addEventListener('click', () => {
       audio.play('ui.close');
-      if (buyMode && typeof params.onBack === 'function') params.onBack();
+      // F3: context-aware back (§C4) — when opened from the shop (Outfits
+      // tab, trip OR browse), return to the shop screen instead of dumping
+      // the player into the bare 3D scene. Normal entries keep closeAll().
+      if (typeof params.onBack === 'function') params.onBack();
       else ui.closeAll();
     });
     const title = document.createElement('h1');

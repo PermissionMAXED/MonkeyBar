@@ -52,6 +52,13 @@ const stats = { nodesCreated: 0, plays: 0, errors: 0 };
 const buffers = new Map();
 /** @type {Map<string, {stop: () => void}>} live loop handles by sfx id */
 const loops = new Map();
+/** F3: loop ids requested while the ctx/sfx bus was unavailable (pre-gesture
+ * boot mid-sleep, or muted) — resumed on init()/unmute so e.g. the snore
+ * survives a reload during a nap (§D6). */
+const pendingLoops = new Set();
+/** F3: true once the user really interacted (init() runs on the first
+ * pointerdown) — navigator.vibrate before that logs console errors on web. */
+let hasGesture = false;
 
 // ---------------------------------------------------------------------------
 // Init + settings
@@ -65,7 +72,23 @@ function applySettings(settings) {
     enabled.haptics = settings.haptics !== false;
   }
   applyGains();
-  if (!enabled.sfx) stopAllLoops();
+  // F3: park running loops while sfx is off; bring them back on re-enable
+  // (e.g. mute during a nap must not permanently silence the snore).
+  if (!enabled.sfx) {
+    for (const id of loops.keys()) pendingLoops.add(id);
+    stopAllLoops();
+  } else {
+    resumePendingLoops();
+  }
+}
+
+/** F3: (re)start loops that were requested while blocked (no ctx / sfx off). */
+function resumePendingLoops() {
+  if (!ctx || !enabled.sfx) return;
+  for (const id of [...pendingLoops]) {
+    pendingLoops.delete(id);
+    play(id);
+  }
 }
 
 function applyGains() {
@@ -77,6 +100,7 @@ function applyGains() {
 
 /** Init on first user gesture (iOS unlock requirement §D6). Idempotent. */
 export function init() {
+  hasGesture = true; // F3: init() is wired to the first pointerdown (main.js)
   if (ctx) {
     if (ctx.state === 'suspended') ctx.resume().catch(() => {});
     return;
@@ -119,6 +143,21 @@ export function init() {
   }
 
   if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  // F3: keep the context alive across tab hides + iOS suspensions — resume
+  // on visibility return and on any later gesture if it got suspended.
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && ctx?.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+    });
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pointerdown', () => {
+      hasGesture = true;
+      if (ctx?.state === 'suspended') ctx.resume().catch(() => {});
+    });
+  }
   // Prewarm the tap set so the very first button click is snappy.
   for (const k of ['interface-sounds/click_001', 'interface-sounds/click_002']) loadBuffer(k);
   if (pendingTrack !== undefined) {
@@ -126,6 +165,7 @@ export function init() {
     pendingTrack = undefined;
     startMusic(track);
   }
+  resumePendingLoops(); // F3: e.g. snore requested at boot while asleep (§D6)
   console.info(`[audio] WebAudio init — state=${ctx.state}, sampleRate=${ctx.sampleRate}, buses=sfx/music`);
 }
 
@@ -314,7 +354,13 @@ export function play(id, opts = {}) {
     return;
   }
   if (def.haptic) impact(def.haptic);
-  if (!ctx || !enabled.sfx) return;
+  if (!ctx || !enabled.sfx) {
+    // F3: remember loop requests (snore) so they start once unblocked —
+    // covers "reload mid-sleep, first tap arrives later" and mute cycles.
+    if (def.loop) pendingLoops.add(id);
+    return;
+  }
+  pendingLoops.delete(id);
   stats.plays += 1;
   const vol = (def.volume ?? 1) * (opts.volume ?? 1);
   try {
@@ -350,6 +396,7 @@ export function play(id, opts = {}) {
  * @param {string} id
  */
 export function stop(id) {
+  pendingLoops.delete(id); // F3: also cancel not-yet-started loop requests
   const handle = loops.get(id);
   if (!handle) return;
   loops.delete(id);
@@ -534,7 +581,9 @@ export function impact(style = 'light') {
   nativeHaptics().then((plugin) => {
     if (plugin) {
       plugin.impact({ style: style === 'heavy' ? 'HEAVY' : style === 'medium' ? 'MEDIUM' : 'LIGHT' }).catch(() => {});
-    } else if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+    } else if (hasGesture && typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+      // F3: web vibrate only AFTER the first user gesture — earlier calls
+      // (boot-time low-stat ticks etc.) spam "Blocked call" console errors.
       navigator.vibrate(style === 'light' ? 8 : 16);
     }
   });
@@ -542,7 +591,15 @@ export function impact(style = 'light') {
 
 /** Diagnostics snapshot (dev/DoD verification). */
 export function getStats() {
-  return { ...stats, ctxState: ctx?.state ?? 'uninitialized', loops: loops.size, track: seq?.id ?? null };
+  return {
+    ...stats,
+    ctxState: ctx?.state ?? 'uninitialized',
+    loops: loops.size,
+    pendingLoops: pendingLoops.size, // F3
+    track: seq?.id ?? null,
+    // F3: live bus gains — headless proof that mute/unmute really lands
+    gains: bus ? { sfx: bus.sfx.gain.value, music: bus.music.gain.value } : null,
+  };
 }
 
 export default { init, play, music, setVolume, stop, impact, getStats };

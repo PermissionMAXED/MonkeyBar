@@ -25,6 +25,14 @@
   --safe-right: env(safe-area-inset-right, 0px);
 }
 
+/* F3: predictable sizing everywhere — padding/borders stay inside declared
+   widths so grids/pills can never overflow their tracks at narrow widths. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 #ui {
   font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
   color: var(--brown);
@@ -355,11 +363,14 @@
 /* ---------- G6: sleep flow — countdown chip + wake sheet (§C1.4) ---------- */
 
 /* G6 */
+/* F3: sits BELOW the HUD top block (stat pills + coins/XP rows end ~98px)
+   so the chip never overlaps the pills at 320px width. */
 .sleep-chip {
   position: absolute;
-  top: calc(14px + var(--safe-top));
+  top: calc(104px + var(--safe-top));
   left: 50%;
   transform: translateX(-50%);
+  max-width: calc(100vw - 24px);
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -418,12 +429,22 @@
 }
 
 /* G6 — settings screen */
+/* F3: scrollable at short viewports (320×568) — flex-start + overflow so the
+   top (back button) and bottom (footer) are always reachable; margin:auto
+   keeps the card vertically centered when there IS room. */
+.screen-settings {
+  justify-content: flex-start;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
 .settings-wrap {
   width: min(420px, 100%);
   display: flex;
   flex-direction: column;
   gap: 16px;
   align-self: center;
+  margin: auto 0;
+  flex: none;
 }
 .settings-head {
   display: flex;
@@ -499,7 +520,7 @@
   font-family: inherit;
   font-size: 15px;
   font-weight: 800;
-  min-height: 42px;
+  min-height: 44px; /* F3: ≥44px touch target */
   min-width: 52px;
   padding: 6px 12px;
   border-radius: 11px;
@@ -530,12 +551,15 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap; /* F3: the Go-home button wraps below at 320px, never clips */
+  flex: none;
 }
 .shop-title {
-  font-size: 28px;
+  font-size: clamp(21px, 7vw, 28px); /* F3: shrink before the pill/button do */
   font-weight: 800;
   margin: 0;
   flex: 1;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -550,6 +574,14 @@
   font-size: 17px;
   font-weight: 800;
   box-shadow: var(--shadow-soft);
+  flex: none; /* F3: the coins pill never squishes */
+}
+/* F3: compact Go-home button so the trip header fits narrow widths */
+.shop-head .shop-home {
+  min-height: 44px;
+  padding: 8px 14px;
+  font-size: 15px;
+  flex: none;
 }
 .shop-coins svg {
   color: var(--yellow);
@@ -561,10 +593,15 @@
   font-size: 14px;
   font-weight: 700;
   text-align: center;
+  flex: none;
 }
 .shop-tabs {
   display: flex;
   gap: 6px;
+  flex: none;
+}
+.shop-tab {
+  min-width: 0; /* F3: tabs shrink evenly, labels wrap instead of clipping */
 }
 .shop-tab {
   flex: 1;
@@ -599,7 +636,7 @@
 }
 .shop-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr)); /* F3: tracks may shrink */
   gap: 10px;
 }
 .shop-card {
@@ -663,8 +700,10 @@
 }
 .shop-buybar {
   display: flex;
+  flex-wrap: wrap; /* F3: name row on top, stepper+buy row below — the single
+                      row crushed the item name to nothing at ≤375px */
   align-items: center;
-  gap: 10px;
+  gap: 8px 10px;
   background: var(--white);
   border-radius: 18px;
   box-shadow: var(--shadow-soft);
@@ -672,11 +711,14 @@
   margin-bottom: 4px;
 }
 .shop-buybar .shop-buybar-info {
-  flex: 1;
+  flex: 1 1 100%;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 1px;
+}
+.shop-buybar .shop-qty {
+  flex: 1; /* F3: stepper left, buy button right on the controls row */
 }
 .shop-buybar .shop-buybar-name {
   font-size: 15px;
@@ -699,8 +741,9 @@
   gap: 6px;
 }
 .qty-btn {
-  width: 40px;
-  height: 40px;
+  /* F3: ≥44px touch target */
+  width: 44px;
+  height: 44px;
   border: none;
   border-radius: 12px;
   background: var(--bg-cream);
@@ -816,7 +859,7 @@
 .room-chip {
   border: none;
   border-radius: 999px;
-  min-height: 40px;
+  min-height: 44px; /* F3: ≥44px touch target */
   padding: 6px 14px;
   background: rgba(255, 255, 255, 0.75);
   color: var(--brown);
@@ -850,7 +893,7 @@
 }
 .decor-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr)); /* F3: tracks may shrink */
   gap: 10px;
   max-height: 44vh;
   overflow-y: auto;
@@ -907,6 +950,12 @@
 }
 .g14-toggle.g14-on .g14-knob {
   transform: translateX(22px);
+}
+/* F3: invisible hit-area expansion — visual 52×30 stays, taps get ≥44px */
+.g14-toggle::after {
+  content: '';
+  position: absolute;
+  inset: -8px -4px;
 }
 
 /* onboarding overlay (§C8.1): floats over the live scene, input passes through */
@@ -970,7 +1019,7 @@
 }
 .g14-ob-skip {
   font-size: 12px;
-  min-height: 36px;
+  min-height: 44px; /* F3: ≥44px touch target */
 }
 
 /* HUD-tour spotlight pulse (§C8.1 #5) */

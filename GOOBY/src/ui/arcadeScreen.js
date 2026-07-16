@@ -12,15 +12,21 @@ import { isMinigameUnlocked } from '../systems/leveling.js';
 import { hasGame } from '../minigames/registry.js';
 
 const ARCADE_CSS = `
-.screen-arcade{justify-content:flex-start;overflow-y:auto;}
-.g5-arcade-head{width:100%;max-width:440px;display:flex;align-items:center;gap:10px;margin:6px 0 14px;}
-.g5-arcade-title{flex:1;margin:0;font-size:30px;font-weight:800;color:var(--brown);}
-.g5-arcade-grid{width:100%;max-width:440px;display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding-bottom:16px;}
-.g5-tile{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;aspect-ratio:1;border:none;border-radius:20px;background:var(--white);border-bottom:4px solid rgba(74,59,54,.12);box-shadow:var(--shadow-soft);font-family:inherit;color:var(--brown);cursor:pointer;padding:8px 6px;-webkit-tap-highlight-color:transparent;transition:transform 90ms ease;}
+.screen-arcade{justify-content:flex-start;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+.g5-arcade-head{width:100%;max-width:440px;display:flex;align-items:center;gap:10px;margin:6px 0 14px;flex:none;}
+.g5-arcade-title{flex:1;min-width:0;margin:0;font-size:30px;font-weight:800;color:var(--brown);}
+.g5-arcade-grid{width:100%;max-width:440px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding-bottom:16px;flex:none;}
+.g5-tile{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-width:0;aspect-ratio:1;border:none;border-radius:20px;background:var(--white);border-bottom:4px solid rgba(74,59,54,.12);box-shadow:var(--shadow-soft);font-family:inherit;color:var(--brown);cursor:pointer;padding:8px 4px;-webkit-tap-highlight-color:transparent;transition:transform 90ms ease;}
 .g5-tile:active{transform:scale(.95);}
-.g5-tile-icon{width:44px;height:44px;border-radius:14px;display:flex;align-items:center;justify-content:center;color:#fff;}
-.g5-tile-name{font-size:11px;font-weight:800;line-height:1.15;text-align:center;max-height:26px;overflow:hidden;}
-.g5-tile-best{font-size:10px;font-weight:700;opacity:.55;}
+.g5-tile-icon{width:44px;height:44px;border-radius:14px;display:flex;align-items:center;justify-content:center;color:#fff;flex:none;}
+.g5-tile-name{font-size:11px;font-weight:800;line-height:1.15;text-align:center;max-width:100%;max-height:26px;overflow:hidden;overflow-wrap:anywhere;}
+.g5-tile-best{font-size:10px;font-weight:700;opacity:.55;max-width:100%;overflow:hidden;white-space:nowrap;}
+/* F3: 320px-wide fit — tighter screen padding + gaps, slightly smaller icons */
+@media (max-width:359px){
+  .screen-arcade{padding-left:calc(10px + var(--safe-left));padding-right:calc(10px + var(--safe-right));}
+  .g5-arcade-grid{gap:8px;}
+  .g5-tile-icon{width:38px;height:38px;}
+}
 .g5-tile-lock{position:absolute;inset:0;border-radius:20px;background:rgba(74,59,54,.55);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:#fff;font-size:12px;font-weight:800;backdrop-filter:blur(1px);}
 .g5-tile-lock svg{opacity:.9;}
 .g5-tile.g5-locked{cursor:default;}

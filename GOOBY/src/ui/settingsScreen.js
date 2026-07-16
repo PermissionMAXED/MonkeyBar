@@ -44,6 +44,8 @@ export function createSettingsScreen({ store, ui }) {
   let root = null;
   /** Reset double-confirm progress: 0 = idle, 1 = one confirm done. */
   let resetStep = 0;
+  /** F3: mount-scoped store subscription (live permission-label refresh). */
+  let offChange = null;
 
   function render() {
     const el = root;
@@ -167,13 +169,11 @@ export function createSettingsScreen({ store, ui }) {
       ui.toast('settings.notif.blocked');
       return;
     }
-    // Deep-link back into the §C7 soft-ask (forced — the user asked).
+    // Deep-link back into the §C7 soft-ask (forced — the user asked). The
+    // status label re-renders via the mount-scoped subscription below (F3:
+    // a one-shot 'change' listener got eaten by the 1 Hz stat tick before
+    // the user answered, leaving a stale label).
     maybeSoftAsk({ store, ui }, { force: true });
-    const once = () => {
-      store.off('change', once);
-      render();
-    };
-    store.on('change', once);
   }
 
   return {
@@ -182,8 +182,20 @@ export function createSettingsScreen({ store, ui }) {
       root = el;
       resetStep = 0;
       render();
+      // F3: re-render from LIVE permission state whenever it changes while
+      // the screen is open (the soft-ask panel / OS prompt writes the store).
+      let lastNotif = store.get('settings.notifications');
+      offChange = store.on('change', () => {
+        const cur = store.get('settings.notifications');
+        if (cur !== lastNotif) {
+          lastNotif = cur;
+          render();
+        }
+      });
     },
     unmount() {
+      offChange?.();
+      offChange = null;
       root = null;
     },
   };

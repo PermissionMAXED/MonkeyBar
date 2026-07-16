@@ -408,7 +408,16 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
       // G12 wires: the wardrobe screen registers itself at boot — open it in
       // buy mode when present (feature-detect), else a friendly toast.
       if (ui.hasScreen('wardrobe')) {
-        ui.showScreen('wardrobe', { mode: atTrip() ? 'buy' : 'browse', from: 'shop' });
+        // F3: context-aware back — the wardrobe's back button must return to
+        // THIS shop screen (trip state intact; systems/shopTrip.js keeps the
+        // machine in 'shop' meanwhile) instead of ui.closeAll(), which would
+        // strand the player over the parked-car scene with no UI (§C4).
+        const returnMode = mode; // capture: the closure var resets on remount
+        ui.showScreen('wardrobe', {
+          mode: atTrip() ? 'buy' : 'browse',
+          from: 'shop',
+          onBack: () => ui.showScreen('shop', { mode: returnMode, tab: 'outfits' }),
+        });
       } else {
         ui.toast('toast.comingSoon');
       }

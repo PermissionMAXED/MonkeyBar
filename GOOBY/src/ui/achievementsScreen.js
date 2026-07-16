@@ -10,11 +10,13 @@ import { t } from '../data/strings.js';
 import { icon } from './icons.js';
 
 const ACH_CSS = `
-.screen-achievements{justify-content:flex-start;overflow-y:auto;}
-.g12-ach-head{width:100%;max-width:440px;display:flex;align-items:center;gap:10px;margin:6px 0 6px;}
-.g12-ach-title{flex:1;margin:0;font-size:30px;font-weight:800;color:var(--brown);}
-.g12-ach-count{background:var(--white);border-radius:999px;padding:8px 14px;font-size:15px;font-weight:800;color:var(--teal-dark);box-shadow:var(--shadow-soft);}
-.g12-ach-list{width:100%;max-width:440px;display:flex;flex-direction:column;gap:8px;padding-bottom:18px;}
+.screen-achievements{justify-content:flex-start;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+.g12-ach-head{width:100%;max-width:440px;display:flex;align-items:center;gap:10px;margin:6px 0 6px;flex:none;}
+/* F3: title shrinks/ellipsizes at narrow widths — never the count pill
+   (6vw keeps "Achievements" un-ellipsized beside the pill at 320px) */
+.g12-ach-title{flex:1;min-width:0;margin:0;font-size:clamp(17px,6vw,30px);font-weight:800;color:var(--brown);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.g12-ach-count{flex:none;background:var(--white);border-radius:999px;padding:8px 12px;font-size:15px;font-weight:800;color:var(--teal-dark);box-shadow:var(--shadow-soft);}
+.g12-ach-list{width:100%;max-width:440px;display:flex;flex-direction:column;gap:8px;padding-bottom:18px;flex:none;}
 .g12-ach-tile{display:flex;align-items:center;gap:12px;background:var(--white);border-radius:18px;box-shadow:var(--shadow-soft);padding:10px 14px;}
 .g12-ach-tile.g12-locked{opacity:.92;}
 .g12-ach-medal{flex:none;width:46px;height:46px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(74,59,54,.08);color:rgba(74,59,54,.35);}

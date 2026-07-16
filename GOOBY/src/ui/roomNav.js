@@ -17,10 +17,13 @@ const NAV_CSS = `
 .rn-left{left:calc(8px + env(safe-area-inset-left));}
 .rn-right{right:calc(8px + env(safe-area-inset-right));}
 .rn-dots{pointer-events:auto;position:absolute;left:50%;transform:translateX(-50%);
-  bottom:calc(14px + env(safe-area-inset-bottom));display:flex;gap:10px;padding:8px 12px;
+  bottom:calc(14px + env(safe-area-inset-bottom));display:flex;gap:32px;padding:8px 16px;
   background:rgba(255,255,255,.72);border-radius:999px;box-shadow:0 2px 8px rgba(74,59,54,.14);}
-.rn-dot{width:12px;height:12px;border-radius:50%;border:none;padding:0;background:#E3D3C2;cursor:pointer;
+.rn-dot{position:relative;width:12px;height:12px;border-radius:50%;border:none;padding:0;background:#E3D3C2;cursor:pointer;
   transition:background .2s,transform .2s;}
+/* F3 (§D5 44px targets): 32px dot pitch leaves room for tangent, non-overlapping
+   44x44 invisible hit areas per dot (12px dot + 16px halo each side). */
+.rn-dot::after{content:'';position:absolute;inset:-16px;}
 .rn-dot.on{background:#FF7BA9;transform:scale(1.25);}
 `;
 

@@ -166,7 +166,7 @@ export const EN = {
   'hud.arcade': 'Arcade',
   'hud.shop': 'Shop',
   'hud.wardrobe': 'Wardrobe',
-  'hud.achievements': 'Achievements',
+  'hud.achievements': 'Trophies', // F3: fits the 54px HUD button unclipped
   'hud.settings': 'Settings',
   'hud.mute': 'Sound',
   'stat.hunger': 'Hunger',
@@ -639,9 +639,9 @@ export const DE = {
   // --- G5: HUD (§D5) ---
   'hud.arcade': 'Arcade',
   'hud.shop': 'Laden',
-  'hud.wardrobe': 'Kleiderschrank',
+  'hud.wardrobe': 'Garderobe', // F3: „Kleiderschrank" clipped the 54px button
   'hud.achievements': 'Erfolge',
-  'hud.settings': 'Einstellungen',
+  'hud.settings': 'Optionen', // F3: „Einstellungen" clipped the 54px button
   'hud.mute': 'Ton',
   'stat.hunger': 'Hunger',
   'stat.energy': 'Energie',
@@ -749,7 +749,7 @@ export const DE = {
   'mg.tramp.butt': 'Autsch – Po-Landung!',
 
   // --- G12: wardrobe & outfits (§C5.3) ---
-  'wardrobe.title': 'Kleiderschrank',
+  'wardrobe.title': 'Garderobe', // F3: never collides with the coins pill at 320px
   'wardrobe.slot.hat': 'Hüte',
   'wardrobe.slot.glasses': 'Brillen',
   'wardrobe.slot.neck': 'Halsschmuck',

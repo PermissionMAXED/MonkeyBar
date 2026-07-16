@@ -5,7 +5,7 @@
 // home scene is active. All numbers from data/constants.js; all text via t().
 
 import { STATS, XP, UI_COLORS } from '../data/constants.js';
-import { t } from '../data/strings.js';
+import { t, getLang } from '../data/strings.js';
 import { icon } from './icons.js';
 import { xpToNext } from '../systems/leveling.js';
 
@@ -110,6 +110,8 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
   const btns = document.createElement('div');
   btns.className = 'g5-hud-btns';
 
+  /** @type {Array<{b: HTMLButtonElement, labelKey: string}>} F3: live re-label */
+  const labeled = [];
   function button(id, iconName, labelKey, onTap, extraClass = '') {
     const b = document.createElement('button');
     b.className = `g5-hud-btn ${extraClass}`.trim();
@@ -120,6 +122,7 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
       onTap(b);
     });
     btns.appendChild(b);
+    labeled.push({ b, labelKey });
     return b;
   }
 
@@ -148,12 +151,15 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
   const muteBtn = button('mute', 'bell', 'hud.mute', () => {
     const muted = store.get('settings.sfx') === false;
     const on = muted; // toggling: muted → unmute
+    // F3 (single source of truth §D6): ONLY flip the persisted flags —
+    // audio.js follows the store live and derives its bus gains from
+    // settings.sfx/music. No direct setVolume pokes (they used to desync the
+    // runtime multipliers from the settings screen's toggles).
     store.update((st) => {
       st.settings.sfx = on;
       st.settings.music = on;
     });
-    audio.setVolume('sfx', on ? 1 : 0);
-    audio.setVolume('music', on ? 1 : 0);
+    store.flush(); // sync events so audio.js applies the new gains NOW
     syncMute();
   });
   function syncMute() {
@@ -184,10 +190,23 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
     ringFg.style.strokeDashoffset = String(RING_C * (1 - frac));
     syncMute();
   }
+  // F3: live re-label on language switch (settings live-switch §A — the HUD is
+  // a persistent layer built once at boot, so baked t() labels went stale).
+  let hudLang = getLang();
+  function syncLang() {
+    if (getLang() === hudLang) return;
+    hudLang = getLang();
+    for (const { b, labelKey } of labeled) {
+      b.querySelector('.g5-btn-label').textContent = t(labelKey);
+    }
+    for (const key of STATS.KEYS) statEls[key].pill.title = t(`stat.${key}`);
+    ring.querySelector('.g5-ring-cap').textContent = t('ui.level');
+  }
   const offs = [
     store.on('statsChanged', refresh),
     store.on('coinsChanged', refresh),
     store.on('xpChanged', refresh),
+    store.on('change', () => { syncMute(); syncLang(); }), // F3: stay snappy when settings flip sfx/lang
   ];
   refresh();
 

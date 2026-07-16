@@ -18,10 +18,10 @@ const DAILY_CSS = `
 .g12-daily{text-align:center;}
 .g12-daily-title{margin:0 0 2px;font-size:24px;font-weight:800;color:var(--brown);}
 .g12-daily-sub{margin:0 0 14px;font-size:13.5px;font-weight:700;opacity:.6;}
-.g12-daily-cal{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;margin-bottom:14px;}
-.g12-daily-slot{display:flex;flex-direction:column;align-items:center;gap:2px;background:rgba(74,59,54,.06);border:2.5px solid transparent;border-radius:13px;padding:7px 2px;}
-.g12-daily-slot-day{font-size:10px;font-weight:800;opacity:.55;}
-.g12-daily-slot-coins{display:inline-flex;align-items:center;gap:2px;font-size:11.5px;font-weight:800;color:var(--brown);}
+.g12-daily-cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px;margin-bottom:14px;}
+.g12-daily-slot{display:flex;flex-direction:column;align-items:center;gap:2px;min-width:0;background:rgba(74,59,54,.06);border:2.5px solid transparent;border-radius:13px;padding:7px 1px;}
+.g12-daily-slot-day{font-size:10px;font-weight:800;opacity:.55;white-space:nowrap;}
+.g12-daily-slot-coins{display:inline-flex;align-items:center;gap:1px;font-size:11px;font-weight:800;color:var(--brown);white-space:nowrap;}
 .g12-daily-slot-coins svg{color:var(--yellow);}
 .g12-daily-slot-food{font-size:10px;line-height:1;}
 .g12-daily-slot.g12-past{background:rgba(89,201,185,.18);}
