@@ -1,5 +1,5 @@
-// Persistence adapter + save schema v1 (§E3). localStorage on web (Capacitor
-// Preferences adapter lands with G13; migrations extended by G6). Corrupt or
+// Persistence adapter + save schema v1 (§E3). localStorage on web, mirrored to
+// Capacitor Preferences on native (G13; migrations extended by G6). Corrupt or
 // forward-version saves are backed up to `gooby.save.corrupt` and replaced with
 // a fresh state — load() never crashes. Pure module: no three.js/DOM imports
 // (localStorage access is guarded so node:test can run it headlessly).
@@ -29,6 +29,47 @@ const storage = {
     else memory.delete(key);
   },
 };
+
+// --- G13: guarded Capacitor Preferences mirror (§E3/§F1) ---
+// On native, WKWebView localStorage works but iOS may evict it under storage
+// pressure, so every persist is mirrored to @capacitor/preferences (durable).
+// Same dynamic-import guard pattern as core/notifications.js: the web build
+// never hard-requires the plugin. If localStorage lost the save but the mirror
+// still has it, restore + reload once (the already-booted fresh state must not
+// clobber the recovered save — load() is synchronous and has already run).
+
+/** @type {object|null} the Preferences plugin once resolved on native */
+let prefs = null;
+
+async function initPreferencesMirror() {
+  const cap = globalThis.Capacitor;
+  if (!cap?.isNativePlatform?.()) return;
+  try {
+    let plugin = cap.Plugins?.Preferences ?? null;
+    if (!plugin) {
+      // Non-literal specifier so Rollup/Vite never resolve it at build time.
+      const specifier = '@capacitor/preferences';
+      const mod = await import(/* @vite-ignore */ specifier);
+      plugin = mod?.Preferences ?? null;
+    }
+    if (!plugin) return;
+    if (storage.getItem(SAVE.KEY) == null) {
+      const { value } = await plugin.get({ key: SAVE.KEY });
+      if (value != null) {
+        storage.setItem(SAVE.KEY, value);
+        prefs = plugin;
+        globalThis.location?.reload?.();
+        return;
+      }
+    }
+    prefs = plugin;
+  } catch (err) {
+    console.warn('[save] preferences mirror unavailable:', err?.message);
+    prefs = null;
+  }
+}
+initPreferencesMirror();
+// --- end G13 ---
 
 // --- schema ---
 
@@ -160,7 +201,10 @@ export function load() {
  */
 export function persist(state) {
   try {
-    storage.setItem(SAVE.KEY, JSON.stringify(state));
+    const json = JSON.stringify(state);
+    storage.setItem(SAVE.KEY, json);
+    // G13: mirror to Capacitor Preferences on native (fire-and-forget).
+    prefs?.set({ key: SAVE.KEY, value: json })?.catch?.(() => {});
   } catch (err) {
     console.warn('[save] persist failed:', err?.message);
   }
@@ -169,4 +213,6 @@ export function persist(state) {
 /** Wipe the save (dev harness ?reset=1 — §E9). */
 export function clear() {
   storage.removeItem(SAVE.KEY);
+  // G13: clear the native Preferences mirror too.
+  prefs?.remove({ key: SAVE.KEY })?.catch?.(() => {});
 }

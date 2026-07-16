@@ -1,0 +1,14 @@
+{
+  "appId": "com.permissionmaxed.gooby",
+  "appName": "Gooby",
+  "webDir": "dist",
+  "ios": {
+    "contentInset": "never"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 800,
+      "backgroundColor": "#FFF6EC"
+    }
+  }
+}

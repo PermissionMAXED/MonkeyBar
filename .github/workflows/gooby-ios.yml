@@ -1,0 +1,65 @@
+# GOOBY iOS CI (PLAN §F3, agent G13): web checks on Linux, then an unsigned
+# .ipa built on macOS (no Apple certificates — sideload via AltStore/Sideloadly).
+name: GOOBY iOS
+
+on:
+  push:
+    paths:
+      - 'GOOBY/**'
+      - '.github/workflows/gooby-ios.yml'
+  workflow_dispatch:
+
+jobs:
+  web-checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: GOOBY
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: GOOBY/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  ios-ipa:
+    runs-on: macos-15
+    needs: web-checks
+    defaults:
+      run:
+        working-directory: GOOBY
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: GOOBY/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npx cap sync ios
+      - name: pod install
+        working-directory: GOOBY/ios/App
+        run: pod install
+      - name: xcodebuild (unsigned Release)
+        working-directory: GOOBY/ios/App
+        run: >
+          xcodebuild -workspace App.xcworkspace -scheme App -configuration Release
+          -sdk iphoneos -derivedDataPath "$RUNNER_TEMP/dd"
+          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+          build
+      - name: package unsigned ipa
+        working-directory: GOOBY/ios/App
+        run: |
+          mkdir Payload
+          cp -R "$RUNNER_TEMP/dd/Build/Products/Release-iphoneos/App.app" Payload/
+          zip -qry gooby-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gooby-unsigned-ipa
+          path: GOOBY/ios/App/gooby-unsigned.ipa
