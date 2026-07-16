@@ -404,6 +404,31 @@ export const DRIVE_TUNING = Object.freeze({
   ARCADE_COINS_ACTIVE: 26,
 });
 
+/**
+ * Dance Party (§C6.1 #9) — BINDING rhythm numbers, and the shared music
+ * contract with §D6/G14: the seeded 75 s note pattern and the real 100 BPM
+ * dance track both derive from BPM + PATTERN_SEED, so when G14's procedural
+ * track lands, the notes line up. The game drives note timing from the
+ * framework clock (dt/elapsed) at this BPM — never from wall-clock timers.
+ */
+export const DANCE = Object.freeze({
+  /** Track tempo (§C6.1 #9 / §D6: 100 BPM upbeat dance variant). */
+  BPM: 100,
+  /** Seed of the 75 s note pattern — same seed G14's track generator uses. */
+  PATTERN_SEED: 100_2026,
+  /** Round / track length (s). */
+  DURATION_SEC: 75,
+  /** Note lanes. */
+  LANES: 3,
+  /** Hit windows (§C6.1 #9): perfect ≤ 70 ms (+4) / good ≤ 140 ms (+2). */
+  PERFECT_MS: 70,
+  GOOD_MS: 140,
+  PERFECT_PTS: 4,
+  GOOD_PTS: 2,
+  /** Score = sum − 2 × misses (§C6.1 #9); a miss also resets the combo. */
+  MISS_PENALTY: 2,
+});
+
 /** UI palette (§D5) — pastel brand system, mirrored by CSS vars in ui/styles.css. */
 export const UI_COLORS = Object.freeze({
   BG_CREAM: '#FFF6EC',
