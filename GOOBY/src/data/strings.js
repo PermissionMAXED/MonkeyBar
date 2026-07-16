@@ -95,6 +95,14 @@ export const EN = {
   'ui.coins': 'Coins',
   'ui.level': 'Level',
 
+  // --- Home rooms & navigation (§C2, G4) ---
+  'room.kitchen': 'Kitchen',
+  'room.living': 'Living Room',
+  'room.bathroom': 'Bathroom',
+  'room.bedroom': 'Bedroom',
+  'nav.prevRoom': 'Previous room',
+  'nav.nextRoom': 'Next room',
+
   // --- Gooby showcase (§E9 ?scene=gooby, G3) ---
   'gooby.showcase.emotions': 'Emotions',
   'gooby.showcase.clips': 'Clips',
@@ -234,6 +242,14 @@ export const DE = {
   'ui.back': 'Zurück',
   'ui.coins': 'Münzen',
   'ui.level': 'Level',
+
+  // --- Home rooms & navigation (§C2, G4) ---
+  'room.kitchen': 'Küche',
+  'room.living': 'Wohnzimmer',
+  'room.bathroom': 'Badezimmer',
+  'room.bedroom': 'Schlafzimmer',
+  'nav.prevRoom': 'Voriger Raum',
+  'nav.nextRoom': 'Nächster Raum',
 
   // --- Gooby showcase (§E9 ?scene=gooby, G3) ---
   'gooby.showcase.emotions': 'Emotionen',
