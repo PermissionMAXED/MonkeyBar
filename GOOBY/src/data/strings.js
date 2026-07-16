@@ -231,6 +231,15 @@ export const EN = {
   'settings.reset.confirm1': 'Really reset? Tap again!',
   'settings.reset.confirm2': 'Last chance — delete everything?',
   'settings.version': 'GOOBY v{v}',
+
+  // --- G9: minigames B (§C6.1 #6–8) ---
+  'mg.runner.stumble': 'Ouch! Careful!',
+  'mg.runner.combo': 'Combo ×{mult}!',
+  'mg.basket.bank': 'Bank shot! +2',
+  'mg.basket.swish': 'Swish streak! +2',
+  'mg.basket.hoopMoves': 'The hoop is moving!',
+  'mg.pancake.perfect': 'Perfect drop!',
+  'mg.pancake.topping': 'Yummy topping! +4',
 };
 
 /** @type {Record<string, string>} */
@@ -462,6 +471,15 @@ export const DE = {
   'settings.reset.confirm1': 'Wirklich zurücksetzen? Nochmal tippen!',
   'settings.reset.confirm2': 'Letzte Chance – alles löschen?',
   'settings.version': 'GOOBY v{v}',
+
+  // --- G9: minigames B (§C6.1 #6–8) ---
+  'mg.runner.stumble': 'Autsch! Vorsicht!',
+  'mg.runner.combo': 'Combo ×{mult}!',
+  'mg.basket.bank': 'Brettwurf! +2',
+  'mg.basket.swish': 'Swish-Serie! +2',
+  'mg.basket.hoopMoves': 'Der Korb bewegt sich!',
+  'mg.pancake.perfect': 'Perfekt gestapelt!',
+  'mg.pancake.topping': 'Leckeres Topping! +4',
 };
 
 const DICTS = { en: EN, de: DE };
