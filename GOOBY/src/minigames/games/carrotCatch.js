@@ -10,6 +10,8 @@ import { UI_COLORS } from '../../data/constants.js';
 import { tween, easings } from '../../gfx/tween.js';
 import { createParticles } from '../../gfx/particles.js';
 import { createGooby } from '../../character/gooby.js';
+import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
+import { getMinigame, computeCoins } from '../../data/minigames.js'; // G14: tutorial coin floor (§C8.1)
 import {
   CATCH,
   GOOD_FOODS,
@@ -102,6 +104,9 @@ export default {
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
 
+    // G14: onboarding tutorial variant (§C8.1) — shorter round + coin floor
+    this.durationSec = Number.isFinite(ctx.params?.durationSec) ? ctx.params.durationSec : CATCH.DURATION_SEC;
+    this.minCoins = Number.isFinite(ctx.params?.minCoins) ? ctx.params.minCoins : null;
     this.phase = 'play'; // 'play' | 'ending' | 'done'
     this.score = 0;
     this.spawnT = 0.6; // small head start before the first item
@@ -161,6 +166,7 @@ export default {
     this.particles = createParticles(scene);
     this.floats = createFloatTexts(scene);
     this.gooby = createGooby({ particles: this.particles });
+    applyEquippedOutfits(this.gooby); // G14: cameo wears the equipped outfits
     this.gooby.group.scale.setScalar(0.85);
     this.gooby.group.position.set(0, -this.halfH + 0.32, 0.2);
     this.gooby.setEmotion('happy');
@@ -205,7 +211,7 @@ export default {
     });
 
     ctx.hud.setScore(0);
-    ctx.hud.setTime(CATCH.DURATION_SEC);
+    ctx.hud.setTime(this.durationSec); // G14: tutorial variant honors params.durationSec
   },
 
   /** Take (or clone) a model holder for an asset key. */
@@ -320,12 +326,15 @@ export default {
       this.endT += dt;
       if (this.endT >= 1.4 && this.phase !== 'done') {
         this.phase = 'done';
-        ctx.onEnd({ score: this.score });
+        // G14: tutorial coin floor (§C8.1 — guaranteed ≥ params.minCoins)
+        const floorCoins = this.minCoins == null ? undefined
+          : Math.max(this.minCoins, computeCoins(getMinigame('carrotCatch').coinTable, this.score, false));
+        ctx.onEnd({ score: this.score, coins: floorCoins });
       }
       return;
     }
 
-    const remaining = CATCH.DURATION_SEC - elapsed;
+    const remaining = this.durationSec - elapsed; // G14: tutorial variant
     ctx.hud.setTime(remaining);
 
     if (this.dizzyT > 0) this.dizzyT -= dt;

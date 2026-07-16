@@ -13,6 +13,7 @@ import { t } from '../../data/strings.js';
 import { tween, easings } from '../../gfx/tween.js';
 import { createParticles } from '../../gfx/particles.js';
 import { createGooby } from '../../character/gooby.js';
+import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
 import {
   BUBBLE,
   riseSpeedAt,
@@ -161,6 +162,7 @@ export default {
     this.particles = createParticles(scene);
     this.floats = createFloatTexts(scene);
     this.gooby = createGooby({ particles: this.particles });
+    applyEquippedOutfits(this.gooby); // G14: cameo wears the equipped outfits
     this.gooby.group.scale.setScalar(0.72);
     this.gooby.group.position.set(-this.halfW + 0.75, -this.halfH + 0.5, 0.5);
     this.gooby.setEmotion('happy');

@@ -8,7 +8,15 @@ import { icon } from './icons.js';
 import * as save from '../core/save.js';
 import * as notifications from '../core/notifications.js';
 import { maybeSoftAsk } from './permissionPrompt.js';
+import audio from '../audio/audio.js'; // G14: audio toggles
 import pkg from '../../package.json';
+
+/** G14: the three §D6 audio/haptics toggles (persisted save settings §E3). */
+const AUDIO_TOGGLES = [
+  { key: 'sfx', icon: 'play', labelKey: 'settings.sfx' },
+  { key: 'music', icon: 'music', labelKey: 'settings.music' },
+  { key: 'haptics', icon: 'spring', labelKey: 'settings.haptics' },
+];
 
 /** Language options (§A ruling: bilingual EN+DE, auto from navigator). */
 const LANGS = ['auto', 'en', 'de'];
@@ -66,14 +74,32 @@ export function createSettingsScreen({ store, ui }) {
               </button>
             </span>
           </div>
-          <!-- G14: audio toggles -->
+          ${AUDIO_TOGGLES.map(({ key, icon: ic, labelKey }) => `
+          <div class="settings-row">
+            <span class="settings-label">${icon(ic, 18)} ${t(labelKey)}</span>
+            <button class="g14-toggle ${store.get(`settings.${key}`) !== false ? 'g14-on' : ''}"
+              data-audio-toggle="${key}" role="switch"
+              aria-checked="${store.get(`settings.${key}`) !== false}"
+              aria-label="${t(labelKey)}"><span class="g14-knob"></span></button>
+          </div>`).join('')}
           <div class="settings-row settings-danger">
             <button class="btn settings-reset-btn">${resetLabel()}</button>
           </div>
         </div>
         <div class="settings-footer">${t('settings.version', { v: pkg.version })}</div>
       </div>`;
-    // G14: audio toggles here (sfx/music/haptics rows join the card above).
+    // G14: audio toggle handlers — flip the persisted setting; audio.js
+    // follows the store live (§D6 mute persistence), so no direct bus pokes.
+    for (const btn of el.querySelectorAll('[data-audio-toggle]')) {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.audioToggle;
+        const next = store.get(`settings.${key}`) === false;
+        store.set(`settings.${key}`, next);
+        store.flush(); // sync events so audio.js sees the new setting NOW
+        if (next) audio.play('ui.pick'); // audible/buzzy confirmation when turning ON
+        render();
+      });
+    }
 
     el.querySelector('.settings-back').addEventListener('click', () => ui.closeAll());
 

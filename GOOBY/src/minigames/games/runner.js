@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import { t } from '../../data/strings.js';
 import { createGooby } from '../../character/gooby.js';
+import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
 import { createParticles } from '../../gfx/particles.js';
 import {
   RUNNER,
@@ -192,6 +193,7 @@ export default {
     // --- Gooby: bouncy hop-run (rabbit!), facing away from the camera ---
     S.particles = createParticles(scene);
     S.gooby = createGooby({ particles: S.particles });
+    applyEquippedOutfits(S.gooby); // G14: cameo wears the equipped outfits
     S.gooby.group.rotation.y = Math.PI;
     S.gooby.setEmotion('happy');
     S.gooby.play('happyBounce', { loop: true, speed: 1.7 });

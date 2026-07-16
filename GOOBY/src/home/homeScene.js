@@ -140,6 +140,7 @@ export function createHomeScene(ctx) {
     isNight: () => night,
 
     async enter(params = {}) {
+      ctx.audio?.music?.('home'); // G14: lo-fi home loop (§D6; starts post-gesture)
       // --- build the rooms (models are preloaded by the scene manager) ---
       rm = createRoomManager({ scene, camera, assets, store });
 
@@ -259,6 +260,7 @@ export function createHomeScene(ctx) {
     },
 
     exit() {
+      ctx.audio?.music?.(null); // G14: stop the home loop when leaving home
       roomNav?.unmount();
       roomNav = null;
       debugEl?.remove();

@@ -238,6 +238,10 @@ export const EN = {
   'settings.reset.confirm1': 'Really reset? Tap again!',
   'settings.reset.confirm2': 'Last chance — delete everything?',
   'settings.version': 'GOOBY v{v}',
+  // G14: audio/haptics toggles (§D6)
+  'settings.sfx': 'Sound effects',
+  'settings.music': 'Music',
+  'settings.haptics': 'Vibration',
 
   // --- G9: minigames B (§C6.1 #6–8) ---
   'mg.runner.stumble': 'Ouch! Careful!',
@@ -445,6 +449,31 @@ export const EN = {
   'floor.tile': 'Tile',
   'floor.carpet': 'Carpet',
   'floor.checker': 'Checker',
+
+  // --- G14: onboarding (§C8.1) ---
+  'ob.welcome.title': 'This is Gooby!',
+  'ob.welcome.body': 'Your new best friend — a very hungry little rabbit. He needs your care!',
+  'ob.continue': 'Let’s go!',
+  'ob.next': 'Next',
+  'ob.skip': 'Skip tutorial',
+  'ob.pet.title': 'Pet Gooby!',
+  'ob.pet.body': 'Gently swipe back and forth over his belly.',
+  'ob.feed.title': 'Feeding time!',
+  'ob.feed.body': 'Drag the carrot from the tray to Gooby’s mouth.',
+  'ob.room.title': 'Explore the house',
+  'ob.room.body': 'Swipe left to hop over to the bathroom.',
+  'ob.wash.title': 'Bath time!',
+  'ob.wash.body': 'Tap the bathtub, then scrub Gooby until he sparkles.',
+  'ob.hud.title': 'Gooby’s needs',
+  'ob.hud.p1': 'These four bars are hunger, energy, hygiene and fun. Keep them full!',
+  'ob.hud.p2': 'Coins buy food, furniture and outfits — earn them in the arcade.',
+  'ob.hud.p3': 'Caring and playing earns XP. Level up to unlock more games!',
+  'ob.game.title': 'Your first game!',
+  'ob.game.body': 'Catch the falling food with the basket — {sec} seconds, at least {coins} coins guaranteed!',
+  'ob.game.play': 'Play!',
+  'ob.shop.title': 'One more thing…',
+  'ob.shop.body': 'When the fridge is empty, we drive to the shop! Tap the cart button or the front door.',
+  'ob.done': 'Have fun with Gooby!',
 };
 
 /** @type {Record<string, string>} */
@@ -683,6 +712,10 @@ export const DE = {
   'settings.reset.confirm1': 'Wirklich zurücksetzen? Nochmal tippen!',
   'settings.reset.confirm2': 'Letzte Chance – alles löschen?',
   'settings.version': 'GOOBY v{v}',
+  // G14: audio/haptics toggles (§D6)
+  'settings.sfx': 'Soundeffekte',
+  'settings.music': 'Musik',
+  'settings.haptics': 'Vibration',
 
   // --- G9: minigames B (§C6.1 #6–8) ---
   'mg.runner.stumble': 'Autsch! Vorsicht!',
@@ -890,6 +923,31 @@ export const DE = {
   'floor.tile': 'Fliesen',
   'floor.carpet': 'Teppichboden',
   'floor.checker': 'Karo',
+
+  // --- G14: onboarding (§C8.1) ---
+  'ob.welcome.title': 'Das ist Gooby!',
+  'ob.welcome.body': 'Dein neuer bester Freund – ein sehr hungriges Kaninchen. Er braucht deine Pflege!',
+  'ob.continue': 'Los geht’s!',
+  'ob.next': 'Weiter',
+  'ob.skip': 'Tutorial überspringen',
+  'ob.pet.title': 'Streichle Gooby!',
+  'ob.pet.body': 'Wische sanft über seinen Bauch hin und her.',
+  'ob.feed.title': 'Fütterungszeit!',
+  'ob.feed.body': 'Zieh die Karotte vom Tablett zu Goobys Mund.',
+  'ob.room.title': 'Entdecke das Haus',
+  'ob.room.body': 'Wische nach links, um ins Badezimmer zu hüpfen.',
+  'ob.wash.title': 'Badezeit!',
+  'ob.wash.body': 'Tippe auf die Badewanne und schrubbe Gooby, bis er glänzt.',
+  'ob.hud.title': 'Goobys Bedürfnisse',
+  'ob.hud.p1': 'Diese vier Balken sind Hunger, Energie, Hygiene und Spaß. Halte sie voll!',
+  'ob.hud.p2': 'Mit Münzen kaufst du Essen, Möbel und Outfits – verdiene sie in der Spielhalle.',
+  'ob.hud.p3': 'Pflegen und Spielen bringt XP. Steig auf, um mehr Spiele freizuschalten!',
+  'ob.game.title': 'Dein erstes Spiel!',
+  'ob.game.body': 'Fang das fallende Essen mit dem Korb – {sec} Sekunden, mindestens {coins} Münzen garantiert!',
+  'ob.game.play': 'Spielen!',
+  'ob.shop.title': 'Noch etwas…',
+  'ob.shop.body': 'Wenn der Kühlschrank leer ist, fahren wir einkaufen! Tippe auf den Wagen-Button oder die Haustür.',
+  'ob.done': 'Viel Spaß mit Gooby!',
 };
 
 const DICTS = { en: EN, de: DE };

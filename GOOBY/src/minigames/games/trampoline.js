@@ -15,6 +15,7 @@ import { t } from '../../data/strings.js';
 import { tween, easings } from '../../gfx/tween.js';
 import { createParticles } from '../../gfx/particles.js';
 import { createGooby } from '../../character/gooby.js';
+import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
 import {
   TRAMP,
   windowSecFor,
@@ -227,6 +228,7 @@ export default {
     this.particles = createParticles(scene);
     this.floats = createFloatTexts(scene);
     this.gooby = createGooby({ particles: this.particles });
+    applyEquippedOutfits(this.gooby); // G14: cameo wears the equipped outfits
     this.gooby.group.position.set(0, -0.52, 0);
     this.trickGrp = new THREE.Group();
     this.trickGrp.add(this.gooby.group);

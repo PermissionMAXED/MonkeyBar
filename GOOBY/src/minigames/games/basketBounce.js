@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { t } from '../../data/strings.js';
 import { createGooby } from '../../character/gooby.js';
+import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
 import { createParticles } from '../../gfx/particles.js';
 import {
   BASKET,
@@ -158,6 +159,7 @@ export default {
     // --- Gooby courtside ---
     S.particles = createParticles(scene);
     S.gooby = createGooby({ particles: S.particles });
+    applyEquippedOutfits(S.gooby); // G14: cameo wears the equipped outfits
     S.gooby.group.position.set(0.72, 0, 2.4);
     S.gooby.group.rotation.y = -0.6;
     S.gooby.setEmotion('happy');

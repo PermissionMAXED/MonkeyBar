@@ -452,3 +452,81 @@ export function createParticles(parent, opts = {}) {
 
   return { emit, update, activeCount: () => activeCount, dispose };
 }
+
+// ---------------------------------------------------------------------------
+// G14: DOM overlay effects — results-screen confetti + coin-fly-to-counter
+// (§G G14 polish pass). Pure DOM + Web Animations API, self-cleaning; they
+// live here because particles.js is the shared "juice" module (§G3).
+// ---------------------------------------------------------------------------
+
+/**
+ * Burst pastel confetti over a DOM container (results screen §G14).
+ * @param {HTMLElement} container positioned ancestor (screen/overlay root)
+ * @param {{count?: number}} [opts]
+ */
+export function burstConfettiDom(container, opts = {}) {
+  const count = opts.count ?? 36;
+  const W = container.clientWidth || innerWidth;
+  const H = container.clientHeight || innerHeight;
+  for (let i = 0; i < count; i += 1) {
+    const el = document.createElement('div');
+    const size = 6 + Math.random() * 7;
+    const hex = CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)];
+    el.style.cssText =
+      `position:absolute;left:${Math.random() * W}px;top:${-30 - Math.random() * H * 0.25}px;` +
+      `width:${size}px;height:${size * (0.6 + Math.random() * 0.6)}px;border-radius:2px;` +
+      `background:#${hex.toString(16).padStart(6, '0')};pointer-events:none;z-index:400;`;
+    container.appendChild(el);
+    const drift = (Math.random() - 0.5) * 160;
+    const spin = 360 + Math.random() * 720;
+    const dur = 1600 + Math.random() * 1400;
+    el.animate(
+      [
+        { transform: 'translate(0,0) rotate(0deg)', opacity: 1 },
+        { transform: `translate(${drift}px,${H + 60}px) rotate(${spin}deg)`, opacity: 0.9 },
+      ],
+      { duration: dur, delay: Math.random() * 350, easing: 'cubic-bezier(.3,.4,.6,1)', fill: 'forwards' }
+    ).onfinish = () => el.remove();
+  }
+}
+
+/**
+ * Fly a burst of DOM coins from one point to another (results → HUD counter,
+ * §G14 polish). Calls onArrive per coin (audio tick hooks in the caller).
+ * @param {{
+ *   fromEl?: HTMLElement, from?: {x: number, y: number},
+ *   toEl?: HTMLElement, to?: {x: number, y: number},
+ *   count?: number, onArrive?: (i: number) => void,
+ * }} opts
+ */
+export function flyCoinsDom(opts = {}) {
+  const center = (el) => {
+    const r = el?.getBoundingClientRect?.();
+    return r && (r.width > 0 || r.height > 0) ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
+  };
+  const from = center(opts.fromEl) ?? opts.from ?? { x: innerWidth / 2, y: innerHeight / 2 };
+  // default target: where the HUD coin pill lives (top-left, under the pills)
+  const to = center(opts.toEl) ?? opts.to ?? { x: 64, y: 86 };
+  const count = Math.max(1, Math.min(12, opts.count ?? 8));
+  for (let i = 0; i < count; i += 1) {
+    const el = document.createElement('div');
+    el.style.cssText =
+      `position:fixed;left:${from.x - 9}px;top:${from.y - 9}px;width:18px;height:18px;` +
+      'border-radius:50%;background:radial-gradient(circle at 35% 30%,#FFE9A8,#FFD166 55%,#E0A93E);' +
+      'box-shadow:0 1px 4px rgba(74,59,54,.35);pointer-events:none;z-index:500;';
+    document.body.appendChild(el);
+    const midX = (from.x + to.x) / 2 + (Math.random() - 0.5) * 120;
+    const midY = Math.min(from.y, to.y) - 40 - Math.random() * 60;
+    el.animate(
+      [
+        { transform: 'translate(0,0) scale(1)', opacity: 1, offset: 0 },
+        { transform: `translate(${midX - from.x}px,${midY - from.y}px) scale(1.15)`, opacity: 1, offset: 0.55 },
+        { transform: `translate(${to.x - from.x}px,${to.y - from.y}px) scale(.5)`, opacity: 0.85, offset: 1 },
+      ],
+      { duration: 620 + Math.random() * 160, delay: i * 70, easing: 'cubic-bezier(.35,0,.6,1)', fill: 'forwards' }
+    ).onfinish = () => {
+      el.remove();
+      opts.onArrive?.(i);
+    };
+  }
+}

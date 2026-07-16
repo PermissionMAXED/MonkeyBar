@@ -141,6 +141,7 @@ export function initDailyBonus({ store, ui, audio, sceneManager }) {
   const poll = setInterval(() => {
     const today = localDay();
     if (shownDay === today) return;
+    if (store.get('onboarding.done') === false) return; // G14: tutorial first, popup after (§C8.1 #8)
     if (!isClaimable(store.get('daily'), today)) return;
     if (sceneManager?.currentId?.() !== 'home') return;
     if (ui.activeScreenId?.()) return;

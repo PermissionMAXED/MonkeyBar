@@ -17,6 +17,7 @@ import { t } from '../../data/strings.js';
 import { tween, easings } from '../../gfx/tween.js';
 import { createParticles } from '../../gfx/particles.js';
 import { createGooby } from '../../character/gooby.js';
+import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
 import {
   DANCE_TUNING,
   generatePattern,
@@ -197,6 +198,7 @@ export default {
     this.floats = createFloatTexts(scene);
     this.danceGrp = new THREE.Group(); // external energy bob/pulse wrapper
     this.gooby = createGooby({ particles: this.particles });
+    applyEquippedOutfits(this.gooby); // G14: cameo wears the equipped outfits
     this.gooby.group.position.set(0, 1.15, -1.6);
     this.gooby.setEmotion('happy');
     this.gooby.play('dance', { loop: true });

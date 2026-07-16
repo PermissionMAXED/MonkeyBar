@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import { t } from '../../data/strings.js';
 import { createGooby } from '../../character/gooby.js';
+import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
 import { createParticles } from '../../gfx/particles.js';
 import {
   PANCAKE,
@@ -115,6 +116,7 @@ export default {
     // --- Gooby watching, drooling (§C6.1 #8) ---
     S.particles = createParticles(scene);
     S.gooby = createGooby({ particles: S.particles });
+    applyEquippedOutfits(S.gooby); // G14: cameo wears the equipped outfits
     S.gooby.group.position.set(0.88, PLATE_Y - 0.06, 1.3);
     S.gooby.group.rotation.y = -0.55;
     S.gooby.setEmotion('hungry');

@@ -14,6 +14,7 @@
 
 import { SLEEP } from '../data/constants.js';
 import { t } from '../data/strings.js';
+import audio from '../audio/audio.js'; // G14: snore loop + wake yawn (§D6)
 import { now } from '../core/clock.js';
 import * as notifications from '../core/notifications.js';
 import {
@@ -166,13 +167,16 @@ export function initSleepFlow({ store, ui, roomManager, homeScene, gooby }) {
   function onSleepChanged(sleep) {
     if (sleep?.sleeping) {
       sawSleeping = true;
+      audio.play('gooby.snore'); // G14: snore loop while asleep (§D6)
       showChip();
       enterSleepScene();
       return;
     }
+    audio.stop('gooby.snore'); // G14: end snore loop
     hideChip();
     if (!sawSleeping) return; // boot flush / offline wake (grants already applied)
     sawSleeping = false;
+    audio.play('gooby.yawn'); // G14: wake yawn (§D6)
     const early = selfWake;
     selfWake = false;
     if (!early) {
@@ -258,6 +262,7 @@ export function initSleepFlow({ store, ui, roomManager, homeScene, gooby }) {
 
   store.on('sleepChanged', onSleepChanged);
   if (sawSleeping) showChip(); // booted while still asleep (nap not finished)
+  if (sawSleeping) audio.play('gooby.snore'); // G14: resume snore (no-op pre-gesture)
   if (roomManager || homeScene) wireHome({ roomManager, homeScene, gooby });
 
   // ── G6 dynamic-import hook (guard-wiring against G4's wave-2 files) ──────

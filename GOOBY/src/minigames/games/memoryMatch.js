@@ -13,6 +13,7 @@ import { t } from '../../data/strings.js';
 import { tween, easings } from '../../gfx/tween.js';
 import { createParticles } from '../../gfx/particles.js';
 import { createGooby } from '../../character/gooby.js';
+import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
 import {
   MEMORY,
   FACE_KEYS,
@@ -152,6 +153,7 @@ export default {
     // --- Gooby cameo above the grid, watching the reveals ---
     this.particles = createParticles(scene);
     this.gooby = createGooby({ particles: this.particles });
+    applyEquippedOutfits(this.gooby); // G14: cameo wears the equipped outfits
     this.gooby.group.scale.setScalar(0.72);
     this.gooby.group.position.set(0, originY + 0.85, -0.4);
     this.gooby.setEmotion('happy');

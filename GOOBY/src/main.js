@@ -29,6 +29,7 @@ import { registerWardrobe } from './ui/wardrobeScreen.js';
 import { registerAchievementsScreen } from './ui/achievementsScreen.js';
 import { initDailyBonus } from './ui/dailyBonusPopup.js';
 // end G12 imports
+import { initOnboarding } from './ui/onboarding.js'; // G14: first-run tutorial (§C8.1)
 
 // Agent G2's core/assets.js is discovered at transform time; the empty-map
 // fallback keeps boot working until it lands (coordination note — the glob
@@ -177,6 +178,10 @@ async function boot() {
     ? await harness.postBoot({ store, ui, sceneManager, framework, assets })
     : false;
   if (!routed) await sceneManager.switchTo('home');
+
+  // ---- G14: first-run onboarding (§C8.1 — no-op for returning users) ----
+  initOnboarding({ store, ui, audio, sceneManager, framework });
+  // ---- end G14 ----
 }
 
 boot().catch((err) => {

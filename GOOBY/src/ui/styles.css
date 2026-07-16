@@ -877,3 +877,124 @@
   font-size: 16px;
 }
 /* ---------- end G11 ---------- */
+
+/* ---------- G14: audio toggles, onboarding, polish ---------- */
+/* G14 */
+.g14-toggle {
+  position: relative;
+  width: 52px;
+  height: 30px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(74, 59, 54, 0.18);
+  cursor: pointer;
+  transition: background 160ms ease;
+  flex: none;
+}
+.g14-toggle .g14-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--white);
+  box-shadow: 0 2px 6px rgba(74, 59, 54, 0.25);
+  transition: transform 160ms ease;
+}
+.g14-toggle.g14-on {
+  background: var(--teal);
+}
+.g14-toggle.g14-on .g14-knob {
+  transform: translateX(22px);
+}
+
+/* onboarding overlay (§C8.1): floats over the live scene, input passes through */
+.g14-ob {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 300;
+}
+.g14-ob.g14-ob-hidden {
+  display: none;
+}
+.g14-ob-card {
+  position: absolute;
+  left: 50%;
+  bottom: calc(116px + var(--safe-bottom));
+  transform: translateX(-50%);
+  width: min(86vw, 360px);
+  background: var(--white);
+  border-radius: var(--card-radius);
+  box-shadow: var(--shadow-soft);
+  padding: 14px 18px 16px;
+  text-align: center;
+  pointer-events: auto;
+  animation: g14-card-in 260ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+@keyframes g14-card-in {
+  from { transform: translateX(-50%) translateY(24px) scale(0.94); opacity: 0; }
+  to { transform: translateX(-50%) translateY(0) scale(1); opacity: 1; }
+}
+.g14-ob-step {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--brown);
+  opacity: 0.45;
+  letter-spacing: 0.5px;
+}
+.g14-ob-title {
+  font-size: 20px;
+  font-weight: 900;
+  color: var(--brown);
+  margin-top: 2px;
+}
+.g14-ob-body {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--brown);
+  opacity: 0.75;
+  margin-top: 6px;
+  line-height: 1.35;
+}
+.g14-ob-btns {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.g14-ob-btns:empty {
+  display: none;
+}
+.g14-ob-skip {
+  font-size: 12px;
+  min-height: 36px;
+}
+
+/* HUD-tour spotlight pulse (§C8.1 #5) */
+.g14-glow {
+  animation: g14-glow-pulse 1s ease-in-out infinite;
+  border-radius: 999px;
+}
+@keyframes g14-glow-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(89, 201, 185, 0.9); }
+  50% { box-shadow: 0 0 0 7px rgba(89, 201, 185, 0); }
+}
+
+/* screen-transition touch: full screens pop in softly (§G14 polish) */
+.screen {
+  animation: g14-screen-in 200ms ease-out;
+}
+@keyframes g14-screen-in {
+  from { opacity: 0; transform: scale(1.015); }
+  to { opacity: 1; transform: scale(1); }
+}
+/* ---------- end G14 ---------- */
+
+/* G14: feed step — the food tray sheet owns the bottom, card moves up top */
+.g14-ob-card.g14-top {
+  bottom: auto;
+  top: calc(86px + var(--safe-top));
+}

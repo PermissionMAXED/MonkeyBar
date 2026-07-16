@@ -33,6 +33,7 @@ import { createCarController, wrapAngle } from '../../city/carController.js';
 import { createTraffic, TRAFFIC_ASSET_KEYS } from '../../city/traffic.js';
 import { driveRewards } from '../../systems/shopTrip.js';
 import { createGooby } from '../../character/gooby.js';
+import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
 import { createParticles } from '../../gfx/particles.js';
 
 const T = DRIVE_TUNING;
@@ -313,6 +314,7 @@ export default {
       onWallHit: () => ctx.audio.play('bump'),
     });
     this.gooby = createGooby();
+    applyEquippedOutfits(this.gooby); // G14: cameo wears the equipped outfits
     this.gooby.group.scale.setScalar(1.15);
     // seated high in the cabin so head + ears poke through the roof (the
     // §D1 car-kit sedan roof tops out ≈ 2.34 car-local at CAR_SCALE)

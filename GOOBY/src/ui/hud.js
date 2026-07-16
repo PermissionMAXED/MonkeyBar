@@ -164,13 +164,18 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
   ui.el.appendChild(el);
 
   // --- live refresh from store events (§E2) ---
+  let lowCount = 0; // G14: low-stat audio tick state
   function refresh() {
     const stats = store.get('stats') ?? {};
+    let nowLow = 0; // G14
     for (const key of STATS.KEYS) {
       const v = Math.max(0, Math.min(100, Number(stats[key]) || 0));
       statEls[key].fill.style.width = `${v}%`;
       statEls[key].pill.classList.toggle('stat-low', v < STATS.LOW_STAT);
+      if (v < STATS.LOW_STAT) nowLow += 1; // G14
     }
+    if (nowLow > lowCount) audio.play('hud.lowTick'); // G14: soft blip when a stat drops into the red
+    lowCount = nowLow; // G14
     coinsEl.textContent = String(store.get('coins') ?? 0);
     const level = store.get('level') ?? 1;
     const xp = store.get('xp') ?? 0;

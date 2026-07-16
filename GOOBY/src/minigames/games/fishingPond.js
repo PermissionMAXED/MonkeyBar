@@ -14,6 +14,7 @@ import * as THREE from 'three';
 import { t } from '../../data/strings.js';
 import { createParticles } from '../../gfx/particles.js';
 import { createGooby } from '../../character/gooby.js';
+import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
 import {
   FISHING,
   lowerDepth,
@@ -243,6 +244,7 @@ export default {
     this.particles = createParticles(scene);
     this.floats = createFloatTexts(scene);
     this.gooby = createGooby({ particles: this.particles });
+    applyEquippedOutfits(this.gooby); // G14: cameo wears the equipped outfits
     this.gooby.group.scale.setScalar(0.62);
     this.gooby.group.position.set(1.28, SURFACE_Y + 0.62, -0.9);
     this.gooby.group.rotation.y = -0.5; // toward the line
