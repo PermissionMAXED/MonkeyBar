@@ -148,6 +148,38 @@ export const EN = {
   'gooby.particle.crumbs': 'Crumbs',
   'gooby.particle.bubbles': 'Bubbles',
   'gooby.particle.confetti': 'Confetti',
+
+  // --- G5: HUD (§D5) ---
+  'hud.arcade': 'Arcade',
+  'hud.shop': 'Shop',
+  'hud.wardrobe': 'Wardrobe',
+  'hud.achievements': 'Achievements',
+  'hud.settings': 'Settings',
+  'hud.mute': 'Sound',
+  'stat.hunger': 'Hunger',
+  'stat.energy': 'Energy',
+  'stat.hygiene': 'Hygiene',
+  'stat.fun': 'Fun',
+  'toast.comingSoon': 'Coming soon!',
+
+  // --- G5: arcade screen (§C6.3) ---
+  'arcade.title': 'Arcade',
+  'arcade.best': 'Best {score}',
+  'arcade.lockLevel': 'Level {level}',
+  'arcade.soon': 'Coming soon',
+
+  // --- G5: care interactions (§C3) ---
+  'tray.title': 'Fridge',
+  'tray.empty': 'The fridge is empty! Time for a shop trip…',
+  'tray.dragHint': 'Drag a snack to Gooby’s mouth!',
+  'toast.foodRefused': 'Gooby is full!',
+  'wash.suds': 'Suds {pct}%',
+  'wash.hint': 'Scrub Gooby with the soap!',
+  'wash.rinse': 'Rinse!',
+  'toast.washDone': 'Squeaky clean!',
+  'toast.toiletCooldown': 'The toilet needs a little break…',
+  'toast.toiletNoNeed': 'Gooby doesn’t need to go right now',
+
 };
 
 /** @type {Record<string, string>} */
@@ -296,6 +328,38 @@ export const DE = {
   'gooby.particle.crumbs': 'Krümel',
   'gooby.particle.bubbles': 'Blasen',
   'gooby.particle.confetti': 'Konfetti',
+
+  // --- G5: HUD (§D5) ---
+  'hud.arcade': 'Arcade',
+  'hud.shop': 'Laden',
+  'hud.wardrobe': 'Kleiderschrank',
+  'hud.achievements': 'Erfolge',
+  'hud.settings': 'Einstellungen',
+  'hud.mute': 'Ton',
+  'stat.hunger': 'Hunger',
+  'stat.energy': 'Energie',
+  'stat.hygiene': 'Hygiene',
+  'stat.fun': 'Spaß',
+  'toast.comingSoon': 'Kommt bald!',
+
+  // --- G5: arcade screen (§C6.3) ---
+  'arcade.title': 'Arcade',
+  'arcade.best': 'Rekord {score}',
+  'arcade.lockLevel': 'Level {level}',
+  'arcade.soon': 'Kommt bald',
+
+  // --- G5: care interactions (§C3) ---
+  'tray.title': 'Kühlschrank',
+  'tray.empty': 'Der Kühlschrank ist leer! Zeit zum Einkaufen…',
+  'tray.dragHint': 'Zieh einen Snack zu Goobys Mund!',
+  'toast.foodRefused': 'Gooby ist satt!',
+  'wash.suds': 'Schaum {pct}%',
+  'wash.hint': 'Schrubb Gooby mit der Seife!',
+  'wash.rinse': 'Abspülen!',
+  'toast.washDone': 'Blitzeblank!',
+  'toast.toiletCooldown': 'Die Toilette braucht eine kleine Pause…',
+  'toast.toiletNoNeed': 'Gooby muss gerade nicht',
+
 };
 
 const DICTS = { en: EN, de: DE };

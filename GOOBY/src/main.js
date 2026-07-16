@@ -76,6 +76,44 @@ async function boot() {
 
   const framework = createMinigameFramework({ sceneManager, store, ui, audio });
 
+  // ---- G5 wiring hook (the single marked G5 integration point) ----
+  // Registers the home HUD, arcade screen and food-tray panel, and wraps the
+  // home-scene factory so care interactions (§C3: pet/tickle/poke, feed, wash,
+  // toilet, ball toss) wire up with the live scene handles after every home
+  // enter and tear down on exit. Fully feature-detected/guarded: the transform
+  // -time glob keeps boot working even while G4's home scene hasn't landed.
+  try {
+    const care = await import('./home/interactions.js');
+    await care.registerCareUi({ store, ui, audio, input, sceneManager, framework, assets });
+    const homeLoader = import.meta.glob('./home/homeScene.js')['./home/homeScene.js'];
+    const home = homeLoader ? await homeLoader().catch(() => null) : null;
+    if (home?.createHomeScene) {
+      sceneManager.register('home', (ctx) => {
+        const inst = home.createHomeScene(ctx);
+        const origEnter = inst.enter?.bind(inst);
+        const origExit = inst.exit?.bind(inst);
+        inst.enter = async (params) => {
+          await origEnter?.(params);
+          care.initInteractions({
+            scene: inst.scene,
+            camera: inst.camera,
+            roomManager: inst.getRoomManager?.(),
+            gooby: inst.getGooby?.(),
+            store, ui, audio, input,
+          });
+        };
+        inst.exit = () => {
+          care.teardown();
+          origExit?.();
+        };
+        return inst;
+      }, home.HOME_ASSET_KEYS ?? []);
+    }
+  } catch (err) {
+    console.warn('[boot] G5 care wiring unavailable:', err);
+  }
+  // ---- end G5 wiring hook ----
+
   // G6 wires systems/offline.js catch-up here (simulateOffline before the
   // first render). Until then, elapsed offline time is skipped, not decayed.
   store.set('lastTickAt', now());

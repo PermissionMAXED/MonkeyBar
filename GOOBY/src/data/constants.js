@@ -300,6 +300,41 @@ export const ENGINE = Object.freeze({
   TAP_MAX_MS: 300,
 });
 
+/**
+ * Care-interaction tuning (G5, §C3 implementation details). The BINDING §C3
+ * numbers (stat deltas, caps, cooldowns, thresholds) live in INTERACT/XP above;
+ * these are the feel/geometry knobs the spec leaves to implementation.
+ */
+export const CARE_TUNING = Object.freeze({
+  /** Wash: coverage ≥ this counts as a "full wash" (+3 fun, XP 8 — §C3/§C1.5). */
+  FULL_WASH_COVERAGE: 0.99,
+  /** Soap-drag distance (px over Gooby) for suds coverage 0 → 1. */
+  WASH_SCRUB_PX_FULL: 2400,
+  /** Wet-ears look duration after the rinse (§C3: ears droop 20 s). */
+  WASH_WET_SEC: 20,
+  /** Dragged food counts as "near the mouth" inside this screen radius (px). */
+  FEED_NEAR_MOUTH_PX: 120,
+  /** Dropping food inside this screen radius (px) of the mouth feeds Gooby. */
+  FEED_DROP_PX: 150,
+  /** Ignore sub-jitter pointer movement (px) when counting tickle direction changes. */
+  TICKLE_MIN_DX_PX: 3,
+  /** Ball toss physics (living room, §C3): simple ballistic + floor bounce. */
+  BALL: Object.freeze({
+    GRAVITY: 6.5, //           m/s² (cartoon gravity — floatier than 9.81)
+    RESTITUTION: 0.55, //      bounce energy kept per floor/wall hit
+    FRICTION: 1.6, //          ground drag (fraction of velocity lost per s)
+    RADIUS: 0.11, //           ball radius (m)
+    FLICK_VEL_SCALE: 0.0035, // px/s pointer flick → m/s world velocity
+    MAX_SPEED: 6, //           launch speed clamp (m/s)
+    BOUND_X: 1.55, //          |x - spawn.x| wall clamp within the room (m)
+    BOUND_Z_MIN: -1.15, //     z - spawn.z back-wall clamp (m)
+    BOUND_Z_MAX: 1.35, //      z - spawn.z camera-side clamp (m)
+    REST_SPEED: 0.18, //       on-floor speed below which the ball settles
+  }),
+  /** Gooby only chases the ball when it rests within this range of him (m). */
+  CHASE_MAX_DIST: 3.2,
+});
+
 /** UI palette (§D5) — pastel brand system, mirrored by CSS vars in ui/styles.css. */
 export const UI_COLORS = Object.freeze({
   BG_CREAM: '#FFF6EC',
