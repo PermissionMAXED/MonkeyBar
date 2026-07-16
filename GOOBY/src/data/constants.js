@@ -335,6 +335,75 @@ export const CARE_TUNING = Object.freeze({
   CHASE_MAX_DIST: 3.2,
 });
 
+/**
+ * City-drive tuning (G7, §C4/§C6.1 #1 implementation knobs). The BINDING §C
+ * drive numbers (speeds, pickup/bonus coins, crash rules, parking radius,
+ * arcade length) live in DRIVE above; this export centralizes the layout and
+ * feel knobs the spec leaves to implementation (per the "no inlined design
+ * numbers" rule), plus the §C6.1/§E10 city facts (9×9 grid, 20 m tiles,
+ * 6–10 traffic cars, 70% hitboxes, ≤ 180 draw calls).
+ */
+export const DRIVE_TUNING = Object.freeze({
+  // --- city layout (§C6.1: seeded 9×9 tile city, 20 m tiles) ---
+  GRID: 9,
+  TILE_M: 20,
+  /** Canonical city seed — the same familiar city every drive (§C6.1). */
+  CITY_SEED: 20260716,
+  /** Lane center distance from the road centerline (m, right-hand traffic). */
+  LANE_OFFSET_M: 2.5,
+  /** Road surface height above the ground plane (Kenney tile 0.02 × 20 m). */
+  ROAD_Y: 0.4,
+  // --- §E10 budget (drive scene) ---
+  DRAW_CALL_BUDGET: 180,
+  // --- car feel (§C6.1: physics-lite, forgiving) ---
+  /** Seconds of clean driving to ramp BASE_SPEED → MAX_SPEED. */
+  SPEED_RAMP_SEC: 22,
+  /** Yaw rate at full steer input (rad/s). */
+  STEER_RATE: 1.9,
+  /** Brake button deceleration (m/s²) and the crawl floor while braking. */
+  BRAKE_DECEL: 12,
+  BRAKE_MIN_SPEED: 1.2,
+  /** Lane-snapping assist: only within this heading deviation (§G G7 ≤ 15°). */
+  LANE_SNAP_DEG: 15,
+  /** Assist ease rates: heading (rad/s toward cardinal), lateral (1/s). */
+  LANE_SNAP_HEADING_RATE: 1.7,
+  LANE_SNAP_LATERAL_RATE: 1.8,
+  /** Soft wall/prop collision (§G G7: slide + speed loss, no crash count). */
+  WALL_SPEED_MULT: 0.55,
+  /** Knockable cone/box hit: small speed loss only (forgiving juice). */
+  KNOCK_SPEED_MULT: 0.85,
+  /** §C4.5 bump: invulnerability window + recovery back to full speed (s). */
+  CRASH_INVULN_SEC: 2,
+  CRASH_RECOVER_SEC: 2.5,
+  /** Player collision radius vs walls/props (m). */
+  CAR_RADIUS_M: 1.5,
+  // --- traffic (§C6.1: 6–10 AI cars, forgiving 70% AABBs) ---
+  TRAFFIC_COUNT: 8,
+  TRAFFIC_SPEED: 6.5,
+  TRAFFIC_HITBOX_SCALE: 0.7,
+  // --- model scales (Kenney GLB units → world meters) ---
+  CAR_SCALE: 1.8,
+  BUILDING_SCALE: 10,
+  TREE_SCALE: 6,
+  PROP_SCALE: 1.8,
+  LAMP_SCALE: 12,
+  // --- chase camera (§C6.1 third-person) ---
+  CAM_BACK: 10.5,
+  CAM_HEIGHT: 5.6,
+  CAM_LOOKAHEAD: 7,
+  CAM_POS_LERP: 4.5,
+  // --- route guidance (§G G7: floating arrows + glowing line) ---
+  ARROW_SPACING_M: 14,
+  ARROW_HEIGHT_M: 2.6,
+  ROUTE_LINE_WIDTH_M: 1.6,
+  /** Car is "off route" beyond this distance from the guide line (m). */
+  OFF_ROUTE_M: 14,
+  /** Coin pickup collect radius (m). */
+  PICKUP_RADIUS_M: 3,
+  // --- arcade mode (§C4.7: 90 s open coin-run) ---
+  ARCADE_COINS_ACTIVE: 26,
+});
+
 /** UI palette (§D5) — pastel brand system, mirrored by CSS vars in ui/styles.css. */
 export const UI_COLORS = Object.freeze({
   BG_CREAM: '#FFF6EC',

@@ -64,8 +64,21 @@ export const EN = {
 
   // --- Shop trip (§C4) ---
   'trip.confirm': 'Drive to the shop?',
+  'trip.confirmBody': 'Hop in the car and drive through town. Costs {energy} energy.',
+  'trip.go': "Let's drive!",
   'trip.goHome': 'Go home',
   'trip.crash': 'Ouch!',
+  'trip.arrived': 'You made it to the shop! 🎉',
+  'trip.towed': 'Oh no — the tow truck brings you to the shop…',
+  'trip.shopTitle': 'Shop',
+  'trip.shopSoon': 'Shop coming soon!',
+  'trip.earned': 'Earned this trip: {coins} coins',
+
+  // --- City drive controls (§C6.1 #1) ---
+  'drive.steerLeft': 'Steer left',
+  'drive.steerRight': 'Steer right',
+  'drive.brake': 'Brake',
+  'drive.crashes': '💥 {n}/{max}',
 
   // --- Foods (§C5.1) ---
   'food.carrot': 'Carrot',
@@ -282,8 +295,21 @@ export const DE = {
 
   // --- Shop trip (§C4) ---
   'trip.confirm': 'Zum Laden fahren?',
+  'trip.confirmBody': 'Steig ins Auto und fahr durch die Stadt. Kostet {energy} Energie.',
+  'trip.go': 'Los geht’s!',
   'trip.goHome': 'Nach Hause',
   'trip.crash': 'Autsch!',
+  'trip.arrived': 'Du bist am Laden angekommen! 🎉',
+  'trip.towed': 'Oh nein — der Abschleppwagen bringt dich zum Laden…',
+  'trip.shopTitle': 'Laden',
+  'trip.shopSoon': 'Der Laden öffnet bald!',
+  'trip.earned': 'Diesmal verdient: {coins} Münzen',
+
+  // --- City drive controls (§C6.1 #1) ---
+  'drive.steerLeft': 'Nach links lenken',
+  'drive.steerRight': 'Nach rechts lenken',
+  'drive.brake': 'Bremsen',
+  'drive.crashes': '💥 {n}/{max}',
 
   // --- Foods (§C5.1) ---
   'food.carrot': 'Karotte',

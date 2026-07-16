@@ -128,9 +128,8 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
   }, 'g5-btn-teal');
 
   button('shop', 'cart', 'hud.shop', () => {
-    // Announce the shop-trip intent for the W3 state machine, then stub-toast.
+    // G7: systems/shopTrip.js consumes this event (confirm sheet → startTrip).
     window.dispatchEvent(new CustomEvent('gooby:shopTrip'));
-    ui.toast('toast.comingSoon'); // G7 replaces: systems/shopTrip.js consumes gooby:shopTrip
   }, 'g5-btn-yellow');
 
   button('wardrobe', 'shirt', 'hud.wardrobe', () => {
@@ -196,6 +195,15 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
     visTimer = setInterval(sync, 300);
     sync();
   }
+
+  // ── G7 wiring: shop-trip state machine (§C4) ─────────────────────────────
+  // Consumes gooby:shopTrip (button above) + the front-door tap; idempotent.
+  if (framework && sceneManager) {
+    import('../systems/shopTrip.js')
+      .then((mod) => mod.initShopTrip({ store, ui, audio, framework, sceneManager }))
+      .catch((err) => console.error('[hud] shopTrip wiring failed:', err));
+  }
+  // ── end G7 wiring ─────────────────────────────────────────────────────────
 
   return {
     el,
