@@ -33,6 +33,9 @@ import {
 // ── V2/G23: §C6 species meta — night band gates the nightEel (§C10.3) ──
 import { bandAt } from '../../systems/dayNight.js';
 import { now } from '../../core/clock.js';
+// V2/G26 (§C11.2): cosmetic rain ripple rings when launched during rain
+import { weatherAt } from '../../systems/weather.js';
+import { mountPondRipples } from '../../gfx/weatherFx.js';
 // ── end V2/G23 ──
 
 /** World layout (camera z=10, FOV 45 → half-height ≈ 4.1, half-width ≈ 1.9). */
@@ -143,7 +146,9 @@ export default {
     this.emotionT = 0;
     this.fireflyT = 1.5;
     // ── V2/G23: §C6 species meta ──
-    this.night = bandAt(now()) === 'night'; // §C10.3: nightEel gate, fixed per round
+    // V2/G26 fix: bandAt returns {band, tInBand, blend} — the string compare
+    // left the §C10.3 nightEel gate permanently closed.
+    this.night = bandAt(now()).band === 'night'; // §C10.3: nightEel gate, fixed per round
     /** @type {string[]} §B3 meta.caught — species ids, in catch order */
     this.caught = [];
     /** @type {Record<string, THREE.MeshBasicMaterial>} lazy per-species tints */
@@ -234,6 +239,14 @@ export default {
     this.ripple.position.set(0, SURFACE_Y, 0.5);
     scene.add(this.ripple);
     this.rippleBase = Float32Array.from(rippleGeo.attributes.position.array);
+
+    // ── V2/G26 (§C11.2): cosmetic rain ripple rings when it rains outside ──
+    // ONE extra instanced draw call along the water line; pure dressing (no
+    // gameplay effect). weatherFx owns geometry/material; disposed below.
+    this.rainRipples = weatherAt(now()).state === 'rain'
+      ? mountPondRipples(scene, { surfaceY: SURFACE_Y, halfW: this.halfW * 0.9, z: 0.55 })
+      : null;
+    // ── end V2/G26 ──
 
     // --- near shore: grass band + rocks + grass tufts (front frame) ---
     const bank = own(new THREE.Mesh(
@@ -596,6 +609,7 @@ export default {
     this.gooby.update(dt);
     this.particles.update(dt);
     this.floats.update(dt);
+    this.rainRipples?.update(dt); // V2/G26 (§C11.2)
 
     // ripple: gentle sine on the surface strip
     const rp = this.ripple.geometry.attributes.position;
@@ -736,6 +750,8 @@ export default {
     this.floats?.dispose();
     this.particles?.dispose();
     this.gooby?.dispose();
+    this.rainRipples?.dispose(); // V2/G26 (§C11.2)
+    this.rainRipples = null;
     for (const geo of this.ownedGeos ?? []) geo.dispose();
     for (const mat of this.ownedMats ?? []) mat.dispose();
     // GLB clones share cached geometries/materials — the framework scene

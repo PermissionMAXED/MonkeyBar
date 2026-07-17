@@ -14,7 +14,8 @@
 // Pure data: no three.js/DOM imports (node:test runs this headlessly).
 
 /** @typedef {{kind: 'sample', keys: string[], volume?: number, haptic?: string}} SampleDef */
-/** @typedef {{kind: 'synth', name: string, volume?: number, haptic?: string}} SynthDef */
+/** @typedef {{kind: 'synth', name: string, volume?: number, haptic?: string, loop?: boolean}} SynthDef */
+/** V2/G26: synth loop:true ids resolve via audio.js LOOP_RECIPES (run until audio.stop(id)). */
 /** @typedef {{kind: 'voice', name: string, volume?: number, loop?: boolean}} VoiceDef */
 /** @typedef {SampleDef|SynthDef|VoiceDef} SfxDef */
 
@@ -200,6 +201,38 @@ export const SFX_MAP = Object.freeze({
   'album.claim': sample([`${JIN}/jingles_NES07`], { volume: 0.7, haptic: 'light' }),
   'photo.shutter': sample(seq(`${UI}/click`, 5), { volume: 0.8, haptic: 'medium' }),
   // --- end V2/G23 ---
+
+  // --- V2/G24: goobySays pads (§C1.2 #1 — four distinct pitches). Existing
+  // synth recipes take no pitch param, so per §E0.2 rule 5 these reuse 4
+  // distinct interface oggs; G29 upgrades to pitched synth pads. ---
+  'says.pad1': sample([`${UI}/pluck_001`], { volume: 0.7, haptic: 'light' }),
+  'says.pad2': sample([`${UI}/pluck_002`], { volume: 0.7, haptic: 'light' }),
+  'says.pad3': sample([`${UI}/glass_002`], { volume: 0.7, haptic: 'light' }),
+  'says.pad4': sample([`${UI}/glass_005`], { volume: 0.7, haptic: 'light' }),
+  // --- end V2/G24 ---
+
+  // --- V2/G25: starHopper + pipeFlow (§C1.2 #8/#9 — existing oggs/recipes
+  // per §E0.2 rule 5; G29 upgrades to bespoke sounds) ---
+  'hopper.lane': synth('whoosh', { volume: 0.45 }),
+  'hopper.star': synth('sparkle', { volume: 0.6, haptic: 'light' }),
+  'hopper.gold': synth('coin', { volume: 0.65, haptic: 'light' }),
+  'hopper.shield': synth('riser', { volume: 0.6, haptic: 'light' }),
+  'hopper.shieldPop': synth('bubblePop', { volume: 0.7, haptic: 'medium' }),
+  'hopper.warning': sample(seq(`${UI}/error`, 4), { volume: 0.4 }),
+  'hopper.crash': sample(seq(`${IMP}/impactPunch_heavy`, 5, 0), { volume: 0.75, haptic: 'medium' }),
+  'pipe.rotate': sample(seq(`${UI}/scroll`, 5), { volume: 0.5, haptic: 'light' }),
+  'pipe.connect': sample(seq(`${UI}/confirmation`, 4), { volume: 0.7, haptic: 'light' }),
+  'pipe.fill': synth('splash', { volume: 0.35 }),
+  // --- end V2/G25 ---
+
+  // --- V2/G26: ambience loops (§C10.2 dawn birdsong / §C11.2 rain-on-leaves;
+  // bespoke loop recipes live in audio.js LOOP_RECIPES; loop ids run until
+  // audio.stop(id) and respect the sfx toggle like every loop) ---
+  // rain: brown noise → LP 800 Hz at −18 dB — the level is baked into the
+  // recipe per §C11.2, so no volume multiplier here.
+  'ambience.rain': synth('rainLoop', { loop: true }),
+  'ambience.birdsong': synth('birdsong', { loop: true, volume: 0.8 }),
+  // --- end V2/G26 ---
 });
 
 /**

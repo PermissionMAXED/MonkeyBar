@@ -62,6 +62,7 @@ function pearPoints() {
  *   setWet: (on: boolean) => void,
  *   setStink: (on: boolean) => void,
  *   setDrool: (on: boolean) => void,
+ *   setLidsBias: (v: number) => void,  // V2/G26 §C10.3 night eyelid floor
  *   emotion: () => string,
  *   isPlaying: (clip: string) => boolean,
  *   triangleCount: () => number,
@@ -442,6 +443,20 @@ export function createGooby(opts = {}) {
     setDrool(on) {
       face.setDroolOverride(on ? true : null);
     },
+
+    // ---- V2/G26 (§C10.3): night drowsy look ----
+
+    /**
+     * V2/G26: additive eyelid floor (§C10.3 night bias — homeScene sets 0.3
+     * during the night band while awake, 0 otherwise). Max-combined with the
+     * emotion/clip/blink lids, so faces droopier than the bias are untouched.
+     * @param {number} v 0 (off) … 1.25 (closed)
+     */
+    setLidsBias(v) {
+      face.setLidsBias(v);
+    },
+
+    // ---- end V2/G26 ----
 
     // ---- V2/G20: 2.0 pet-sim visual API (§C3.3/§C3.4/§C4.3) ----
 

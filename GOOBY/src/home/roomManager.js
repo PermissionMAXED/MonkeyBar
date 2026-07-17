@@ -46,6 +46,7 @@ import { standardMat, disposeIfOwned } from '../gfx/materials.js';
 import { bandAt } from '../systems/dayNight.js';
 import { weatherAt } from '../systems/weather.js';
 import { makeDome, windowTexture } from '../gfx/sky.js';
+import { windowRainTexture } from '../gfx/weatherFx.js'; // V2/G26 (§C11.2 animated panes)
 import { CROPS } from '../data/crops.js'; // V2/G19: growth-stage GLB preloads
 import { ROOM as KITCHEN } from './rooms/kitchen.js';
 import { ROOM as LIVING } from './rooms/living.js';
@@ -887,9 +888,15 @@ export function createRoomManager({ scene, camera, assets, store }) {
     // V2/G26 consumes: light-intensity lerps (hemi/dir ×0.85 cloudy / ×0.70
     // rain per §C11.2 + §C10.2 band params) apply via gfx/lights.applyAmbience
     // — this manager deliberately does NOT touch the home light rig.
+    // V2/G26 (§C11.2): while raining the indoor panes swap to weatherFx's
+    // ANIMATED streak/droplet CanvasTexture (painted over this band's static
+    // rain sky; homeScene's updateWeatherFx(dt) drives the repaints). The
+    // sleep override still wins with the static night sky.
     const winTex = nightSkyOverride
       ? windowTexture('night', 'clear')
-      : windowTexture(band, weather);
+      : weather === 'rain'
+        ? windowRainTexture(band)
+        : windowTexture(band, weather);
     for (const record of rooms.values()) {
       if (!record.windowSkyMat) continue;
       record.windowSkyMat.map = winTex;

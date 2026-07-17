@@ -121,13 +121,26 @@ export function statOverride(stats) {
  * V2/G20 (§C3.4): while `health === 'sick'` the mood feeding the band is
  * capped at 39 (STATS.EXHAUSTED_MOOD_CAP — "like exhausted"), so sick Gooby
  * never looks better than grumpy. Context overrides still win.
+ * V2/G26 (§C10.3): `night` = the day/night NIGHT band while awake — 'sleepy'
+ * is then GUARANTEED to win a sleepy/hungry stat tie (both low-stat overrides
+ * applying at once), independent of statOverride's internal check order. The
+ * gentle "put him to bed" nudge; no other derivation changes (the neutral
+ * band stays neutral — the 45±15 s night yawns + eyelid bias are homeScene's
+ * presentation layer, NOT an emotion swap, or he'd yawn every 8 s like the
+ * sleepy face does).
  * @param {{mood?: number, stats?: {hunger?: number, energy?: number}, context?: string|null,
- *   health?: 'healthy'|'queasy'|'sick'|null}} input
+ *   health?: 'healthy'|'queasy'|'sick'|null, night?: boolean}} input
  * @returns {string} one of EMOTION_IDS
  */
-export function deriveEmotion({ mood = 60, stats = null, context = null, health = null } = {}) {
+export function deriveEmotion({ mood = 60, stats = null, context = null, health = null, night = false } = {}) {
   if (context != null) return context;
   const cappedMood = health === 'sick' ? Math.min(mood, STATS.EXHAUSTED_MOOD_CAP) : mood; // V2/G20
+  // V2/G26 (§C10.3): explicit sleepy-tie guarantee during the night band
+  if (night && stats
+    && typeof stats.energy === 'number' && stats.energy <= STATS.EXHAUSTED_AT_OR_BELOW
+    && typeof stats.hunger === 'number' && stats.hunger < STATS.DROOL_BELOW) {
+    return 'sleepy';
+  }
   return statOverride(stats) ?? moodEmotion(cappedMood);
 }
 
@@ -137,11 +150,12 @@ export function deriveEmotion({ mood = 60, stats = null, context = null, health 
  * subscribe with onChange to drive the face rig.
  *
  * @param {{mood?: number, stats?: object, context?: string|null,
- *   health?: 'healthy'|'queasy'|'sick'|null}} [initial]
+ *   health?: 'healthy'|'queasy'|'sick'|null, night?: boolean}} [initial]
  * @returns {{
  *   setMood: (v: number) => string,
  *   setStats: (stats: object|null) => string,
  *   setHealth: (health: 'healthy'|'queasy'|'sick'|null) => string,  // V2/G20 (§C3.4 sick cap)
+ *   setNightBias: (on: boolean) => string,  // V2/G26 (§C10.3 sleepy-tie preference)
  *   setContext: (id: string|null) => string,  // id must be an EMOTION_IDS member
  *   getContext: () => string|null,
  *   get: () => string,
@@ -153,12 +167,13 @@ export function createEmotionMachine(initial = {}) {
   let stats = initial.stats ?? null;
   let context = initial.context ?? null;
   let health = initial.health ?? null; // V2/G20
-  let current = deriveEmotion({ mood, stats, context, health });
+  let night = initial.night ?? false; // V2/G26
+  let current = deriveEmotion({ mood, stats, context, health, night });
   /** @type {Set<Function>} */
   const subs = new Set();
 
   function refresh() {
-    const next = deriveEmotion({ mood, stats, context, health });
+    const next = deriveEmotion({ mood, stats, context, health, night });
     if (next !== current) {
       const prev = current;
       current = next;
@@ -179,6 +194,13 @@ export function createEmotionMachine(initial = {}) {
     // V2/G20: health state feeds the §C3.4 sick mood cap
     setHealth(h) {
       health = h ?? null;
+      return refresh();
+    },
+    // V2/G26 (§C10.3): night-band sleepy-tie preference — homeScene toggles
+    // this on 'dayBandChanged' while Gooby is awake (G29 flavor hooks may read
+    // the same flag via the derived emotion, not this machine).
+    setNightBias(on) {
+      night = !!on;
       return refresh();
     },
     setContext(id) {

@@ -129,6 +129,7 @@ function getSpiralTexture() {
  *   setPupil: (x: number, y: number) => void,
  *   setDroolOverride: (on: boolean|null) => void,
  *   setSpiralOverride: (on: boolean|null) => void,
+ *   setLidsBias: (v: number) => void,  // V2/G26 §C10.3 night eyelid floor
  *   blinkNow: () => void,
  *   dispose: () => void,
  * }}
@@ -283,6 +284,8 @@ export function createGoobyFace(headGrp) {
   let droolOverride = null;
   /** @type {boolean|null} */
   let spiralOverride = null;
+  /** V2/G26 (§C10.3): additive eyelid floor (night drowsy look, 0 = off) */
+  let lidsBias = 0;
 
   let blinkIn = BLINK_MIN_SEC + Math.random() * (BLINK_MAX_SEC - BLINK_MIN_SEC);
   let blinkT = -1; // <0 = not blinking
@@ -337,6 +340,16 @@ export function createGoobyFace(headGrp) {
       spiralOverride = on;
     },
 
+    /**
+     * V2/G26 (§C10.3): eyelid bias — a minimum lid droop layered under blinks
+     * and emotion lids (max-combined, smoothed by the existing lid lerp).
+     * homeScene sets 0.3 during the night band while awake, 0 otherwise.
+     * @param {number} v 0 (none) … 1.25 (closed)
+     */
+    setLidsBias(v) {
+      lidsBias = Math.max(0, Math.min(LID_CLOSED, v || 0));
+    },
+
     /** Trigger an immediate blink. */
     blinkNow() {
       if (blinkT < 0) blinkT = 0;
@@ -379,8 +392,9 @@ export function createGoobyFace(headGrp) {
       }
 
       // --- eyelids: emotion base vs clip override vs blink vs yawn squint ---
+      // (V2/G26: lidsBias adds the §C10.3 night floor into the same max)
       const yawn = yawnEnvelope();
-      const base = Math.max(pose.lids ?? 0, faceDef.lids, yawn * 0.9);
+      const base = Math.max(pose.lids ?? 0, faceDef.lids, lidsBias, yawn * 0.9);
       const lidTarget = Math.max(base, blinkEnvelope() * LID_CLOSED);
       lidCurrent += (lidTarget - lidCurrent) * Math.min(1, dt * 26);
       const lidRot = LID_ROT_OPEN + (lidCurrent / LID_CLOSED) * (LID_ROT_CLOSED - LID_ROT_OPEN);

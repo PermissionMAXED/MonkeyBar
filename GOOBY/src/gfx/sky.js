@@ -41,6 +41,14 @@ const GREY_MIX = Object.freeze({ clear: 0, cloudy: 0.2, rain: 0.38 });
 /** deterministic pseudo-random helper for star/cloud placement */
 const jitter = (i, salt) => (((i * 73 + salt * 37) % 89) / 89);
 
+// V2/G26: jitter() is affine in i, so two jitter(i, …) streams are perfectly
+// correlated — fine for cloud puffs, but dome stars sampled with it all land
+// on one diagonal. hash() decorrelates without losing determinism.
+const hash = (i, salt) => {
+  const s = Math.sin(i * 127.1 + salt * 311.7) * 43758.5453;
+  return s - Math.floor(s);
+};
+
 /**
  * Mix a hex color toward grey (§C11.2 desaturation).
  * @param {string} hex @param {number} amount 0..1
@@ -74,14 +82,23 @@ function paintSky(g, w, h, band, weather) {
   g.fillStyle = grad;
   g.fillRect(0, 0, w, h);
 
+  // V2/G26 (§C10.2/CP-W3 "stars visible in the garden"): the dome canvas is
+  // the wide one (w > h); its VISIBLE band for the §C2 garden camera is only
+  // v ≈ 0.55–0.95 (just above the horizon — the zenith is off-screen), so
+  // dome stars/moon must land THERE and draw bigger (the 512-px canvas spans
+  // the whole hemisphere). The square window canvas keeps the v1 composition.
+  const dome = w > h;
   if (cfg.stars) {
-    // procedural star dots (§C10.2) — deterministic, denser near the top
+    // procedural star dots (§C10.2) — deterministic, denser near the top.
+    // Dome: the camera sees only ~11% of the texture width (u ≈ 0.72 ± 0.05,
+    // magnified ~7×), so paint MORE stars there so ~a dozen land on screen.
     g.fillStyle = '#FFE9A8';
-    for (let i = 0; i < 70; i += 1) {
-      const x = jitter(i, 3) * w;
-      const y = jitter(i, 11) * h * 0.7;
+    const starCount = dome ? 170 : 70; // V2/G26
+    for (let i = 0; i < starCount; i += 1) {
+      const x = (dome ? hash(i, 3) : jitter(i, 3)) * w; // V2/G26 decorrelated
+      const y = dome ? (0.42 + hash(i, 11) * 0.5) * h : jitter(i, 11) * h * 0.7; // V2/G26
       g.globalAlpha = 0.35 + jitter(i, 7) * 0.6 * (weather === 'clear' ? 1 : 0.4);
-      const r = 0.6 + jitter(i, 5) * 1.1;
+      const r = (dome ? 0.75 : 1) * (0.6 + jitter(i, 5) * 1.1); // V2/G26 dome mag ≈7×
       g.beginPath();
       g.arc(x, y, r, 0, Math.PI * 2);
       g.fill();
@@ -90,9 +107,12 @@ function paintSky(g, w, h, band, weather) {
   }
   if (cfg.moon && weather !== 'rain') {
     // moon disc with a soft crater-side shadow (§C10.2)
-    const mx = w * 0.72;
-    const my = h * 0.2;
-    const mr = Math.min(w, h) * 0.07;
+    // V2/G26: dome u 0.78 sits beside the −z camera axis (u ≈ 0.72); keep it
+    // inside the visible v band but SMALL — that band is magnified ~7×, so a
+    // window-sized disc would fill the whole screen.
+    const mx = w * (dome ? 0.78 : 0.72);
+    const my = h * (dome ? 0.58 : 0.2);
+    const mr = Math.min(w, h) * (dome ? 0.026 : 0.07); // V2/G26
     g.fillStyle = '#F4EFD9';
     g.beginPath();
     g.arc(mx, my, mr, 0, Math.PI * 2);

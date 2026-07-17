@@ -5,7 +5,9 @@
 //   play(id, opts)      — one-shot sfx by semantic id: sfxMap lookup → Kenney
 //                         ogg (WebAudio buffer pool, random-from-set, per-id
 //                         volume, ±3% humanized rate), synth recipe, or Gooby
-//                         voice recipe. Loop ids (gooby.snore) run until stop().
+//                         voice recipe. Loop ids (gooby.snore, and V2/G26's
+//                         ambience.rain/ambience.birdsong synth loops) run
+//                         until stop().
 //   music(id|null)      — procedural sequencers: 'home' lo-fi pentatonic pluck
 //                         loop (~72 BPM, quiet) and 'dance' 100 BPM upbeat
 //                         track honoring the DANCE constants contract (§D6:
@@ -341,6 +343,93 @@ const SYNTH_RECIPES = {
 };
 
 // ---------------------------------------------------------------------------
+// V2/G26: ambience LOOP recipes (§C10.2 dawn birdsong / §C11.2 rain loop).
+// sfxMap synth defs with loop:true resolve here instead of SYNTH_RECIPES —
+// each factory returns a {stop} handle that play() parks in the shared
+// `loops` map, so audio.stop(id), the sfx mute toggle and the pendingLoops
+// resume machinery all work exactly like the snore loop.
+// ---------------------------------------------------------------------------
+
+/** §C11.2: −18 dB target level of the rain loop, in linear gain (≈ 0.126). */
+const RAIN_LOOP_GAIN = 10 ** (-18 / 20);
+
+/** @type {AudioBuffer|null} 2 s brown-noise loop (integrated white noise). */
+let brownBuf = null;
+function brownNoiseBuffer() {
+  if (brownBuf) return brownBuf;
+  const len = ctx.sampleRate * 2;
+  brownBuf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = brownBuf.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < len; i += 1) {
+    // leaky integrator over white noise ⇒ ~1/f² "brown" spectrum
+    last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02;
+    d[i] = last * 3.5;
+  }
+  return brownBuf;
+}
+
+/** @type {Record<string, (dest: AudioNode, vol: number) => {stop: () => void}>} */
+const LOOP_RECIPES = {
+  /** Rain-on-leaves (§C11.2): brown noise → LP 800 Hz, −18 dB, ~1 s fades. */
+  rainLoop(dest, vol) {
+    const t = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = brownNoiseBuffer();
+    src.loop = true;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 800;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, RAIN_LOOP_GAIN * vol), t + 1);
+    src.connect(lp).connect(g).connect(dest);
+    src.start(t);
+    return {
+      stop() {
+        const at = ctx.currentTime;
+        g.gain.setTargetAtTime(0.0001, at, 0.25);
+        src.stop(at + 1.2);
+      },
+    };
+  },
+
+  /** Dawn birdsong (§C10.2): sparse seeded chirp bursts on a timer. */
+  birdsong(dest, vol) {
+    const g = ctx.createGain();
+    g.gain.value = vol;
+    g.connect(dest);
+    /** @type {ReturnType<typeof setTimeout>|null} */
+    let timer = null;
+    const burst = () => {
+      // one bird: 2–4 rising chirps around a random base pitch
+      const f0 = 2100 + Math.random() * 1700;
+      const n = 2 + Math.floor(Math.random() * 3);
+      for (let i = 0; i < n; i += 1) {
+        tone(g, {
+          type: 'sine', f0, f1: f0 * (1.12 + Math.random() * 0.22),
+          dur: 0.08 + Math.random() * 0.04, vol: 0.14 + Math.random() * 0.08,
+          at: i * 0.13, attack: 0.015,
+        });
+      }
+      timer = setTimeout(burst, 900 + Math.random() * 2600);
+    };
+    timer = setTimeout(burst, 250);
+    return {
+      stop() {
+        if (timer != null) clearTimeout(timer);
+        timer = null;
+        try {
+          g.disconnect();
+        } catch { /* already gone */ }
+      },
+    };
+  },
+};
+
+// ------------------------------------------------------------ end V2/G26 ----
+
+// ---------------------------------------------------------------------------
 // play / stop
 // ---------------------------------------------------------------------------
 
@@ -369,6 +458,15 @@ export function play(id, opts = {}) {
   try {
     if (def.kind === 'sample') {
       playSample(def, vol);
+    } else if (def.kind === 'synth' && def.loop) {
+      // V2/G26: looping synth (ambience.rain / ambience.birdsong) — same
+      // handle plumbing as the voice snore loop below.
+      if (loops.has(id)) return; // already running
+      const make = LOOP_RECIPES[def.name];
+      if (make) {
+        const handle = make(bus.sfx, vol);
+        if (handle?.stop) loops.set(id, handle);
+      } else if (DEV) console.warn(`[audio] unknown loop recipe '${def.name}'`);
     } else if (def.kind === 'synth') {
       const recipe = SYNTH_RECIPES[def.name];
       if (recipe) recipe(bus.sfx, vol);

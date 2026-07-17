@@ -24,7 +24,7 @@
 // (§E10: drive budget ≤ 180 draw calls; logged in dev every few seconds).
 
 import * as THREE from 'three';
-import { DRIVE, DRIVE_TUNING, UI_COLORS } from '../../data/constants.js';
+import { DRIVE, DRIVE_TUNING, UI_COLORS, DAYNIGHT } from '../../data/constants.js'; // V2/G26: + DAYNIGHT (§C10.2)
 import { t } from '../../data/strings.js';
 import {
   generateCityLayout,
@@ -43,9 +43,25 @@ import { buildVetClinic, buildLandmarkDressing, VET_CLINIC_ASSET_KEYS } from '..
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
 import { createParticles } from '../../gfx/particles.js';
+// V2/G26 (§C10.2): the city drives under the real day/night band
+import { bandAt } from '../../systems/dayNight.js';
+import { now } from '../../core/clock.js';
 
 const T = DRIVE_TUNING;
 const SKY = '#cfe8ff'; // §D4: city fog color
+
+// --- V2/G26 (§C10.2): city band dressing ------------------------------------
+// V2/G28 reuses: deliveryRush inherits this tint via the shared city setup —
+// read the band once at init (bandAt(now()).band) and index this table.
+// day = exact v1 values (#cfe8ff sky, 0.95/1.1 rig); dusk warms everything;
+// night = §C10.2 night row + 2 player-car headlight SpotLights (below).
+const CITY_BANDS = Object.freeze({
+  day: Object.freeze({ sky: SKY, hemiIntensity: 0.95, dirIntensity: 1.1, fogFrom: 60, fogTo: 150 }),
+  dawn: Object.freeze({ sky: '#f7ddb9', hemiIntensity: 0.85, dirIntensity: 0.9, fogFrom: 60, fogTo: 150 }),
+  dusk: Object.freeze({ sky: '#eeb493', hemiIntensity: 0.78, dirIntensity: 0.72, fogFrom: 55, fogTo: 140 }),
+  night: Object.freeze({ sky: '#1D2440', hemiIntensity: 0.55, dirIntensity: 0.18, fogFrom: 40, fogTo: 120, headlights: true }),
+});
+// --- end V2/G26 --------------------------------------------------------------
 
 /** @param {string} name @returns {string|null} dev-only URL param */
 function devParam(name) {
@@ -329,11 +345,18 @@ export default {
     const layout = this.layout;
 
     // --- scene dressing (§D4: hemi+dir, fog #cfe8ff from 60 m, no shadows) --
+    // V2/G26 (§C10.2): the rig follows the real day/night band — day is the
+    // exact v1 dressing; dusk warms, night dims to the moonlight row and adds
+    // player-car headlights. V2/G28 reuses: deliveryRush inherits this tint
+    // via this shared setup (band read once per round — CITY_BANDS above).
     const { scene, camera } = ctx;
-    scene.background = new THREE.Color(SKY);
-    if (!this.topcam) scene.fog = new THREE.Fog(SKY, 60, 150);
-    scene.add(new THREE.HemisphereLight('#fff5e8', '#b8a898', 0.95));
-    const dir = new THREE.DirectionalLight('#fff2dd', 1.1);
+    this.band = bandAt(now()).band;
+    const cityBand = CITY_BANDS[this.band] ?? CITY_BANDS.day;
+    const bandCfg = DAYNIGHT[this.band] ?? DAYNIGHT.day;
+    scene.background = new THREE.Color(cityBand.sky);
+    if (!this.topcam) scene.fog = new THREE.Fog(cityBand.sky, cityBand.fogFrom, cityBand.fogTo);
+    scene.add(new THREE.HemisphereLight(bandCfg.hemiSky, bandCfg.hemiGround, cityBand.hemiIntensity));
+    const dir = new THREE.DirectionalLight(bandCfg.dirColor, cityBand.dirIntensity);
     dir.position.set(40, 60, -30);
     scene.add(dir);
 
@@ -384,6 +407,19 @@ export default {
       const spot = candidates[0];
       if (spot) this.car.teleport(spot.box.minX - 2, spot.restZ, Math.PI / 2);
     }
+    // V2/G26 (§C10.2): night band = 2 headlight SpotLight cones on the PLAYER
+    // car only (traffic stays unlit — budget). Car-local +z is forward
+    // (carController: forward = (sin h, 0, cos h)); nose ≈ halfL 1.27×scale.
+    if (cityBand.headlights) {
+      for (const side of [-1, 1]) {
+        const head = new THREE.SpotLight('#ffedbe', 90, 34, 0.46, 0.55, 1.6);
+        head.position.set(side * 0.62, 1.05, 1.27 * T.CAR_SCALE - 0.15);
+        head.target.position.set(side * 0.9, 0.0, 16);
+        head.name = `headlight${side < 0 ? 'L' : 'R'}`;
+        this.car.group.add(head, head.target);
+      }
+    }
+    // end V2/G26
     this.gooby = createGooby();
     applyEquippedOutfits(this.gooby); // G14: cameo wears the equipped outfits
     this.gooby.group.scale.setScalar(1.15);
