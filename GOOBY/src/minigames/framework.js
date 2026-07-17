@@ -564,7 +564,10 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
     }
     // V2/G23 wires (§C3.4/§B5): sick Gooby refuses minigames — mirrors the
     // exhausted gate right above; health.canPlayMinigame is G20's contract.
-    if (!canPlayMinigame(store.get('health'))) {
+    // G23b: mode 'vetTrip' (G21's shopTrip machine, §C9.2) is EXEMPT — the
+    // vet drive exists to cure sick Gooby (its entry points are the 🤒 chip
+    // and the care sheet). Shop trips and arcade launches stay gated.
+    if (params.mode !== 'vetTrip' && !canPlayMinigame(store.get('health'))) {
       ui.toast('toast.tooSick');
       return false;
     }
