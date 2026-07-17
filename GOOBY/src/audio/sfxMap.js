@@ -170,6 +170,36 @@ export const SFX_MAP = Object.freeze({
 
   // --- polish (G14) ---
   'hud.lowTick': synth('softTick', { volume: 0.3 }),
+
+  // --- V2/G20: sickness & care (§C3.3/§C3.4 — existing recipes reused;
+  // G29 upgrades to bespoke sounds) ---
+  'health.sneeze': voice('squeakDizzy', { volume: 0.9 }),
+
+  // --- V2/G21: vet clinic + landmarks (§C9 — existing sounds/recipes reused;
+  // G29 upgrades to bespoke sounds) ---
+  'vet.doorbell': sample(seq(`${UI}/glass`, 6), { volume: 0.5 }),
+  'vet.cure': sample([`${JIN}/jingles_NES04`], { volume: 0.7, haptic: 'light' }),
+  'vet.checkup': sample(seq(`${UI}/confirmation`, 4), { volume: 0.6 }),
+  'landmark.found': synth('sparkle', { volume: 0.7, haptic: 'light' }),
+
+  // --- V2/G19: garden (§C2.2 — existing oggs/recipes per §E0.2 rule 5;
+  // G29 upgrades to bespoke sounds) ---
+  'garden.plant': synth('plop', { volume: 0.6, haptic: 'light' }),
+  'garden.water': synth('splash', { volume: 0.55 }),
+  'garden.fertilize': synth('sparkle', { volume: 0.6 }),
+  'garden.harvest': sample(seq(`${UI}/confirmation`, 4), { volume: 0.7, haptic: 'light' }),
+  'garden.harvestReady': synth('sparkle', { volume: 0.5 }),
+  'garden.buy': sample(seq(`${UI}/drop`, 4), { volume: 0.6 }),
+  'garden.sell': synth('coin', { volume: 0.55, haptic: 'light' }),
+  // --- end V2/G19 ---
+
+  // --- V2/G23: progression UI (§C5/§C6/§C12 — existing oggs/recipes per
+  // §E0.2 rule 5; G29 upgrades to bespoke sounds) ---
+  'quest.claim': sample([`${JIN}/jingles_NES11`], { volume: 0.65, haptic: 'light' }),
+  'sticker.get': synth('sparkle', { volume: 0.7, haptic: 'light' }),
+  'album.claim': sample([`${JIN}/jingles_NES07`], { volume: 0.7, haptic: 'light' }),
+  'photo.shutter': sample(seq(`${UI}/click`, 5), { volume: 0.8, haptic: 'medium' }),
+  // --- end V2/G23 ---
 });
 
 /**

@@ -7,14 +7,17 @@
 // arrival/no-crash bonuses — you always reach the shop, never a hard fail).
 //
 // Modes (ctx.params.mode): 'shopTrip' (§C4 — home→shop, arrival fanfare,
-// hands off to systems/shopTrip.js via params.onArrive/onExit) and 'arcade'
-// (§C4.7 — 90 s open coin-run in the same city, default from the arcade).
+// hands off to systems/shopTrip.js via params.onArrive/onExit), 'vetTrip'
+// (V2/G21 §C9.2 — same machinery over the shorter vet route with 10 pickups,
+// arrival hands off to the vet panel) and 'arcade' (§C4.7 — 90 s open
+// coin-run in the same city, default from the arcade).
 //
 // Dev flags (dev builds only, §G G7 DoD): ?topcam=1 top-down city overview,
 // ?autopilot=1 steers along the route so a full trip completes headlessly,
-// ?mode=shopTrip forces the trip mode when launched via ?minigame=cityDrive,
-// ?wedge=1 parks the car throttle-on against the nearest building face so
-// the F4 P1-1 stuck-rescue can be reproduced deterministically.
+// ?mode=shopTrip|vetTrip forces a trip mode when launched via
+// ?minigame=cityDrive, ?wedge=1 parks the car throttle-on against the
+// nearest building face so the F4 P1-1 stuck-rescue can be reproduced
+// deterministically.
 //
 // City assembly lives here (buildCity) and consumes city/cityBuilder.js's
 // PURE layout — buildings/trees/roads render as InstancedMesh per GLB
@@ -30,10 +33,13 @@ import {
   pointAtLength,
   distanceToPolyline,
   CITY_ASSET_KEYS,
+  landmarksInRange, // V2/G21 (§C9.3)
 } from '../../city/cityBuilder.js';
 import { createCarController, wrapAngle } from '../../city/carController.js';
 import { createTraffic, TRAFFIC_ASSET_KEYS } from '../../city/traffic.js';
-import { driveRewards } from '../../systems/shopTrip.js';
+import { driveRewards, isTripMode } from '../../systems/shopTrip.js'; // V2/G21: + isTripMode
+// V2/G21 (§C9.1/§C9.3): vet clinic + landmark dressing builders
+import { buildVetClinic, buildLandmarkDressing, VET_CLINIC_ASSET_KEYS } from '../../city/vetClinic.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
 import { createParticles } from '../../gfx/particles.js';
@@ -278,19 +284,48 @@ function hideNearbyArrows(guides, px, pz) {
 
 export default {
   id: 'cityDrive',
-  assetKeys: [...CITY_ASSET_KEYS, ...TRAFFIC_ASSET_KEYS, 'car-kit/sedan', 'car-kit/truck'],
+  assetKeys: [
+    ...CITY_ASSET_KEYS,
+    ...TRAFFIC_ASSET_KEYS,
+    ...VET_CLINIC_ASSET_KEYS, // V2/G21 (§C9.1/§C9.3)
+    'car-kit/sedan',
+    'car-kit/truck',
+  ],
 
   /** @param {object} ctx §E8 game context */
   init(ctx) {
     this.ctx = ctx;
-    this.mode = ctx.params.mode === 'shopTrip' || devParam('mode') === 'shopTrip' ? 'shopTrip' : 'arcade';
-    // F4 P2-6: reflect a dev-forced trip (?mode=shopTrip) back into the launch
-    // params so the framework results screen picks the trip layout too.
-    if (this.mode === 'shopTrip') ctx.params.mode = 'shopTrip';
+    // V2/G21 (§C9.2): three modes — 'shopTrip' | 'vetTrip' (guided trips
+    // sharing the machinery) | 'arcade' (§C4.7 free coin-run).
+    const reqMode = isTripMode(ctx.params.mode) ? ctx.params.mode : devParam('mode');
+    this.mode = isTripMode(reqMode) ? reqMode : 'arcade';
+    // F4 P2-6: reflect a dev-forced trip (?mode=shopTrip|vetTrip) back into
+    // the launch params so the framework results screen picks the trip too.
+    if (this.mode !== 'arcade') ctx.params.mode = this.mode;
     this.topcam = devParam('topcam') === '1';
     this.autopilot = devParam('autopilot') === '1';
 
-    this.layout = generateCityLayout(T.CITY_SEED);
+    // ── V2/G21: route view (§C9.2) ────────────────────────────────────────
+    // The vet trip re-targets the SAME shop-trip machinery: a shallow view
+    // over the base layout swaps lane/pickups/destination-parking/spawn
+    // heading so every existing route/arrival code path runs unchanged.
+    // City assembly below always renders the BASE layout (real shop apron —
+    // the vet apron is drawn by buildVetClinic).
+    this.baseLayout = generateCityLayout(T.CITY_SEED);
+    this.layout = this.mode === 'vetTrip'
+      ? {
+          ...this.baseLayout,
+          lane: this.baseLayout.vetLane,
+          laneLength: this.baseLayout.vetLaneLength,
+          pickups: this.baseLayout.vetPickups,
+          home: { ...this.baseLayout.home, heading: this.baseLayout.vet.heading },
+          shop: { ...this.baseLayout.shop, parking: this.baseLayout.vet.parking },
+        }
+      : this.baseLayout;
+    // parked-at-destination heading after the tow teleport (§C4.5): the shop
+    // is entered from the east (face west), the vet from the west (face east)
+    this.parkHeading = this.mode === 'vetTrip' ? Math.PI / 2 : -Math.PI / 2;
+    // ── end V2/G21 ─────────────────────────────────────────────────────────
     const layout = this.layout;
 
     // --- scene dressing (§D4: hemi+dir, fog #cfe8ff from 60 m, no shadows) --
@@ -302,10 +337,14 @@ export default {
     dir.position.set(40, 60, -30);
     scene.add(dir);
 
-    buildCity(scene, ctx.assets, layout);
+    buildCity(scene, ctx.assets, this.baseLayout); // V2/G21: always the base city
+    // V2/G21 (§C9.1/§C9.3): vet clinic sign/trees/apron/Dr. Hoppel + the
+    // procedural landmark dressing (fountain/gazebo/café) — every city mode.
+    buildVetClinic(scene, ctx.assets, this.baseLayout);
+    buildLandmarkDressing(scene, ctx.assets, this.baseLayout);
     this.guides = buildRouteGuides(scene, layout);
-    // arcade (§C4.7) is a free coin-run — no route guidance to the shop
-    this.guides.group.visible = this.mode === 'shopTrip';
+    // arcade (§C4.7) is a free coin-run — no route guidance to a destination
+    this.guides.group.visible = isTripMode(this.mode); // V2/G21: both trips
     this.particles = createParticles(scene);
 
     // --- player car + Gooby (sitDrive, §D2.4) -------------------------------
@@ -360,13 +399,13 @@ export default {
     // --- coin pickups (instanced; §C4.3 route coins / arcade scatter) -------
     this.coinGeo = new THREE.CylinderGeometry(0.75, 0.75, 0.16, 14);
     this.coinGeo.rotateX(Math.PI / 2);
-    this.coins = this.mode === 'shopTrip'
+    this.coins = isTripMode(this.mode) // V2/G21: vet route carries 10 (§C9.2)
       ? layout.pickups.map((p) => ({ ...p, active: true }))
       : this.scatterCoins(T.ARCADE_COINS_ACTIVE);
     this.coinMesh = new THREE.InstancedMesh(
       this.coinGeo,
       new THREE.MeshBasicMaterial({ color: '#f7c531' }),
-      this.mode === 'shopTrip' ? this.coins.length : T.ARCADE_COINS_ACTIVE + 8
+      isTripMode(this.mode) ? this.coins.length : T.ARCADE_COINS_ACTIVE + 8 // V2/G21
     );
     scene.add(this.coinMesh);
 
@@ -402,9 +441,14 @@ export default {
     this.shake = 0;
     this.emotionT = 0;
     this.drawLogT = 0;
+    // V2/G21 (§C9.3/§C12.1): landmark triggers + odometer for meta/profile
+    this.landmarksHit = new Set();
+    this.distanceM = 0;
+    this.distanceSent = false;
+    this.lastPos = { x: spawn.x, z: spawn.z };
 
-    // crash pips (shopTrip): 💥 n/3 chip under the score row
-    if (this.mode === 'shopTrip') {
+    // crash pips (trips): 💥 n/3 chip under the score row
+    if (isTripMode(this.mode)) { // V2/G21: vet trip shows it too (§C9.2)
       this.chip = document.createElement('div');
       this.chip.className = 'mg-pill';
       this.chip.style.cssText =
@@ -462,19 +506,22 @@ export default {
     this.gooby.setEmotion('dizzy');
     this.emotionT = 1.5;
     this.updateChip();
-    if (this.mode === 'shopTrip' && this.crashes >= DRIVE.CRASHES_FOR_TOW) {
+    // V2/G21: identical tow rule on the vet trip (§C9.2 "crash rules + tow
+    // rule identical to §C4 v1")
+    if (isTripMode(this.mode) && this.crashes >= DRIVE.CRASHES_FOR_TOW) {
       this.startTow();
     }
   },
 
-  /** §C4.5 tow-truck cutscene: car placed at the shop, no bonuses. */
+  /** §C4.5 tow-truck cutscene: car placed at the destination, no bonuses. */
   startTow() {
     this.phase = 'tow';
     this.phaseT = 0;
     this.towed = true;
     this.car.setFrozen(true);
     this.ctx.audio.play('tow');
-    this.ctx.hud.banner(t('trip.towed'));
+    // V2/G21: destination-specific tow line (§C9.2)
+    this.ctx.hud.banner(t(this.mode === 'vetTrip' ? 'vet.towed' : 'trip.towed'));
     // the tow truck rolls up behind the car
     this.truck = this.ctx.assets.getModel('car-kit/truck');
     this.truck.scale.setScalar(T.CAR_SCALE);
@@ -495,7 +542,7 @@ export default {
   /** F4 P1-1: nearest sensible road point to drop a wedged car back onto. */
   rescueSpot() {
     const layout = this.layout;
-    if (this.mode === 'shopTrip') {
+    if (isTripMode(this.mode)) { // V2/G21: vet route rescue works the same
       // back onto the guided route at the driver's current progress (§C4)
       const q = pointAtLength(layout.lane, Math.min(layout.laneLength, this.progress));
       return { x: q.x, z: q.z, heading: Math.atan2(q.dx, q.dz) };
@@ -551,11 +598,12 @@ export default {
     this.gooby.setEmotion('ecstatic');
     this.emotionT = 0;
     this.ctx.audio.play('jingle.arrival');
-    this.ctx.hud.banner(t('trip.arrived'));
-    const park = this.layout.shop.parking;
+    // V2/G21: destination-specific arrival line (§C9.2)
+    this.ctx.hud.banner(t(this.mode === 'vetTrip' ? 'vet.arrived' : 'trip.arrived'));
+    const park = this.layout.shop.parking; // V2/G21: = vet parking on a vetTrip
     this.particles.emit?.('confetti', new THREE.Vector3(park.x, T.ROAD_Y + 3, park.z), { count: 26 });
     const coins = driveRewards({
-      mode: 'shopTrip',
+      mode: this.mode, // V2/G21: same math for both trips (§C9.2)
       pickups: this.collected,
       crashes: this.crashes,
       towed: this.towed,
@@ -598,8 +646,8 @@ export default {
       }
       if (this.veil) this.veil.style.opacity = String(Math.max(0, Math.min(1, (this.phaseT - 1.2) / 0.7)));
       if (this.phaseT >= 2.1) {
-        const park = layout.shop.parking;
-        this.car.teleport(park.x, park.z, -Math.PI / 2); // parked facing the shop
+        const park = layout.shop.parking; // V2/G21: = vet parking on a vetTrip (route view)
+        this.car.teleport(park.x, park.z, this.parkHeading); // V2/G21: parked facing the building
         if (this.truck) {
           ctx.scene.remove(this.truck);
           this.truck = null;
@@ -616,7 +664,8 @@ export default {
       if (!this.topcam) this.car.updateChaseCam(ctx.camera, dt, 0);
       if (this.phaseT >= 1.7) {
         this.phase = 'done';
-        ctx.onEnd({ score: this.result.coins, coins: this.result.coins });
+        // V2/G21: + §B3 meta {landmarks, crashes, distanceM} (G23 forwards)
+        ctx.onEnd({ score: this.result.coins, coins: this.result.coins, meta: this.buildMeta() });
       }
       return;
     } else if (this.phase === 'rescue') {
@@ -682,6 +731,25 @@ export default {
       if (hit) this.crash();
     }
 
+    // ── V2/G21: landmark triggers + odometer (§C9.3/§C12.1, ANY city mode) ──
+    if (this.phase === 'drive') {
+      const step = Math.hypot(p.x - this.lastPos.x, p.z - this.lastPos.z);
+      if (step < 15) this.distanceM += step; // teleports (tow/rescue) don't count
+      this.lastPos.x = p.x;
+      this.lastPos.z = p.z;
+      for (const id of landmarksInRange(this.baseLayout.landmarks, p.x, p.z)) {
+        if (this.landmarksHit.has(id)) continue;
+        this.landmarksHit.add(id);
+        // SYNCHRONOUS window event — systems/shopTrip.js awards the sticker
+        // (it has store access; this plugin doesn't) and reflects `first`
+        // back into detail so the one-time camera-flash gag fires here.
+        const ev = new CustomEvent('gooby:landmark', { detail: { id, first: false } });
+        window.dispatchEvent(ev);
+        if (ev.detail.first) this.cameraFlash();
+      }
+    }
+    // ── end V2/G21 ───────────────────────────────────────────────────────────
+
     // knockable cones/boxes: bonk + small speed loss (never a crash)
     for (const k of this.knockables) {
       if (k.hit) {
@@ -745,12 +813,12 @@ export default {
     this.coinMesh.instanceMatrix.needsUpdate = true;
 
     // --- guidance -----------------------------------------------------------
-    if (this.mode === 'shopTrip') hideNearbyArrows(this.guides, p.x, p.z);
+    if (isTripMode(this.mode)) hideNearbyArrows(this.guides, p.x, p.z); // V2/G21
     this.guides.arrows.position.y = Math.sin(elapsed * 2) * 0.3;
     this.guides.ribbonMat.opacity = 0.45 + Math.sin(elapsed * 3) * 0.12;
     this.guides.ring.scale.setScalar(1 + Math.sin(elapsed * 3.2) * 0.07);
     const offRoute = distanceToPolyline(layout.lane, p.x, p.z) > T.OFF_ROUTE_M;
-    this.guides.guide.visible = this.mode === 'shopTrip' && offRoute && this.phase === 'drive';
+    this.guides.guide.visible = isTripMode(this.mode) && offRoute && this.phase === 'drive'; // V2/G21
     if (this.guides.guide.visible) {
       const target = pointAtLength(layout.lane, this.progress + 8);
       const dir = new THREE.Vector3(target.x - p.x, 0, target.z - p.z).normalize();
@@ -759,7 +827,7 @@ export default {
     }
 
     // --- mode goals ----------------------------------------------------------
-    if (this.mode === 'shopTrip') {
+    if (isTripMode(this.mode)) { // V2/G21: same arrival logic, vet parking via the route view
       const park = layout.shop.parking;
       const dist = Math.hypot(park.x - p.x, park.z - p.z);
       // HUD "time" shows a friendly ETA (remaining route / current speed)
@@ -774,6 +842,7 @@ export default {
         ctx.onEnd({
           score: this.collected,
           coins: driveRewards({ mode: 'arcade', pickups: this.collected }),
+          meta: this.buildMeta(), // V2/G21: landmarks trigger in arcade too (§C9.3)
         });
         return;
       }
@@ -802,7 +871,45 @@ export default {
     this.car.setBrake(Math.abs(err) > 0.85 && this.car.speed() > 7);
   },
 
+  // ── V2/G21: landmark gag + §B3 meta + §C12.1 distance feed ────────────────
+  /** §C9.3 camera-flash gag — plays once per first-time landmark sticker. */
+  cameraFlash() {
+    const el = document.createElement('div');
+    el.style.cssText =
+      'position:fixed;inset:0;background:#fff;opacity:0.85;pointer-events:none;z-index:44;transition:opacity 0.45s ease-out;';
+    document.body.appendChild(el);
+    requestAnimationFrame(() => {
+      el.style.opacity = '0';
+    });
+    setTimeout(() => el.remove(), 520);
+  },
+
+  /** §B3 meta for onEnd: {landmarks: string[], crashes, distanceM}. */
+  buildMeta() {
+    this.sendDistance();
+    return {
+      landmarks: [...this.landmarksHit],
+      crashes: this.crashes,
+      distanceM: Math.round(this.distanceM),
+    };
+  },
+
+  /**
+   * §C12.1 profile.distanceM feed — one event per run (idempotent), consumed
+   * by systems/shopTrip.js's store bridge (profileStats.onDistance). Fired
+   * from buildMeta (normal ends) and dispose (quit from pause).
+   */
+  sendDistance() {
+    if (this.distanceSent || !(this.distanceM > 0)) return;
+    this.distanceSent = true;
+    window.dispatchEvent(
+      new CustomEvent('gooby:driveDistance', { detail: { meters: Math.round(this.distanceM) } })
+    );
+  },
+  // ── end V2/G21 ──────────────────────────────────────────────────────────────
+
   dispose() {
+    this.sendDistance(); // V2/G21: quit-from-pause still books the odometer
     this.car?.dispose();
     this.traffic?.dispose();
     this.gooby?.dispose();
@@ -814,6 +921,8 @@ export default {
     this.truck = null;
     this.ctx = null;
     this.layout = null;
+    this.baseLayout = null; // V2/G21
+    this.landmarksHit = null; // V2/G21
     this.guides = null;
     this.coins = null;
     this.coinMesh = null;

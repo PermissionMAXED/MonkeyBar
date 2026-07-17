@@ -20,7 +20,7 @@
 // The route (fixed, §C4 "shop at a fixed route end") snakes home→shop across
 // ~26 tiles; the seed varies buildings, nature, crossings and props only.
 
-import { DRIVE, DRIVE_TUNING } from '../data/constants.js';
+import { DRIVE, DRIVE_TUNING, VET } from '../data/constants.js'; // V2/G21: + VET (§C9)
 
 const { GRID, TILE_M, LANE_OFFSET_M } = DRIVE_TUNING;
 /** Grid center index (tile (CENTER,CENTER) is the world origin). */
@@ -215,6 +215,47 @@ const ROUTE_TILES = Object.freeze([
 const HOME_TILE = Object.freeze([7, 2]);
 const SHOP_TILE = Object.freeze([3, 6]); // block tile west of the final waypoint (3,7)
 
+// ── V2/G21: vet clinic + landmarks (§C9) ────────────────────────────────────
+/** Vet clinic block tile (§C9.1: north-west block, west-ring purpose). */
+const VET_TILE = Object.freeze([2, 2]);
+/**
+ * Fixed vet route (§C9.1 VET_ROUTE_TILES): home → west along the south ring →
+ * north up the west ring, then pull east into the parking apron. ≈ 7 tiles
+ * ≈ 140 m — deliberately shorter than the shop trip (sick Gooby shouldn't
+ * grind). No tile visited twice.
+ */
+const VET_ROUTE_TILES = Object.freeze([
+  [7, 2], [7, 1], [6, 1], [5, 1], [4, 1], [3, 1], [2, 1],
+].map((rc) => Object.freeze(rc)));
+
+/**
+ * Landmark table (§C9.3, sticker ids = §C6 set 3). `anchor` is the curbside
+ * trigger point (world m — within 15 m of the shop/vet driving lanes so every
+ * sticker is earnable from a guided trip; deliveryRush reuses them as parcel
+ * drop points, §C9.4). `at` is the visual dressing center on the block tile
+ * (consumed by city/vetClinic.js builders). shop/vetClinic anchors are their
+ * parking aprons — resolved inside generateCityLayout.
+ */
+const LANDMARK_SPOTS = Object.freeze([
+  Object.freeze({ id: 'fountain', anchor: Object.freeze({ x: 12, z: 12 }), at: Object.freeze({ x: 14.5, z: 14.5 }) }),
+  Object.freeze({ id: 'skyTower', anchor: Object.freeze({ x: 20, z: -46 }), at: Object.freeze({ x: 20, z: -42 }) }),
+  Object.freeze({ id: 'parkGazebo', anchor: Object.freeze({ x: -46, z: 20 }), at: Object.freeze({ x: -42.5, z: 20 }) }),
+  Object.freeze({ id: 'windmillCafe', anchor: Object.freeze({ x: 20, z: 48 }), at: Object.freeze({ x: 20, z: 43.5 }) }),
+]);
+
+/** §C9.3: the windmillCafe's minigolf-kit windmill scale (binding ×2.2). */
+const WINDMILL_SCALE = 2.2;
+
+/** Block tiles reserved for landmark dressing — no seeded buildings there. */
+const LANDMARK_TILES = Object.freeze([
+  VET_TILE, // vetClinic
+  Object.freeze([5, 5]), // fountain plaza
+  Object.freeze([2, 5]), // skyTower
+  Object.freeze([5, 2]), // parkGazebo
+  Object.freeze([6, 5]), // windmillCafe
+]);
+// ── end V2/G21 ──────────────────────────────────────────────────────────────
+
 /** Traffic lane loops (closed tile cycles, clockwise = right-hand traffic). */
 const TRAFFIC_LOOP_CORNERS = Object.freeze([
   // full ring, clockwise
@@ -298,6 +339,7 @@ export const CITY_ASSET_KEYS = Object.freeze([
   ...SHRUB_IDS.map((id) => `nature-kit/${id}`),
   'car-kit/cone',
   'car-kit/box',
+  'minigolf-kit/windmill', // V2/G21: windmillCafe landmark (§C9.3, in layout.buildings)
 ]);
 
 // ---------------------------------------------------------------------------
@@ -353,6 +395,16 @@ export function roadPieceFor(n, e, s, w) {
  * @property {{tile: {r: number, c: number}, world: {x: number, z: number}, heading: number}} home
  * @property {{tile: {r: number, c: number}, buildingAt: {x: number, z: number}, rotY: number,
  *   parking: {x: number, z: number}, awningAt: {x: number, z: number}}} shop
+ * @property {{tile: {r: number, c: number}, buildingAt: {x: number, z: number}, rotY: number,
+ *   parking: {x: number, z: number}, heading: number}} vet  V2/G21 §C9.1/§B3
+ * @property {Array<{r: number, c: number}>} vetRoute  V2/G21: home→vet tile waypoints
+ * @property {Array<{x: number, z: number}>} vetRouteCenter  V2/G21 centerline
+ * @property {Array<{x: number, z: number}>} vetLane  V2/G21 right-lane polyline
+ * @property {number} vetLaneLength  V2/G21 arc length (m)
+ * @property {Array<{x: number, z: number}>} vetPickups  V2/G21 §C9.2: 10 coins
+ * @property {Array<{id: string, x: number, z: number, at: {x: number, z: number}}>} landmarks
+ *   V2/G21 §C9.3: 6 sticker landmarks — x/z = curbside trigger/delivery anchor,
+ *   `at` = visual dressing center (city/vetClinic.js builders)
  * @property {Array<{x: number, z: number}>} pickups  §C4.3: 20 coins on route
  * @property {Array<Array<[number, number]>>} trafficLoops  closed tile cycles
  * @property {Array<{key: string, x: number, z: number, rotY: number, scale: number,
@@ -439,6 +491,43 @@ export function generateCityLayout(seed) {
     pickups.push({ x: p.x, z: p.z });
   }
 
+  // ── V2/G21: vet clinic route + parking (§C9.1) ────────────────────────────
+  // Building on the EAST half of the tile, front facing west toward ring
+  // column 1 (rotY −90°); parking apron on the tile's west half so the car
+  // pulls east off the west ring into it (mirror of the shop recipe).
+  const vetWorld = tileToWorld(VET_TILE[0], VET_TILE[1]);
+  const vetBuildingAt = { x: vetWorld.x + 5, z: vetWorld.z };
+  const vetRotY = -90 * DEG; // authored front (+z) → west (−x)
+  const vetParking = { x: vetWorld.x - 6.5, z: vetWorld.z };
+
+  const vetRoute = VET_ROUTE_TILES.map(([r, c]) => ({ r, c }));
+  const vetRouteCenter = vetRoute.map(({ r, c }) => tileToWorld(r, c));
+  const vetLane = laneOffsetPolyline(vetRouteCenter, LANE_OFFSET_M, false);
+  vetLane.push({ x: vetParking.x, z: vetParking.z });
+  const vetLaneLength = polylineLength(vetLane);
+  const vetStart = pointAtLength(vetLane, 0);
+  const vetHeading = Math.atan2(vetStart.dx, vetStart.dz); // car spawn: west
+
+  // §C9.2: 10 coin pickups on the vet route (instead of the shop trip's 20)
+  const vetPickups = [];
+  const vetFirst = 24;
+  const vetLast = vetLaneLength - 16;
+  for (let i = 0; i < VET.ROUTE_PICKUP_COUNT; i++) {
+    const s = vetFirst + ((vetLast - vetFirst) * i) / (VET.ROUTE_PICKUP_COUNT - 1);
+    const p = pointAtLength(vetLane, s);
+    vetPickups.push({ x: p.x, z: p.z });
+  }
+
+  // §C9.3 landmarks: shop + vet anchors are their parking aprons (triggered
+  // by every arrival); the other four sit curbside on reserved block tiles.
+  const landmarks = [
+    { id: 'shop', x: parking.x, z: parking.z, at: { ...shopBuildingAt } },
+    { id: 'vetClinic', x: vetParking.x, z: vetParking.z, at: { ...vetBuildingAt } },
+    ...LANDMARK_SPOTS.map((s) => ({ id: s.id, x: s.anchor.x, z: s.anchor.z, at: { ...s.at } })),
+  ];
+  const isLandmarkTile = (r, c) => LANDMARK_TILES.some(([lr, lc]) => lr === r && lc === c);
+  // ── end V2/G21 ─────────────────────────────────────────────────────────────
+
   // --- buildings on block tiles --------------------------------------------
   const buildings = [];
   const scaleB = DRIVE_TUNING.BUILDING_SCALE;
@@ -446,6 +535,7 @@ export function generateCityLayout(seed) {
     for (let c = 0; c < GRID; c++) {
       if (grid[r][c].kind !== 'block') continue;
       if (r === SHOP_TILE[0] && c === SHOP_TILE[1]) continue; // shop tile stays clear
+      if (isLandmarkTile(r, c)) continue; // V2/G21: vet + landmark tiles stay clear (§C9.3)
       const { x, z } = tileToWorld(r, c);
       // face the nearest road: pick the closest road neighbor direction
       const facings = [];
@@ -489,6 +579,32 @@ export function generateCityLayout(seed) {
     x: shopBuildingAt.x, z: shopBuildingAt.z, rotY: shopRotY, scale: scaleB,
     halfX: shopB.hd * scaleB, halfZ: shopB.hw * scaleB,
   });
+
+  // ── V2/G21: fixed landmark buildings (§C9.1/§C9.3, deterministic) ─────────
+  // The vet clinic (building-e, west-facing — ±90° swaps the half extents).
+  const vetB = BUILDINGS['building-e'];
+  buildings.push({
+    key: 'city-kit-commercial/building-e',
+    x: vetBuildingAt.x, z: vetBuildingAt.z, rotY: vetRotY, scale: scaleB,
+    halfX: vetB.hd * scaleB, halfZ: vetB.hw * scaleB,
+  });
+  // skyTower: building-skyscraper-a on block [2,5] (§C9.3)
+  const towerB = BUILDINGS['building-skyscraper-a'];
+  const towerAt = landmarks.find((l) => l.id === 'skyTower').at;
+  buildings.push({
+    key: 'city-kit-commercial/building-skyscraper-a',
+    x: towerAt.x, z: towerAt.z, rotY: 0, scale: scaleB,
+    halfX: towerB.hw * scaleB, halfZ: towerB.hd * scaleB,
+  });
+  // windmillCafe: minigolf-kit windmill ×2.2 (§C9.3; café dressing in
+  // city/vetClinic.js) — instanced + collidable like every other building.
+  const millAt = landmarks.find((l) => l.id === 'windmillCafe').at;
+  buildings.push({
+    key: 'minigolf-kit/windmill',
+    x: millAt.x, z: millAt.z, rotY: 180 * DEG, scale: WINDMILL_SCALE,
+    halfX: 0.6 * WINDMILL_SCALE, halfZ: 0.5 * WINDMILL_SCALE,
+  });
+  // ── end V2/G21 ─────────────────────────────────────────────────────────────
 
   // --- nature filler on the rim ---------------------------------------------
   const nature = [];
@@ -562,6 +678,20 @@ export function generateCityLayout(seed) {
       parking,
       awningAt,
     },
+    // V2/G21 (§B3): vet destination + route + landmarks (§C9)
+    vet: {
+      tile: { r: VET_TILE[0], c: VET_TILE[1] },
+      buildingAt: vetBuildingAt,
+      rotY: vetRotY,
+      parking: vetParking,
+      heading: vetHeading,
+    },
+    vetRoute,
+    vetRouteCenter,
+    vetLane,
+    vetLaneLength,
+    vetPickups,
+    landmarks,
     pickups,
     trafficLoops: TRAFFIC_LOOP_CORNERS.map(expandLoop),
     buildings,
@@ -570,6 +700,28 @@ export function generateCityLayout(seed) {
     lamps,
   };
 }
+
+// ── V2/G21: landmark trigger helper (§C9.3, pure — shared by cityDrive and
+// G28's deliveryRush) ────────────────────────────────────────────────────────
+
+/** Sticker/delivery trigger radius around a landmark anchor (m, §C9.3). */
+export const LANDMARK_TRIGGER_M = 15;
+
+/**
+ * Landmark ids whose anchor lies within `radius` m of (x, z) — the §C9.3
+ * "entering a 15 m radius" sticker trigger during any city drive mode.
+ * @param {CityLayout['landmarks']} landmarks
+ * @param {number} x @param {number} z car world position
+ * @param {number} [radius] defaults to LANDMARK_TRIGGER_M
+ * @returns {string[]}
+ */
+export function landmarksInRange(landmarks, x, z, radius = LANDMARK_TRIGGER_M) {
+  const r2 = radius * radius;
+  return (landmarks ?? [])
+    .filter((l) => (l.x - x) * (l.x - x) + (l.z - z) * (l.z - z) <= r2)
+    .map((l) => l.id);
+}
+// ── end V2/G21 ──────────────────────────────────────────────────────────────
 
 /**
  * Axis-aligned collision boxes for the car (buildings + solid props + the

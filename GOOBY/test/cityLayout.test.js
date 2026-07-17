@@ -16,8 +16,10 @@ import {
   distanceToPolyline,
   roadPieceFor,
   isRoadTile,
+  landmarksInRange, // V2/G21 (§C9.3)
+  LANDMARK_TRIGGER_M, // V2/G21 (§C9.3)
 } from '../src/city/cityBuilder.js';
-import { DRIVE, DRIVE_TUNING } from '../src/data/constants.js';
+import { DRIVE, DRIVE_TUNING, VET, COLLECTIONS } from '../src/data/constants.js'; // V2/G21: + VET/COLLECTIONS
 
 const T = DRIVE_TUNING;
 const SEED = T.CITY_SEED;
@@ -226,3 +228,135 @@ test('traffic count stays in the §C6.1 6–10 band', () => {
   assert.ok(T.TRAFFIC_COUNT >= 6 && T.TRAFFIC_COUNT <= 10);
   assert.equal(T.TRAFFIC_HITBOX_SCALE, 0.7); // forgiving 70% AABBs
 });
+
+// ── V2/G21: vet clinic + landmarks (PLAN2 §C9) ──────────────────────────────
+
+test('V2 §C9.1: vet sits at fixed [2,2] and the layout stays deterministic', () => {
+  const a = generateCityLayout(SEED);
+  const b = generateCityLayout(SEED);
+  assert.deepEqual(a, b); // full-output determinism incl. vet/landmarks
+  assert.deepEqual(a.vet.tile, { r: 2, c: 2 });
+  // §C9.3 determinism-across-seeds: vet + landmarks are FIXED POIs
+  const c = generateCityLayout(SEED + 7);
+  assert.deepEqual(a.vet, c.vet);
+  assert.deepEqual(a.vetRoute, c.vetRoute);
+  assert.deepEqual(a.landmarks, c.landmarks);
+});
+
+test('V2 §C9.1: vet route waypoints are roads, adjacent-connected, no tile twice', () => {
+  const layout = generateCityLayout(SEED);
+  assert.deepEqual(layout.vetRoute[0], layout.home.tile); // starts at home
+  const seen = new Set();
+  for (let i = 0; i < layout.vetRoute.length; i++) {
+    const { r, c } = layout.vetRoute[i];
+    assert.ok(isRoadTile(layout.grid, r, c), `vet waypoint (${r},${c}) must be road`);
+    const key = `${r},${c}`;
+    assert.ok(!seen.has(key), `vet tile (${key}) visited twice`);
+    seen.add(key);
+    if (i > 0) {
+      const prev = layout.vetRoute[i - 1];
+      assert.equal(
+        Math.abs(r - prev.r) + Math.abs(c - prev.c), 1,
+        `vet waypoints ${i - 1}→${i} must be 4-adjacent`
+      );
+    }
+  }
+});
+
+test('V2 §C9.1: vet route ends adjacent to VET_TILE and the lane hits the parking trigger', () => {
+  const layout = generateCityLayout(SEED);
+  const end = layout.vetRoute[layout.vetRoute.length - 1];
+  const manhattan = Math.abs(layout.vet.tile.r - end.r) + Math.abs(layout.vet.tile.c - end.c);
+  assert.equal(manhattan, 1, 'vet route must end adjacent to VET_TILE');
+  const last = layout.vetLane[layout.vetLane.length - 1];
+  const dPark = Math.hypot(last.x - layout.vet.parking.x, last.z - layout.vet.parking.z);
+  assert.ok(dPark < DRIVE.PARKING_RADIUS, 'vet lane must end at the parking trigger');
+  // deliberately shorter than the shop trip (§C9.1 — sick Gooby shouldn't grind)
+  assert.ok(layout.vetLaneLength < layout.laneLength, 'vet trip must be the shorter drive');
+});
+
+test('V2 §C9.1: vet parking never overlaps the shop parking apron', () => {
+  const layout = generateCityLayout(SEED);
+  const d = Math.hypot(
+    layout.vet.parking.x - layout.shop.parking.x,
+    layout.vet.parking.z - layout.shop.parking.z
+  );
+  assert.ok(d > T.TILE_M, `aprons ${d.toFixed(1)} m apart (must exceed a tile)`);
+});
+
+test('V2 §C9.2: exactly VET.ROUTE_PICKUP_COUNT pickups on the vet lane, on roads', () => {
+  const layout = generateCityLayout(SEED);
+  assert.equal(VET.ROUTE_PICKUP_COUNT, 10); // §C9.2: 10 instead of 20
+  assert.equal(layout.vetPickups.length, VET.ROUTE_PICKUP_COUNT);
+  for (const p of layout.vetPickups) {
+    assert.ok(distanceToPolyline(layout.vetLane, p.x, p.z) < 0.5, 'vet pickup off the lane');
+    const { r, c } = worldToTile(p.x, p.z);
+    assert.ok(isRoadTile(layout.grid, r, c), `vet pickup at (${r},${c}) not on a road`);
+  }
+});
+
+test('V2 §C9.1: colliders never block the vet drive lane', () => {
+  const layout = generateCityLayout(SEED);
+  const boxes = layoutColliders(layout);
+  const r = T.CAR_RADIUS_M;
+  for (let s = 0; s <= layout.vetLaneLength; s += 2) {
+    const p = pointAtLength(layout.vetLane, s);
+    for (const b of boxes) {
+      const inside =
+        p.x > b.minX - r && p.x < b.maxX + r && p.z > b.minZ - r && p.z < b.maxZ + r;
+      assert.ok(!inside, `collider [${b.minX.toFixed(1)},${b.minZ.toFixed(1)}] blocks vet lane at s=${s}`);
+    }
+  }
+});
+
+test('V2 §C9.3: all 6 landmarks present with the §C6 set-3 sticker ids, on non-road tiles', () => {
+  const layout = generateCityLayout(SEED);
+  const setDef = COLLECTIONS.SETS.find((s) => s.id === 'landmarks');
+  assert.deepEqual(
+    layout.landmarks.map((l) => l.id).sort(),
+    [...setDef.entries].sort(),
+    'layout landmark ids must equal the §C6 landmarks sticker set'
+  );
+  for (const l of layout.landmarks) {
+    // visual center `at` sits on a block (non-road) tile (§C9.3)
+    const tile = worldToTile(l.at.x, l.at.z);
+    assert.ok(!isRoadTile(layout.grid, tile.r, tile.c), `${l.id} dressing on a road tile`);
+    assert.ok(Number.isFinite(l.x) && Number.isFinite(l.z), `${l.id} trigger anchor`);
+  }
+});
+
+test('V2 §C9.3: every landmark trigger is reachable from a guided lane (15 m)', () => {
+  const layout = generateCityLayout(SEED);
+  assert.equal(LANDMARK_TRIGGER_M, 15);
+  for (const l of layout.landmarks) {
+    const dShop = distanceToPolyline(layout.lane, l.x, l.z);
+    const dVet = distanceToPolyline(layout.vetLane, l.x, l.z);
+    assert.ok(
+      Math.min(dShop, dVet) <= LANDMARK_TRIGGER_M,
+      `${l.id} anchor ${Math.min(dShop, dVet).toFixed(1)} m from both lanes (> ${LANDMARK_TRIGGER_M})`
+    );
+  }
+});
+
+test('V2 §C9.3: landmarksInRange fires inside 15 m and stays quiet outside', () => {
+  const layout = generateCityLayout(SEED);
+  const vet = layout.landmarks.find((l) => l.id === 'vetClinic');
+  assert.deepEqual(landmarksInRange(layout.landmarks, vet.x, vet.z), ['vetClinic']);
+  assert.deepEqual(
+    landmarksInRange(layout.landmarks, vet.x + LANDMARK_TRIGGER_M + 1, vet.z + LANDMARK_TRIGGER_M + 1),
+    []
+  );
+  assert.deepEqual(landmarksInRange(undefined, 0, 0), []); // defensive
+});
+
+test('V2 §C9.1: vet building renders west-facing on the tile east half (building-e)', () => {
+  const layout = generateCityLayout(SEED);
+  assert.equal(layout.vet.rotY, -Math.PI / 2); // rotY −90° per §C9.1
+  const tileWorld = tileToWorld(layout.vet.tile.r, layout.vet.tile.c);
+  assert.ok(layout.vet.buildingAt.x > tileWorld.x, 'building on the east half');
+  assert.ok(layout.vet.parking.x < tileWorld.x, 'parking apron on the west half');
+  const entry = layout.buildings.find((b) => b.key === 'city-kit-commercial/building-e'
+    && b.x === layout.vet.buildingAt.x && b.z === layout.vet.buildingAt.z);
+  assert.ok(entry, 'vet building-e must be instanced via layout.buildings');
+});
+// ── end V2/G21 ──────────────────────────────────────────────────────────────
