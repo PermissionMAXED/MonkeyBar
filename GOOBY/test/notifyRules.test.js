@@ -13,6 +13,11 @@ import {
   quietShift,
   minutesToThreshold,
   lastClaimMs,
+  // V2/G20 (ids 6/7 — §C2.4/§C3.5)
+  earliestReadyAt,
+  sameLocalDay,
+  HARVEST_MIN_LEAD_MIN,
+  SICK_AFTER_H,
 } from '../src/systems/notifyRules.js';
 import { NOTIFY } from '../src/data/constants.js';
 import { defaultState } from '../src/core/save.js';
@@ -265,4 +270,130 @@ test('every item carries the §C7 title/body key pair for its id', () => {
     assert.equal(n.titleKey, `notify.${stems[n.id]}.title`);
     assert.equal(n.bodyKey, `notify.${stems[n.id]}.body`);
   }
+});
+
+// ======================================= V2/G20: harvest (id 6) + sick (id 7)
+
+/** Planted-plot fixture: watered through `wateredMin`, `progress` accrued. */
+function plot(crop, now, { progress = 0, wateredMin = 0 } = {}) {
+  return {
+    crop,
+    plantedAt: now - 60 * MIN,
+    progressMin: progress,
+    wateredUntil: now + wateredMin * MIN,
+    waterings: 1,
+    fertilized: false,
+  };
+}
+
+test('harvest: scheduled at the EARLIEST readyAt across planted plots (§C2.4)', () => {
+  const now = at(10, 0);
+  const s = state();
+  // corn: 90 grow, 10 done, watered 90 min → ready now+80; radish: ready now+10
+  s.garden.plots[0] = plot('corn', now, { progress: 10, wateredMin: 90 });
+  s.garden.plots[1] = plot('radish', now, { progress: 0, wateredMin: 10 });
+  const items = computeSchedule(s, now);
+  const n = byId(items, NOTIFY.IDS.harvest);
+  assert.equal(n.at, now + 10 * MIN); // earliest wins; exactly 10 min lead is OK
+  assert.equal(n.titleKey, 'notify.harvest.title');
+  assert.equal(n.bodyKey, 'notify.harvest.body');
+  assert.equal(items.filter((i) => i.id === NOTIFY.IDS.harvest).length, 1, 'only ONE harvest');
+});
+
+test('harvest lead rule: readyAt < 10 min in the future is not scheduled', () => {
+  const now = at(10, 0);
+  const s = state();
+  s.garden.plots[0] = plot('radish', now, { progress: 1, wateredMin: 9 }); // ready in 9 min
+  assert.equal(byId(computeSchedule(s, now), NOTIFY.IDS.harvest), undefined);
+  assert.equal(HARVEST_MIN_LEAD_MIN, 10);
+});
+
+test("harvest don't-lie rule: insufficient watering → no notification (§C2.4)", () => {
+  const now = at(10, 0);
+  const s = state();
+  // corn needs 90 more min but is only watered for 45 → progress halts first
+  s.garden.plots[0] = plot('corn', now, { progress: 0, wateredMin: 45 });
+  assert.equal(earliestReadyAt(s, now), null);
+  assert.equal(byId(computeSchedule(s, now), NOTIFY.IDS.harvest), undefined);
+});
+
+test('harvest: already-ready plots never notify (the player will see them)', () => {
+  const now = at(10, 0);
+  const s = state();
+  s.garden.plots[0] = plot('radish', now, { progress: 10, wateredMin: 0 }); // ready NOW
+  assert.equal(earliestReadyAt(s, now), null);
+  assert.equal(byId(computeSchedule(s, now), NOTIFY.IDS.harvest), undefined);
+});
+
+test('harvest: quiet-hours shift applies (readyAt 23:00 → 08:05 next day)', () => {
+  const now = at(21, 0);
+  const s = state();
+  s.garden.plots[0] = plot('corn', now, { progress: 0, wateredMin: 180 }); // ready 22:30
+  assert.equal(byId(computeSchedule(s, now), NOTIFY.IDS.harvest).at, at(8, 5, 1));
+});
+
+test('sick: 4 h after backgrounding while sick; queasy/healthy never schedule (§C3.5)', () => {
+  const now = at(10, 0);
+  const sick = state({}, { health: { ...defaultState().health, state: 'sick' } });
+  const n = byId(computeSchedule(sick, now), NOTIFY.IDS.sick);
+  assert.equal(n.at, now + SICK_AFTER_H * 60 * MIN); // 14:00
+  assert.equal(n.bodyKey, 'notify.sick.body');
+  const queasy = state({}, { health: { ...defaultState().health, state: 'queasy' } });
+  assert.equal(byId(computeSchedule(queasy, now), NOTIFY.IDS.sick), undefined);
+  assert.equal(byId(computeSchedule(state(), now), NOTIFY.IDS.sick), undefined);
+});
+
+test('sick: trigger landing in quiet hours shifts to 08:05', () => {
+  const now = at(20, 30); // + 4 h = 00:30 (quiet)
+  const s = state({}, { health: { ...defaultState().health, state: 'sick' } });
+  assert.equal(byId(computeSchedule(s, now), NOTIFY.IDS.sick).at, at(8, 5, 1));
+});
+
+test('sick max 1/day: a FIRED trigger earlier the same local day suppresses (§C3.5)', () => {
+  const now = at(10, 0);
+  const health = { ...defaultState().health, state: 'sick' };
+  // fired at 09:00 today (recorded time is in the past) → no second one today
+  const fired = state({}, { health, care: { sickNotifyAt: at(9, 0) } });
+  assert.equal(byId(computeSchedule(fired, now), NOTIFY.IDS.sick), undefined);
+  // fired YESTERDAY → today's schedule is allowed again
+  const yesterday = state({}, { health, care: { sickNotifyAt: at(9, 0, -1) } });
+  assert.equal(byId(computeSchedule(yesterday, now), NOTIFY.IDS.sick).at, at(14, 0));
+  // recorded but still in the FUTURE (never fired — app came back first,
+  // cancelAll removed it) → reschedule freely
+  const pending = state({}, { health, care: { sickNotifyAt: at(13, 0) } });
+  assert.equal(byId(computeSchedule(pending, now), NOTIFY.IDS.sick).at, at(14, 0));
+});
+
+test('sick cross-day: 21:00 backgrounding schedules tomorrow even after a morning fire', () => {
+  const now = at(21, 0); // + 4 h → 01:00 quiet → 08:05 TOMORROW
+  const s = state({}, {
+    health: { ...defaultState().health, state: 'sick' },
+    care: { sickNotifyAt: at(9, 0) }, // fired this morning — different local day than the new trigger
+  });
+  assert.equal(byId(computeSchedule(s, now), NOTIFY.IDS.sick).at, at(8, 5, 1));
+});
+
+test('sameLocalDay: calendar-day comparison is local', () => {
+  assert.equal(sameLocalDay(at(0, 0), at(23, 59)), true);
+  assert.equal(sameLocalDay(at(23, 59), at(0, 0, 1)), false);
+});
+
+test('all 7 triggers live: MAX_SCHEDULED 7 holds, ids 6/7 included, sorted', () => {
+  const now = at(9, 0);
+  const s = state(
+    { hunger: 40, fun: 50, hygiene: 40 },
+    {
+      sleep: { sleeping: true, startedAt: now, wakeAt: now + 27 * MIN },
+      daily: { lastClaimDay: '2026-07-16', streak: 3 },
+      health: { ...defaultState().health, state: 'sick' },
+    }
+  );
+  s.garden.plots[0] = plot('corn', now, { progress: 0, wateredMin: 90 });
+  const items = computeSchedule(s, now);
+  assert.equal(items.length, 7);
+  assert.ok(items.length <= NOTIFY.MAX_SCHEDULED, 'cap holds');
+  assert.deepEqual(new Set(items.map((n) => n.id)).size, 7, 'one per id');
+  assert.ok(byId(items, NOTIFY.IDS.harvest), 'harvest present');
+  assert.ok(byId(items, NOTIFY.IDS.sick), 'sick present');
+  for (let i = 1; i < items.length; i++) assert.ok(items[i].at >= items[i - 1].at, 'sorted');
 });

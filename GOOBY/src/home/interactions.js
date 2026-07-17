@@ -20,7 +20,7 @@
 // Both entry points are re-entrant and fully feature-detected, so the module
 // works (degraded) before G4's files exist.
 
-import { INTERACT, XP, CARE_TUNING } from '../data/constants.js';
+import { INTERACT, XP, CARE_TUNING, COLLECTIONS, LEVELING, ITEM_PRICES, STATS } from '../data/constants.js';
 import { getFood } from '../data/foods.js';
 import { applyDeltas, clampStat } from '../systems/stats.js';
 import { currentMood } from '../systems/sleep.js';
@@ -29,6 +29,11 @@ import { applyXp } from '../systems/leveling.js';
 import { deriveEmotion } from '../character/emotions.js';
 import { t } from '../data/strings.js';
 import { now, localDay } from '../core/clock.js';
+// V2/G20: pet-sim engines feeding the care pipeline (all pure modules)
+import { onEat as healthOnEat, tick as healthTick, HEALTH } from '../systems/health.js';
+import { onEat as weightOnEat, onBallFetch as weightOnBallFetch, tierOf } from '../systems/weight.js';
+import { award as collectionsAward } from '../systems/collections.js';
+import { useMedicine as economyUseMedicine, buyItem as economyBuyItem } from '../systems/economy.js';
 
 // ===========================================================================
 // 1. PURE LOGIC (unit-tested — no three.js/DOM imports above this line either)
@@ -180,16 +185,24 @@ export function applyPetTickleGain(counters, kind, day) {
  * the food's verbatim stat deltas, grant XP 5 (§C1.5) incl. level-ups.
  * Pure — never mutates inputs.
  *
- * @param {{stats: object, inventory: object, xp: number, level: number}} slice
+ * V2/G20 (§C3.4): while `slice.health === 'sick'` junk food is refused
+ * (reason 'sick') — sick Gooby only accepts healthy food. The health/weight
+ * slice effects themselves (health.onEat/weight.onEat, §B5) are applied by
+ * the wiring (performFeed), not here — this stays a stats/inventory/XP pure fn.
+ *
+ * @param {{stats: object, inventory: object, xp: number, level: number,
+ *   health?: 'healthy'|'queasy'|'sick'}} slice
  * @param {string} foodId catalog id (data/foods.js)
- * @returns {{ok: false, reason: 'unknown'|'full'|'none'} | {
+ * @returns {{ok: false, reason: 'unknown'|'full'|'none'|'sick'} | {
  *   ok: true, stats: object, inventory: object, xp: number, level: number,
- *   levelsGained: number, coinsAwarded: number, hungerDelta: number, favorite: boolean
+ *   levelsGained: number, coinsAwarded: number, hungerDelta: number, favorite: boolean,
+ *   junk: boolean
  * }}
  */
 export function feedGooby(slice, foodId) {
   const food = getFood(foodId);
   if (!food) return { ok: false, reason: 'unknown' };
+  if (food.junk && slice.health === 'sick') return { ok: false, reason: 'sick' }; // V2/G20 (§C3.4)
   if (slice.stats.hunger >= INTERACT.FEED_REFUSE_AT_HUNGER) return { ok: false, reason: 'full' };
   const inventory = invRemove(slice.inventory, foodId);
   if (inventory == null) return { ok: false, reason: 'none' };
@@ -205,7 +218,23 @@ export function feedGooby(slice, foodId) {
     coinsAwarded: prog.coinsAwarded,
     hungerDelta: food.deltas.hunger,
     favorite: food.favorite,
+    junk: food.junk === true, // V2/G20
   };
+}
+
+/**
+ * V2/G20: junkScore → tray belly-icon band (§C7: green/yellow/orange —
+ * informed players, no nagging). Bands follow the §B5 thresholds: below the
+ * WARN line (4) all is well, from WARN to the sick line (8) it's a warning,
+ * at/above the sick line it's high. Pure.
+ * @param {number} junkScore
+ * @returns {'ok'|'warn'|'high'}
+ */
+export function junkScoreBand(junkScore) {
+  const v = Number(junkScore) || 0;
+  if (v >= HEALTH.SICK_JUNK) return 'high';
+  if (v >= HEALTH.WARN_JUNK) return 'warn';
+  return 'ok';
 }
 
 /**
@@ -360,7 +389,15 @@ const FOOD_EMOJI = {
   watermelon: '🍉', 'donut-sprinkles': '🍩', cupcake: '🧁', salad: '🥗',
   'ice-cream': '🍦', sandwich: '🥪', 'hot-dog': '🌭', pancakes: '🥞',
   burger: '🍔', pizza: '🍕', cake: '🍰',
+  // V2/G20: §C7 catalog additions
+  radish: '🍠', tomato: '🍅', corn: '🌽', eggplant: '🍆', pumpkin: '🎃',
+  strawberry: '🍓', grapes: '🍇', croissant: '🥐', lollypop: '🍭',
+  cookie: '🍪', chocolate: '🍫', 'candy-bar': '🍬', muffin: '🥮',
+  fries: '🍟', 'corn-dog': '🍢', sundae: '🍨',
 };
+
+/** V2/G20: junkScore band → belly icon fill (§C7 green/yellow/orange). */
+const BELLY_BAND_COLOR = { ok: '#8BC98A', warn: '#F2C14E', high: '#F28C4E' };
 
 const CARE_CSS = `
 .g5-float{position:fixed;transform:translate(-50%,-50%);font-size:30px;font-weight:800;color:#59C9B9;text-shadow:0 2px 0 #fff,0 4px 14px rgba(74,59,54,.3);pointer-events:none;z-index:900;animation:g5-float-up 1.1s ease-out forwards;}
@@ -385,6 +422,19 @@ const CARE_CSS = `
 .g5-soap{position:fixed;transform:translate(-50%,-50%);width:74px;height:52px;pointer-events:auto;cursor:grab;touch-action:none;z-index:960;filter:drop-shadow(0 6px 8px rgba(74,59,54,.3));}
 .g5-shower-btn{position:absolute;pointer-events:auto;display:inline-flex;align-items:center;gap:8px;right:14px;top:calc(76px + var(--safe-top,0px));}
 .g5-wash-close{position:absolute;pointer-events:auto;left:14px;top:calc(76px + var(--safe-top,0px));}
+/* V2/G20: junk badge + belly band + Care row (§C7/§C3.5) */
+.tray-junk{position:absolute;top:4px;left:6px;font-size:13px;pointer-events:none;}
+.tray-head{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.g20-belly{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--brown,#4A3B36);opacity:.8;}
+.g20-belly svg{display:block;}
+.tray-care-title{margin:14px 0 0;font-size:15px;font-weight:800;color:var(--brown,#4A3B36);opacity:.8;}
+.tray-care-row{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:8px;}
+.tray-care-item{display:flex;flex-direction:column;align-items:center;gap:4px;background:var(--bg-cream,#FFF6EC);border-radius:16px;padding:10px 4px 8px;border:2px dashed rgba(74,59,54,.18);font-family:inherit;user-select:none;-webkit-user-select:none;touch-action:none;position:relative;}
+.tray-care-item.g20-drag{cursor:grab;}
+.tray-care-item:active{transform:scale(.97);}
+.tray-care-buy{font-size:11px;font-weight:800;border:none;border-radius:999px;padding:3px 10px;background:var(--teal,#59C9B9);color:#fff;font-family:inherit;cursor:pointer;}
+.tray-care-buy:disabled{opacity:.45;}
+.tray-care-hint{font-size:10px;font-weight:700;opacity:.55;}
 `;
 
 let careStylesInjected = false;
@@ -431,9 +481,10 @@ export async function registerCareUi(deps) {
 
   // HUD + arcade (src/ui/, owned by G5). Dynamic imports keep this module
   // import-safe for node:test (registry.js uses import.meta.glob).
-  const [{ createHud }, { createArcadeScreen }] = await Promise.all([
+  const [{ createHud }, { createArcadeScreen }, { createCareSheetPanel }] = await Promise.all([
     import('../ui/hud.js'),
     import('../ui/arcadeScreen.js'),
+    import('../ui/careSheet.js'), // V2/G20 (§C3.4)
   ]);
   if (!core.hud) {
     core.hud = createHud({
@@ -448,6 +499,18 @@ export async function registerCareUi(deps) {
     ui.registerScreen('arcade', createArcadeScreen({ store, ui, framework: core.framework }));
   }
   ui.registerPanel('foodTray', createFoodTrayPanel());
+  // V2/G20: care sheet (§C3.4) — panel id 'careSheet' is the contract G23's
+  // HUD 🤒 chip opens. Its medicine action reuses the shared grimace-then-
+  // relief flow; without a live home scene it degrades to toasts only.
+  ui.registerPanel('careSheet', createCareSheetPanel({
+    store,
+    ui,
+    audio,
+    useMedicine: () =>
+      performMedicine(
+        active ?? { store, ui, audio, gooby: null, particles: null, disposed: false, timers: [] }
+      ),
+  }));
 }
 
 /**
@@ -573,6 +636,24 @@ export function initInteractions(bag = {}) {
   } else if (!state.camera) {
     console.warn('[interactions] no camera found — gestures inactive');
   }
+
+  // --- V2/G20: pet-sim visuals — store → Gooby rig (§C3.3/§C3.4/§C4.3) ---
+  if (gooby) {
+    gooby.setWeightTier?.(tierOf(store.get('weight.value')));
+    gooby.setHealth?.(store.get('health.state'));
+    state.subs.push(store.on('weightChanged', (w) => gooby.setWeightTier?.(tierOf(w?.value))));
+    state.subs.push(store.on('healthChanged', (h) => gooby.setHealth?.(h?.state)));
+    // §C3.3/§C3.4 sneeze squeak: the rig fires onSneeze at the "choo!" snap.
+    gooby.onSneeze = () => {
+      if (!state.disposed) audio.play('health.sneeze');
+    };
+    state.subs.push(() => {
+      gooby.onSneeze = null;
+    });
+  }
+  // Health tick events (timeEngine re-emits them as the runtime-only store
+  // event 'healthEvent') → §C3.2 warning ramp toasts + transition toasts.
+  state.subs.push(store.on('healthEvent', (ev) => onHealthEvent(state, ev)));
 
   // --- dev demo params (screenshot surface, dev builds only — §E9 spirit) ---
   if (import.meta.env?.DEV && typeof location !== 'undefined') {
@@ -811,6 +892,14 @@ function wireGestures(s) {
 // feed flow (§C3): fridge → tray panel → drag to mouth → eat / refuse
 // ---------------------------------------------------------------------------
 
+/** V2/G20: tiny tummy SVG for the §C7 junkScore band icon. */
+function bellyIconSvg(color) {
+  return `<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+    <ellipse cx="9" cy="9.5" rx="6.5" ry="7" fill="${color}" opacity="0.95"/>
+    <ellipse cx="9" cy="11" rx="3.6" ry="4" fill="#fff" opacity="0.5"/>
+  </svg>`;
+}
+
 /** ui panel module for the food tray (registered in registerCareUi). */
 function createFoodTrayPanel() {
   return {
@@ -818,17 +907,24 @@ function createFoodTrayPanel() {
       const store = core?.store ?? active?.store;
       const inv = store?.get('inventory') ?? {};
       const items = invList(inv);
-      el.innerHTML = `<h2 class="tray-title">${t('tray.title')}</h2>` +
+      // V2/G20: §C7 belly junkScore band icon (green/yellow/orange, subtle)
+      const band = junkScoreBand(store?.get('health.junkScore') ?? 0);
+      const belly = `<span class="g20-belly" role="img" aria-label="${t(`health.junkBand.${band}`)}"
+        title="${t(`health.junkBand.${band}`)}">${bellyIconSvg(BELLY_BAND_COLOR[band])}</span>`;
+      el.innerHTML =
+        `<div class="tray-head"><h2 class="tray-title">${t('tray.title')}</h2>${belly}</div>` +
         (items.length === 0
           ? `<div class="tray-empty">${t('tray.empty')}</div>`
           : `<div class="tray-hint">${t('tray.dragHint')}</div><div class="tray-grid"></div>`);
       const grid = el.querySelector('.tray-grid');
-      if (!grid) return;
       for (const { id, count } of items) {
+        if (!grid) break;
         const btn = document.createElement('button');
         btn.className = 'tray-item';
+        // V2/G20: §C7 junk foods carry a tiny 🍬 badge
+        const junkBadge = getFood(id)?.junk ? `<span class="tray-junk" title="${t('tray.junkBadge')}">🍬</span>` : '';
         btn.innerHTML = `
-          <span class="tray-count">×${count}</span>
+          ${junkBadge}<span class="tray-count">×${count}</span>
           <span class="tray-emoji">${FOOD_EMOJI[id] ?? '🍽️'}</span>
           <span class="tray-name">${t(`food.${id}`)}</span>`;
         btn.addEventListener('pointerdown', (e) => {
@@ -836,9 +932,59 @@ function createFoodTrayPanel() {
         });
         grid.appendChild(btn);
       }
+      mountCareRow(el, store); // V2/G20
     },
     unmount() {},
   };
+}
+
+/**
+ * V2/G20: Care row in the fridge tray (§C3.5): medicine bottle — drag to
+ * Gooby to use (economy.useMedicine), buy button when out; fertilizer — BUY
+ * only (using it is the garden's watering-can-style drag, G19).
+ * @param {HTMLElement} el tray panel root
+ * @param {object} store
+ */
+function mountCareRow(el, store) {
+  if (!store) return;
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<h3 class="tray-care-title">${t('tray.careTitle')}</h3><div class="tray-care-row"></div>`;
+  const row = wrap.querySelector('.tray-care-row');
+
+  const renderItem = (itemId, emoji, draggable, hint) => {
+    const count = store.get(`items.${itemId}`) ?? 0;
+    const item = document.createElement('div');
+    item.className = `tray-care-item${draggable && count > 0 ? ' g20-drag' : ''}`;
+    item.innerHTML = `
+      <span class="tray-count">×${count}</span>
+      <span class="tray-emoji">${emoji}</span>
+      <span class="tray-name">${t(`tray.${itemId}`)}</span>
+      ${hint ? `<span class="tray-care-hint">${hint}</span>` : ''}
+      <button class="tray-care-buy">${t('tray.buy', { price: ITEM_PRICES[itemId] })}</button>`;
+    item.querySelector('.tray-care-buy').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const r = economyBuyItem(store, itemId);
+      (core?.ui ?? active?.ui)?.toast(r.ok ? 'tray.bought' : 'tray.noCoins');
+      if (r.ok) (core?.audio ?? active?.audio)?.play('ui.pick');
+      // re-render the row with the new count
+      const parent = wrap.parentElement;
+      if (parent) {
+        wrap.remove();
+        mountCareRow(parent, store);
+      }
+    });
+    if (draggable && count > 0) {
+      item.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('.tray-care-buy')) return;
+        if (active) startMedicineDrag(active, e);
+      });
+    }
+    row.appendChild(item);
+  };
+
+  renderItem('medicine', '💊', true, null);
+  renderItem('fertilizer', '🌱', false, t('tray.fertilizerHint'));
+  el.appendChild(wrap);
 }
 
 /** Begin dragging a food item out of the tray (DOM ghost — §C3 feed). */
@@ -927,6 +1073,134 @@ function startFoodDrag(s, foodId, downEvent) {
   document.addEventListener('pointercancel', onCancel);
 }
 
+/**
+ * V2/G20: drag the medicine bottle from the tray's Care row onto Gooby
+ * (§C3.5): drop near the mouth → economy.useMedicine → grimace-then-relief.
+ * Mirrors startFoodDrag's DOM-ghost pattern.
+ * @param {object} s wiring state
+ * @param {PointerEvent} downEvent
+ */
+function startMedicineDrag(s, downEvent) {
+  if (s.feeding || typeof document === 'undefined') return;
+  downEvent.preventDefault();
+  s.audio.play('ui.pick');
+
+  const ghost = document.createElement('div');
+  ghost.className = 'g5-ghost';
+  ghost.textContent = '💊';
+  ghost.style.left = `${downEvent.clientX}px`;
+  ghost.style.top = `${downEvent.clientY}px`;
+  document.body.appendChild(ghost);
+
+  let trayClosed = false;
+  const startX = downEvent.clientX;
+  const startY = downEvent.clientY;
+
+  const feeding = {
+    cancel() {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onCancel);
+      ghost.remove();
+      if (s.feeding === feeding) s.feeding = null;
+    },
+  };
+  s.feeding = feeding;
+
+  const mouthScreen = () => {
+    const m = s.gooby && s.THREE ? mouthWorld(s) : null;
+    return m && s.camera ? worldToScreen(s, m) : null;
+  };
+
+  function onMove(e) {
+    ghost.style.left = `${e.clientX}px`;
+    ghost.style.top = `${e.clientY}px`;
+    if (!trayClosed && Math.hypot(e.clientX - startX, e.clientY - startY) > 24) {
+      trayClosed = true;
+      s.ui.closePanel('foodTray'); // reveal Gooby while the bottle drags
+    }
+    const m = mouthScreen();
+    if (!m) return;
+    ghost.classList.toggle(
+      'g5-near',
+      Math.hypot(e.clientX - m.x, e.clientY - m.y) < CARE_TUNING.FEED_NEAR_MOUTH_PX
+    );
+  }
+
+  function onUp(e) {
+    const m = mouthScreen();
+    const d = m ? Math.hypot(e.clientX - m.x, e.clientY - m.y) : Infinity;
+    feeding.cancel();
+    if (m && d < CARE_TUNING.FEED_DROP_PX) performMedicine(s, m);
+  }
+  function onCancel() {
+    feeding.cancel();
+  }
+
+  document.addEventListener('pointermove', onMove);
+  document.addEventListener('pointerup', onUp);
+  document.addEventListener('pointercancel', onCancel);
+}
+
+/**
+ * V2/G20: apply one medicine at Gooby's mouth (shared by the drag flow and
+ * the care sheet): economy.useMedicine + §C3.5 grimace-then-relief juice.
+ * @param {object} s wiring state
+ * @param {{x: number, y: number}} [screenPos]
+ * @returns {boolean} whether a dose was consumed
+ */
+function performMedicine(s, screenPos) {
+  const { store, ui, audio, gooby } = s;
+  const r = economyUseMedicine(store);
+  if (!r.ok) {
+    ui.toast(r.reason === 'healthy' ? 'care.medicineNotNeeded' : 'care.medicineNone');
+    return false;
+  }
+  // grimace (yuck!) … then relief (§C3.5)
+  audio.play('gooby.refuse');
+  ui.toast('care.medicineGiven');
+  if (screenPos) floatText(s, '💊', screenPos.x, screenPos.y - 40);
+  if (gooby) {
+    gooby.setEmotion('grumpy');
+    gooby.play('refuse').then(() => {
+      if (s.disposed) return;
+      audio.play('gooby.squeakHappy');
+      gooby.setEmotion('happy');
+      gooby.play('happyBounce').then(() => restoreEmotion(s));
+      const head = mouthWorld(s);
+      if (s.particles && head) s.particles.emit('hearts', head, { count: 4 });
+    });
+  }
+  return true;
+}
+
+/**
+ * V2/G20: health tick event → toast + juice (§C3.2 warning ramp + §C3.1
+ * transitions). Fired via the runtime-only 'healthEvent' store event
+ * (core/timeEngine.js re-emits health.tick events).
+ * @param {object} s wiring state
+ * @param {'tummyWarning'|'becameQueasy'|'becameSick'|'recovered'} ev
+ */
+function onHealthEvent(s, ev) {
+  if (s.disposed) return;
+  const { ui, audio, gooby } = s;
+  if (ev === 'tummyWarning') {
+    // §C3.2: junkScore hit 4 — toast + Gooby pats his belly (front wobble).
+    ui.toast('health.tummyWarning');
+    audio.play('gooby.squeak');
+    gooby?.play('pokeWobble', { dir: { x: 0, z: 1 } });
+  } else if (ev === 'becameQueasy') {
+    ui.toast('health.becameQueasy');
+    audio.play('gooby.refuse');
+  } else if (ev === 'becameSick') {
+    ui.toast('health.becameSick');
+    audio.play('gooby.squeakDizzy');
+  } else if (ev === 'recovered') {
+    ui.toast('health.recovered');
+    audio.play('gooby.squeakHappy');
+  }
+}
+
 let lastAudioOnceId = '';
 function audioOnce(s, id) {
   if (lastAudioOnceId === id) return;
@@ -951,19 +1225,28 @@ function performFeed(s, foodId, screenPos) {
     inventory: store.get('inventory'),
     xp: store.get('xp'),
     level: store.get('level'),
+    health: store.get('health.state'), // V2/G20: §C3.4 sick-junk gate
   };
   const r = feedGooby(slice, foodId);
   const pos = screenPos ?? { x: (innerWidth || 390) / 2, y: (innerHeight || 844) / 2 };
 
   if (!r.ok) {
-    if (r.reason === 'full') {
+    if (r.reason === 'full' || r.reason === 'sick') {
       // refuse: head shake + refuse clip + flat mouth (§C3)
       audio.play('gooby.refuse');
       gooby?.play('refuse').then(() => restoreEmotion(s));
-      ui.toast('toast.foodRefused');
+      ui.toast(r.reason === 'sick' ? 'toast.junkRefusedSick' : 'toast.foodRefused'); // V2/G20
     }
     return;
   }
+
+  // V2/G20: §C6 treats set — first-time sticker toast (+5 XP, §C5.2)
+  const food = getFood(foodId);
+  const treatSet = COLLECTIONS.SETS.find((set) => set.id === 'treats');
+  const isTreat = !!treatSet?.entries?.includes(foodId);
+  let firstSticker = false;
+  /** @type {string[]} */
+  let healthEvents = [];
 
   store.update((st) => {
     st.stats = r.stats;
@@ -972,7 +1255,32 @@ function performFeed(s, foodId, screenPos) {
     st.level = r.level;
     st.coins += r.coinsAwarded;
     st.achievements.counters.feeds = (st.achievements.counters.feeds ?? 0) + 1;
+    // V2/G20: §B5 feeding effects — junk raises junkScore/weight, healthy
+    // food lowers junkScore. A zero-minute health tick evaluates the state
+    // transition (and the §C3.2 tummy warning) at the moment of eating, so a
+    // threshold crossed by THIS bite reacts instantly instead of racing the
+    // 1 s engine tick's decay.
+    const lowStatCount = STATS.KEYS.filter((k) => st.stats[k] < HEALTH.NEGLECT_STAT_BELOW).length;
+    const hr = healthTick(healthOnEat(st.health, food), 0, lowStatCount);
+    st.health = hr.h;
+    healthEvents = hr.events;
+    st.weight = weightOnEat(st.weight, food);
+    if (isTreat) {
+      const awarded = collectionsAward(st.collections, 'treats', foodId);
+      st.collections = awarded.c;
+      firstSticker = awarded.first;
+      if (firstSticker) {
+        const prog = applyXp({ xp: st.xp, level: st.level }, LEVELING.XP_STICKER);
+        st.xp = prog.xp;
+        st.level = prog.level;
+        st.coins += prog.coinsAwarded;
+      }
+    }
   });
+  for (const ev of healthEvents) store.emit?.('healthEvent', ev);
+  if (firstSticker) {
+    ui.toast('toast.sticker', { name: t(`food.${foodId}`), xp: LEVELING.XP_STICKER });
+  }
 
   audio.play(r.favorite ? 'gooby.squeakHappy' : 'eat.chomp');
   floatText(s, `+${r.hungerDelta}`, pos.x, pos.y - 40);
@@ -1284,6 +1592,9 @@ function maybeFetch(s, ball) {
     ball.moving = true;
     s.store.update((st) => {
       st.stats.fun = clampStat(st.stats.fun + INTERACT.BALL_FUN);
+      // V2/G20: §B5 ball fetch −0.2 weight + `balls` counter (§B2)
+      st.weight = weightOnBallFetch(st.weight);
+      st.achievements.counters.balls = (st.achievements.counters.balls ?? 0) + 1;
     });
     if (s.particles) s.particles.emit('hearts', target, { count: 3 });
     ball.cooldownUntil = now() + INTERACT.BALL_COOLDOWN_SEC * 1000;

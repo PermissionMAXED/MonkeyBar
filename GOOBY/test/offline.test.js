@@ -8,11 +8,16 @@ import assert from 'node:assert/strict';
 
 import { simulateOffline, offlineToastVars } from '../src/systems/offline.js';
 import { startSleep } from '../src/systems/sleep.js';
-import { OFFLINE, STATS, XP } from '../src/data/constants.js';
+import { OFFLINE, STATS, XP, CROP_TABLE } from '../src/data/constants.js';
 import { defaultState } from '../src/core/save.js';
 import { createStore } from '../src/core/store.js';
 import { createTimeEngine } from '../src/core/timeEngine.js';
 import * as clock from '../src/core/clock.js';
+// V2/G20: 2.0 engine catch-up (§B4/§B5/§C2.3)
+import { plant, water } from '../src/systems/garden.js';
+import { weatherAt } from '../src/systems/weather.js';
+import { HEALTH } from '../src/systems/health.js';
+import { WEIGHT } from '../src/systems/weight.js';
 
 const T0 = Date.UTC(2026, 6, 16, 12, 0, 0);
 const MIN = 60000;
@@ -295,4 +300,97 @@ test('offlineToastVars: null for a blink-short absence', () => {
   const before = { hunger: 80, energy: 90, hygiene: 85, fun: 70 };
   const sim = simulateOffline(state(before), T0 + 10000); // 10 s
   assert.equal(offlineToastVars(before, sim), null);
+});
+
+// ===================================== V2/G20: 2.0 engine catch-up (§B4/§B5)
+
+test('V2/G20 garden: grows at the FULL elapsed rate, uncapped, cropsReady + toast', () => {
+  const corn = { id: 'corn', ...CROP_TABLE.corn }; // growthMin 90, window 45
+  const s0 = state();
+  s0.garden = { ...s0.garden, lastTickAt: T0 };
+  s0.garden = plant(s0.garden, 0, corn, T0).g;
+  s0.garden = water(s0.garden, 0, corn, T0).g; // watered until T0+45
+  s0.garden = water(s0.garden, 0, corn, T0 + 45 * MIN).g; // …until T0+90
+  const before = { ...s0.stats };
+  const sim = simulateOffline(s0, T0 + 10 * H); // 10 h — way past the 480-min cap
+  // full watered window credited (garden is NOT capped like stats — §C2.3)
+  assert.equal(sim.state.garden.plots[0].progressMin, 90);
+  assert.equal(sim.state.garden.lastTickAt, T0 + 10 * H);
+  // readiness crossed offline → one 'cropsReady' + welcome-back toast part
+  assert.ok(sim.events.includes('cropsReady'), `events: ${sim.events}`);
+  assert.match(offlineToastVars(before, sim).summary, /Crops are ready!/);
+});
+
+/** First rain block after 2026-01-01 whose two PRECEDING blocks are dry
+ *  (keeps the dry-gap assertions deterministic in any timezone). */
+function findIsolatedRainBlock() {
+  let t = Date.UTC(2026, 0, 1);
+  for (;;) {
+    const wx = weatherAt(t);
+    if (
+      wx.state === 'rain' &&
+      weatherAt(wx.start - 1).state !== 'rain' &&
+      weatherAt(wx.start - 6 * H - 1).state !== 'rain'
+    ) {
+      return wx;
+    }
+    t = wx.end;
+  }
+}
+
+test('V2/G20 rain: a block starting inside the 8 h window auto-waters; dry gap never credited (§B4)', () => {
+  const rain = findIsolatedRainBlock();
+  const left = rain.start - H; // rain begins 1 h after leaving (< 8 h window)
+  const pumpkin = { id: 'pumpkin', ...CROP_TABLE.pumpkin };
+  const s0 = state();
+  s0.lastTickAt = left;
+  s0.garden = { ...s0.garden, lastTickAt: left };
+  s0.garden = plant(s0.garden, 0, pumpkin, left).g; // planted, NEVER watered
+  const { state: s } = simulateOffline(s0, rain.end);
+  // the dry hour before the rain stays dry; the whole rain block is credited
+  assert.equal(s.garden.plots[0].wateredUntil, rain.end);
+  near(s.garden.plots[0].progressMin, (rain.end - rain.start) / 60000, 'rain-only minutes');
+});
+
+test('V2/G20 rain: blocks starting after the 8 h sim window are ignored (§B4)', () => {
+  const rain = findIsolatedRainBlock();
+  const left = rain.start - 9 * H; // rain starts 9 h after leaving — past the window
+  const pumpkin = { id: 'pumpkin', ...CROP_TABLE.pumpkin };
+  const s0 = state();
+  s0.lastTickAt = left;
+  s0.garden = { ...s0.garden, lastTickAt: left };
+  s0.garden = plant(s0.garden, 0, pumpkin, left).g;
+  const { state: s } = simulateOffline(s0, rain.end);
+  assert.equal(s.garden.plots[0].wateredUntil, 0, 'no rain credited');
+  assert.equal(s.garden.plots[0].progressMin, 0);
+});
+
+test('V2/G20 health: junk decays at ×0.3 offline; no events on a quiet hour', () => {
+  const s0 = state({}, { health: { state: 'healthy', junkScore: 3, neglectMin: 0, recoverMin: 0, since: 0 } });
+  const { state: s, events } = simulateOffline(s0, T0 + H);
+  near(s.health.junkScore, 3 - 60 * 0.3 * HEALTH.JUNK_DECAY_PER_MIN, 'junk ×0.3 decay');
+  assert.deepEqual(events, []);
+});
+
+test("V2/G20 health: queasy tips sick offline → 'becameSick' event + toast part", () => {
+  const s0 = state({}, { health: { state: 'queasy', junkScore: 8.5, neglectMin: 0, recoverMin: 0, since: 0 } });
+  const before = { ...s0.stats };
+  const sim = simulateOffline(s0, T0 + H);
+  assert.equal(sim.state.health.state, 'sick');
+  assert.ok(sim.events.includes('becameSick'), `events: ${sim.events}`);
+  assert.match(offlineToastVars(before, sim).summary, /Gooby got sick/);
+});
+
+test('V2/G20 health: a clean queasy absence recovers (480-min cap × 0.3 ≥ 60 clean min)', () => {
+  const s0 = state({}, { health: { state: 'queasy', junkScore: 0, neglectMin: 0, recoverMin: 0, since: 0 } });
+  const sim = simulateOffline(s0, T0 + 24 * H); // capped at 480 sim-min → 144 clean min
+  assert.equal(sim.state.health.state, 'healthy');
+  assert.ok(sim.events.includes('recovered'), `events: ${sim.events}`);
+});
+
+test('V2/G20 weight: drifts toward 50 at ×0.3, capped at 480 sim-minutes', () => {
+  const r1 = simulateOffline(state({}, { weight: { value: 60 } }), T0 + H);
+  near(r1.state.weight.value, 60 - 60 * 0.3 * WEIGHT.DRIFT_PER_MIN, 'drift ×0.3');
+  const r2 = simulateOffline(state({}, { weight: { value: 60 } }), T0 + 24 * H);
+  near(r2.state.weight.value, 60 - OFFLINE.AWAKE_CAP_MIN * 0.3 * WEIGHT.DRIFT_PER_MIN, 'capped drift');
 });

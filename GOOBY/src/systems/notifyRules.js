@@ -11,15 +11,34 @@
 //   5 daily    24 h after the last daily-bonus claim (guarded — claim data
 //              lands with W4's dailyBonus; §E3 stores only lastClaimDay)
 //
+// V2/G20 — 2.0 triggers (§B3: MAX_SCHEDULED 7; quiet hours/spacing unchanged):
+//   6 harvest  at the earliest garden.readyAt across planted plots (§C2.4),
+//              only when ≥ 10 min in the future; skipped entirely when no
+//              current watering carries a plot to readiness ("don't lie");
+//              at most ONE harvest notification.
+//   7 sick     4 h after backgrounding while health.state === 'sick' (§C3.5),
+//              max 1/day: state.care.sickNotifyAt remembers the last
+//              scheduled trigger — when that time has PASSED (i.e. the app
+//              stayed backgrounded over it, so it fired) no second sick
+//              notification lands on the same local day. core/notifications.js
+//              records sickNotifyAt after scheduling.
+//
 // Rules: stat triggers only when the predicted time is ≥ 30 min in the future;
 // stats already at/below their threshold are SKIPPED (the app is open — no
 // immediate nag). Quiet hours 22:00–08:00 device-local shift to 08:05 (next
 // morning when late). Min 30 min between any two scheduled times — the later
 // one shifts +30 (and is re-quiet-shifted if that lands inside quiet hours).
-// Max 5 scheduled (one per id).
+// Max NOTIFY.MAX_SCHEDULED (one per id).
 
-import { NOTIFY, STATS } from '../data/constants.js';
+import { NOTIFY, STATS, CROP_TABLE } from '../data/constants.js';
 import { isSleeping } from './sleep.js';
+import { readyAt } from './garden.js'; // V2/G20 (pure)
+
+// V2/G20: engine-internal 2.0 rule numbers (§E0.1-2: not constants.js).
+/** §C2.4: harvest notification only when readyAt is ≥ 10 min in the future. */
+export const HARVEST_MIN_LEAD_MIN = 10;
+/** §C3.5: sick notification fires 4 h after backgrounding while sick. */
+export const SICK_AFTER_H = 4;
 
 /** Notification id → strings.js key stem (titleKey/bodyKey = `notify.<stem>.title|body`). */
 const ID_STEM = Object.freeze(
@@ -165,5 +184,67 @@ export function computeSchedule(state, nowMs) {
     if (at > nowMs) items.push(makeItem(NOTIFY.IDS.daily, at));
   }
 
+  // V2/G20: id 6 — harvest-ready (§C2.4): earliest readyAt across planted
+  // plots, only when the CURRENT watering carries the plot to readiness
+  // (garden.readyAt returns null otherwise — "don't lie") and the moment is
+  // ≥ 10 min in the future. At most one harvest notification.
+  const harvestAt = earliestReadyAt(state, nowMs);
+  if (harvestAt != null && harvestAt - nowMs >= HARVEST_MIN_LEAD_MIN * 60000) {
+    items.push(makeItem(NOTIFY.IDS.harvest, harvestAt));
+  }
+
+  // V2/G20: id 7 — sick (§C3.5): 4 h after backgrounding while sick, max
+  // 1/day. `care.sickNotifyAt` is the last trigger this module scheduled
+  // (recorded by core/notifications.js); a PAST value means the app stayed
+  // backgrounded over it — it fired — so no second one on the same local day.
+  if (state?.health?.state === 'sick') {
+    const at = nowMs + SICK_AFTER_H * 3600000;
+    const lastSickAt = Number(state?.care?.sickNotifyAt);
+    const firedSameDay =
+      Number.isFinite(lastSickAt) && lastSickAt > 0 && lastSickAt <= nowMs &&
+      sameLocalDay(lastSickAt, quietShift(at));
+    if (!firedSameDay) items.push(makeItem(NOTIFY.IDS.sick, at));
+  }
+
   return resolveConflicts(items);
+}
+
+/**
+ * V2/G20: earliest predicted plot readiness (§C2.4), or null when no planted
+ * plot can reach readiness on its current watering. Crop defs come straight
+ * from constants.CROP_TABLE (readyAt only needs growthMin).
+ * @param {object} state save-schema state
+ * @param {number} nowMs
+ * @returns {number|null}
+ */
+export function earliestReadyAt(state, nowMs) {
+  const plots = state?.garden?.plots;
+  if (!Array.isArray(plots)) return null;
+  let earliest = null;
+  for (const plot of plots) {
+    if (!plot || plot.crop == null) continue;
+    const def = CROP_TABLE[plot.crop];
+    if (!def) continue;
+    const at = readyAt(plot, def, nowMs);
+    // Already-ready plots (at <= nowMs) never notify — the player will see
+    // them; only future readiness counts (§C2.4 lead handled by the caller).
+    if (at == null || at <= nowMs) continue;
+    if (earliest == null || at < earliest) earliest = at;
+  }
+  return earliest;
+}
+
+/**
+ * V2/G20: do two timestamps fall on the same device-local calendar day?
+ * @param {number} a @param {number} b
+ * @returns {boolean}
+ */
+export function sameLocalDay(a, b) {
+  const da = new Date(a);
+  const db = new Date(b);
+  return (
+    da.getFullYear() === db.getFullYear() &&
+    da.getMonth() === db.getMonth() &&
+    da.getDate() === db.getDate()
+  );
 }

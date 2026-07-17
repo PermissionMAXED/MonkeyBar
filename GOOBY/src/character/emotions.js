@@ -118,12 +118,17 @@ export function statOverride(stats) {
 
 /**
  * Derive the effective emotion (§D2.5): `context ?? statOverride ?? moodEmotion`.
- * @param {{mood?: number, stats?: {hunger?: number, energy?: number}, context?: string|null}} input
+ * V2/G20 (§C3.4): while `health === 'sick'` the mood feeding the band is
+ * capped at 39 (STATS.EXHAUSTED_MOOD_CAP — "like exhausted"), so sick Gooby
+ * never looks better than grumpy. Context overrides still win.
+ * @param {{mood?: number, stats?: {hunger?: number, energy?: number}, context?: string|null,
+ *   health?: 'healthy'|'queasy'|'sick'|null}} input
  * @returns {string} one of EMOTION_IDS
  */
-export function deriveEmotion({ mood = 60, stats = null, context = null } = {}) {
+export function deriveEmotion({ mood = 60, stats = null, context = null, health = null } = {}) {
   if (context != null) return context;
-  return statOverride(stats) ?? moodEmotion(mood);
+  const cappedMood = health === 'sick' ? Math.min(mood, STATS.EXHAUSTED_MOOD_CAP) : mood; // V2/G20
+  return statOverride(stats) ?? moodEmotion(cappedMood);
 }
 
 /**
@@ -131,10 +136,12 @@ export function deriveEmotion({ mood = 60, stats = null, context = null } = {}) 
  * store and push/clear contexts from gameplay (eating, sleeping, dizzy…);
  * subscribe with onChange to drive the face rig.
  *
- * @param {{mood?: number, stats?: object, context?: string|null}} [initial]
+ * @param {{mood?: number, stats?: object, context?: string|null,
+ *   health?: 'healthy'|'queasy'|'sick'|null}} [initial]
  * @returns {{
  *   setMood: (v: number) => string,
  *   setStats: (stats: object|null) => string,
+ *   setHealth: (health: 'healthy'|'queasy'|'sick'|null) => string,  // V2/G20 (§C3.4 sick cap)
  *   setContext: (id: string|null) => string,  // id must be an EMOTION_IDS member
  *   getContext: () => string|null,
  *   get: () => string,
@@ -145,12 +152,13 @@ export function createEmotionMachine(initial = {}) {
   let mood = initial.mood ?? 60;
   let stats = initial.stats ?? null;
   let context = initial.context ?? null;
-  let current = deriveEmotion({ mood, stats, context });
+  let health = initial.health ?? null; // V2/G20
+  let current = deriveEmotion({ mood, stats, context, health });
   /** @type {Set<Function>} */
   const subs = new Set();
 
   function refresh() {
-    const next = deriveEmotion({ mood, stats, context });
+    const next = deriveEmotion({ mood, stats, context, health });
     if (next !== current) {
       const prev = current;
       current = next;
@@ -166,6 +174,11 @@ export function createEmotionMachine(initial = {}) {
     },
     setStats(s) {
       stats = s;
+      return refresh();
+    },
+    // V2/G20: health state feeds the §C3.4 sick mood cap
+    setHealth(h) {
+      health = h ?? null;
       return refresh();
     },
     setContext(id) {

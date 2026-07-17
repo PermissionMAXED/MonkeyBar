@@ -13,6 +13,7 @@ import {
   createCareGestures,
   applyPetTickleGain,
   feedGooby,
+  junkScoreBand, // V2/G20 (§C7)
   accumulateCoverage,
   isFullWash,
   washRinse,
@@ -22,6 +23,7 @@ import {
 } from '../src/home/interactions.js';
 import { INTERACT, XP, CARE_TUNING } from '../src/data/constants.js';
 import { FOODS_BY_ID } from '../src/data/foods.js';
+import { HEALTH } from '../src/systems/health.js'; // V2/G20 (§B5 thresholds)
 
 const BASE_STATS = { hunger: 50, energy: 80, hygiene: 40, fun: 50 };
 
@@ -263,6 +265,49 @@ test('stat deltas clamp to 100 (overfeeding)', () => {
     'burger'
   );
   assert.equal(r.stats.hunger, 100);
+});
+
+// --------------------------------------- V2/G20: sick-junk gate + junk flag (§C3.4)
+
+test('V2/G20 feed: sick Gooby refuses junk food — healthy food still works', () => {
+  const slice = {
+    stats: { ...BASE_STATS },
+    inventory: { cake: 1, carrot: 1 },
+    xp: 0,
+    level: 1,
+    health: 'sick',
+  };
+  assert.deepEqual(feedGooby(slice, 'cake'), { ok: false, reason: 'sick' });
+  assert.equal(slice.inventory.cake, 1, 'nothing consumed on refusal');
+  const healthy = feedGooby(slice, 'carrot');
+  assert.equal(healthy.ok, true);
+  assert.equal(healthy.junk, false);
+});
+
+test('V2/G20 feed: queasy Gooby still eats junk (§C3.4 — only sick refuses)', () => {
+  const r = feedGooby(
+    { stats: { ...BASE_STATS }, inventory: { cake: 1 }, xp: 0, level: 1, health: 'queasy' },
+    'cake'
+  );
+  assert.equal(r.ok, true);
+  assert.equal(r.junk, true, 'junk flag reported for the wiring');
+});
+
+test('V2/G20 feed: missing health field (pre-2.0 saves) never blocks feeding', () => {
+  const r = feedGooby(
+    { stats: { ...BASE_STATS }, inventory: { cake: 1 }, xp: 0, level: 1 },
+    'cake'
+  );
+  assert.equal(r.ok, true);
+});
+
+test('V2/G20 junkScoreBand: §B5 warn/sick thresholds → ok/warn/high (§C7 belly icon)', () => {
+  assert.equal(junkScoreBand(0), 'ok');
+  assert.equal(junkScoreBand(HEALTH.WARN_JUNK - 0.1), 'ok');
+  assert.equal(junkScoreBand(HEALTH.WARN_JUNK), 'warn');
+  assert.equal(junkScoreBand(HEALTH.SICK_JUNK - 0.1), 'warn');
+  assert.equal(junkScoreBand(HEALTH.SICK_JUNK), 'high');
+  assert.equal(junkScoreBand(undefined), 'ok', 'missing slice defaults to ok');
 });
 
 // ---------------------------------------------------------------------------

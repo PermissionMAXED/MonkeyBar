@@ -11,11 +11,32 @@
 //
 // Event order: 'wokeUp' first (if any), then statLow crossings in STATS.KEYS
 // order (hunger, energy, hygiene, fun).
+//
+// V2/G20 (§B4/§B5/§C2.3): the sim additionally advances the 2.0 engines —
+//   - health/weight: the SAME awake window as stats (0.3× rate, 480-min cap);
+//     health tick events ('becameQueasy'|'becameSick'|'recovered'|
+//     'tummyWarning') are appended to the events list.
+//   - garden: FULL elapsed rate, uncapped (plants are real-time like sleep),
+//     with garden.applyRain for every rain block that started inside the
+//     first 8 h after the player left (§B4: offline rain is capped at the
+//     same sim window as stats). Sequencing per the §B4/G18 contract:
+//     tick(g, rainStart) → applyRain(g, rainStart, rainEnd) → tick(g, now) —
+//     bookkeeping is brought current BEFORE each mutation so dry gaps are
+//     never credited. Plots that crossed readiness append one 'cropsReady'.
+// New events appended after the statLow crossings: health events first, then
+// 'cropsReady'.
 
 import { OFFLINE, STATS } from '../data/constants.js';
 import { applyTick } from './stats.js';
 import { isSleeping, wakeUp } from './sleep.js';
 import { t } from '../data/strings.js';
+// V2/G20: 2.0 engines + catalog (pure imports — module stays node:test-safe)
+import * as health from './health.js';
+import { HEALTH } from './health.js';
+import * as weight from './weight.js';
+import * as garden from './garden.js';
+import { weatherAt } from './weather.js';
+import { CROPS_BY_ID } from '../data/crops.js';
 
 /**
  * Simulate the time the app was closed. Pure — returns a NEW state (input is
@@ -71,6 +92,49 @@ export function simulateOffline(state, nowMs) {
       events.push(`statLow:${k}`);
     }
   }
+
+  // --- V2/G20: health + weight (same 0.3×/480-min awake window as stats) ---
+  if (awakeMin > 0) {
+    const lowStatCount = STATS.KEYS.filter(
+      (k) => s.stats[k] < HEALTH.NEGLECT_STAT_BELOW
+    ).length;
+    const hr = health.tick(s.health, awakeMin, lowStatCount, {
+      mult: OFFLINE.AWAKE_RATE_MULT,
+      nowMs,
+    });
+    s = {
+      ...s,
+      health: hr.h,
+      weight: weight.tick(s.weight, awakeMin, OFFLINE.AWAKE_RATE_MULT),
+    };
+    events.push(...hr.events);
+  }
+
+  // --- V2/G20: garden — FULL elapsed rate, uncapped, + offline rain (§B4) ---
+  {
+    /** @type {{type: string, plotIdx: number, cropId: string}[]} */
+    const gardenEvents = [];
+    let g = s.garden;
+    // Rain blocks only count inside the first 8 h after leaving (§B4: same
+    // sim window as §E4 stats). Walk the 6-h weather blocks across it.
+    const rainWindowEnd = Math.min(nowMs, last + OFFLINE.AWAKE_CAP_MIN * 60000);
+    let cursor = last;
+    for (let guard = 0; cursor < rainWindowEnd && guard < 64; guard += 1) {
+      const wx = weatherAt(cursor);
+      if (wx.state === 'rain') {
+        const rainStart = Math.max(wx.start, last);
+        const brought = garden.tick(g, rainStart, CROPS_BY_ID); // bookkeeping first
+        gardenEvents.push(...brought.events);
+        g = garden.applyRain(brought.g, rainStart, wx.end, CROPS_BY_ID);
+      }
+      cursor = wx.end;
+    }
+    const grown = garden.tick(g, nowMs, CROPS_BY_ID);
+    gardenEvents.push(...grown.events);
+    s = { ...s, garden: grown.g };
+    if (gardenEvents.some((e) => e.type === 'ready')) events.push('cropsReady');
+  }
+
   return { state: s, events };
 }
 
@@ -85,6 +149,9 @@ export function simulateOffline(state, nowMs) {
 export function offlineToastVars(beforeStats, sim) {
   const parts = [];
   if (sim.events.includes('wokeUp')) parts.push(t('offline.wokeUp'));
+  // V2/G20: welcome-back parts for crops that ripened / sickness that struck
+  if (sim.events.includes('cropsReady')) parts.push(t('offline.cropsReady'));
+  if (sim.events.includes('becameSick')) parts.push(t('offline.becameSick'));
   for (const k of STATS.KEYS) {
     const delta = Math.round(sim.state.stats[k] - beforeStats[k]);
     if (delta !== 0) {

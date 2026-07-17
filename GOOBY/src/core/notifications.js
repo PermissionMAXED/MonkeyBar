@@ -91,7 +91,7 @@ export async function requestPermission() {
 }
 
 /**
- * Cancel every scheduled notification (ids 1–5).
+ * Cancel every scheduled notification (all NOTIFY.IDS — 1–7 since V2/G20).
  * @returns {Promise<void>}
  */
 export async function cancelAll() {
@@ -171,8 +171,22 @@ export async function rescheduleAll(state) {
 export function installNotificationHooks({ store }) {
   if (typeof document === 'undefined') return;
   cancelAll(); // on app open: cancel all (§C7)
+  // V2/G20: reschedule wrapper that records the sick trigger (§C3.5 max
+  // 1/day): notifyRules reads care.sickNotifyAt on the next computeSchedule —
+  // a PAST recorded time means the notification actually fired.
+  const reschedule = async () => {
+    const items = await rescheduleAll(store.get());
+    const sick = items.find((n) => n.id === NOTIFY.IDS.sick);
+    if (sick && store.get('care.sickNotifyAt') !== sick.at) {
+      store.update((state) => {
+        state.care = state.care ?? {};
+        state.care.sickNotifyAt = sick.at;
+      });
+    }
+    return items;
+  };
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') rescheduleAll(store.get());
+    if (document.visibilityState === 'hidden') reschedule();
     else cancelAll();
   });
   let debounce = null;
@@ -182,7 +196,7 @@ export function installNotificationHooks({ store }) {
       debounce = null;
       // Only meaningful in the background — while open, notifications stay
       // cancelled and the hidden hook reschedules on the way out.
-      if (document.hidden) rescheduleAll(store.get());
+      if (document.hidden) reschedule();
     }, 1000);
   });
 
@@ -205,7 +219,7 @@ export function installNotificationHooks({ store }) {
       }
       appPlugin?.addListener?.('appStateChange', ({ isActive }) => {
         if (isActive) cancelAll();
-        else rescheduleAll(store.get());
+        else reschedule(); // V2/G20: sick-trigger recording rides along
       });
     } catch (err) {
       console.warn('[notifications] @capacitor/app unavailable:', err?.message);

@@ -5,6 +5,9 @@
 
 import { ENGINE } from '../data/constants.js';
 import { persist } from './save.js';
+// V2/G20: weight tier mapping for the §B5 'weightChanged' granularity rule
+// (emit only when the integer value or the tier changes). Pure import.
+import { tierOf } from '../systems/weight.js';
 
 /**
  * Specific store events (§E2). 'change' fires (coalesced) on any mutation.
@@ -21,6 +24,19 @@ const EVENTS = [
   'outfitChanged',
   'decorChanged',
   'achievementUnlocked',
+  // V2/G20: §B3 persisted-slice events (payload = the slice, v1 style).
+  // 'weightChanged' fires only when Math.round(value) or tierOf(value)
+  // changes (§B5); the others fire on any slice change. Runtime-only events
+  // ('dayBandChanged'/'weatherChanged', §B3) go through store.emit() and are
+  // never diffed/persisted.
+  'gardenChanged',
+  'healthChanged',
+  'weightChanged',
+  'questsChanged',
+  'collectionsChanged',
+  'skinChanged',
+  'itemsChanged',
+  'profileChanged',
 ];
 
 /** @type {ReturnType<typeof createStore>|null} */
@@ -49,17 +65,31 @@ export function createStore(state, opts = {}) {
       outfits: JSON.stringify(state.outfits),
       decor: JSON.stringify(state.decor) + JSON.stringify(state.furniture),
       achievements: Object.keys(state.achievements?.unlocked ?? {}).join(','),
+      // V2/G20: §B3 slice snapshots (weight per the §B5 int|tier rule)
+      garden: JSON.stringify(state.garden),
+      health: JSON.stringify(state.health),
+      weight: `${Math.round(Number(state.weight?.value) || 0)}|${tierOf(state.weight?.value)}`,
+      quests: JSON.stringify(state.quests),
+      collections: JSON.stringify(state.collections),
+      skins: JSON.stringify(state.skins),
+      items: JSON.stringify(state.items),
+      profile: JSON.stringify(state.profile),
     };
   }
 
   function emit(event, payload) {
+    // V2/G20: returns the listener count so runtime-event emitters (careSheet
+    // vet button → G21 trip flow) can detect "nobody is listening" fallbacks.
+    let called = 0;
     for (const cb of listeners.get(event) ?? []) {
       try {
         cb(payload);
+        called += 1;
       } catch (err) {
         console.error(`[store] listener error for '${event}':`, err);
       }
     }
+    return called;
   }
 
   /** Diff vs the last snapshot and emit specific events + coalesced 'change'. */
@@ -78,6 +108,15 @@ export function createStore(state, opts = {}) {
     for (const id of Object.keys(state.achievements?.unlocked ?? {})) {
       if (!prevUnlocked.has(id)) emit('achievementUnlocked', id);
     }
+    // V2/G20: §B3 persisted-slice events (payload = the live slice)
+    if (next.garden !== snapshot.garden) emit('gardenChanged', state.garden);
+    if (next.health !== snapshot.health) emit('healthChanged', state.health);
+    if (next.weight !== snapshot.weight) emit('weightChanged', state.weight);
+    if (next.quests !== snapshot.quests) emit('questsChanged', state.quests);
+    if (next.collections !== snapshot.collections) emit('collectionsChanged', state.collections);
+    if (next.skins !== snapshot.skins) emit('skinChanged', state.skins);
+    if (next.items !== snapshot.items) emit('itemsChanged', state.items);
+    if (next.profile !== snapshot.profile) emit('profileChanged', state.profile);
     snapshot = next;
     emit('change', state);
   }
@@ -163,6 +202,20 @@ export function createStore(state, opts = {}) {
     /** @param {string} event @param {(payload: *) => void} cb */
     off(event, cb) {
       listeners.get(event)?.delete(cb);
+    },
+
+    /**
+     * V2/G20: emit a RUNTIME-ONLY event (§B3: 'dayBandChanged',
+     * 'weatherChanged'; plus 'healthEvent' and 'vetTripRequested' — see
+     * timeEngine/careSheet). Never used for persisted-slice events (those
+     * flush from snapshot diffs). Returns how many listeners ran, so callers
+     * can offer graceful "not built yet" fallbacks.
+     * @param {string} event
+     * @param {*} [payload]
+     * @returns {number} listener count that received the event
+     */
+    emit(event, payload) {
+      return emit(event, payload);
     },
 
     /** Force pending events + save to flush immediately (pagehide etc.). */

@@ -172,6 +172,10 @@ export function createHomeScene(ctx) {
       const machine = createEmotionMachine();
       machine.onChange((id) => gooby.setEmotion(id));
       refreshEmotionInputs(machine);
+      // V2/G20: sick mood cap 39 (§C3.4) — health state feeds the machine
+      machine.setHealth?.(store.get('health.state'));
+      subs.push(store.on('healthChanged', (h) => machine.setHealth?.(h?.state)));
+      // end V2/G20
       gooby.setEmotion(machine.get());
       subs.push(store.on('statsChanged', () => refreshEmotionInputs(machine)));
       // sleep transitions set/clear grumpyUntil without touching stats — refresh

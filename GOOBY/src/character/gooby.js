@@ -13,6 +13,7 @@ import { createBlobShadow } from '../gfx/blobShadow.js';
 import { createGoobyFace } from './goobyFace.js';
 import { createClipPlayer, restPose, CLIPS } from './goobyAnims.js';
 import { FACES, EMOTION_IDS } from './emotions.js';
+import { WEIGHT } from '../systems/weight.js'; // V2/G20: §C4.3 tier scales (pure)
 
 /** Recipe-space height to ear tips (body 0.78 + head + ears, incl. head 1.08×). */
 const RECIPE_HEIGHT = 1.61;
@@ -226,6 +227,70 @@ export function createGooby(opts = {}) {
   anchor('handL', armGrps.L, 0, -0.26, 0); // paw tips
   anchor('handR', armGrps.R, 0, -0.26, 0);
 
+  // ==========================================================================
+  // V2/G20: 2.0 pet-sim visuals (§C3.3/§C3.4/§C4.3)
+  // ==========================================================================
+  // --- weight tier: 2 s-animated X/Z scale on the lathe body + belly patch ---
+  const TIER_ANIM_SEC = 2; // §C4.3: tier changes animate, never pop
+  let weightTier = 'chubby';
+  let tierScaleCur = 1;
+  let tierScaleFrom = 1;
+  let tierScaleTo = 1;
+  let tierAnimT = 1; // 0..1 tween progress (1 = settled)
+
+  // --- sickness visuals state (§C3.3 queasy / §C3.4 sick) ---
+  let healthState = 'healthy';
+  let sickDroop = 0; // droopy-ear lerp while sick (like wetDroop)
+  let cheekLerp = 0; // 0 = base cheek color … 1 = queasy green
+  let sneezeIn = 0; // countdown (s) to the next sneeze; 0 = inactive
+  let sneezeT = -1; // active sneeze envelope time (s); -1 = idle
+  let sneezeSquealed = false; // onSneeze fired for this sneeze
+  let hiccupIn = 0; // queasyWobble hiccup countdown
+  let hiccupT = -1; // active hiccup envelope
+  const SNEEZE_EVERY_QUEASY_SEC = 40; // §C3.3 ~40 s
+  const SNEEZE_EVERY_SICK_SEC = 20; // §C3.4 ~20 s
+  const SNEEZE_SEC = 0.9;
+
+  /** ~interval with ±25 % jitter. @param {number} base @returns {number} */
+  const sneezeJitter = (base) => base * (0.75 + Math.random() * 0.5);
+
+  // Own cheek material clone (the shared goobyMat('cheek') must stay clean)
+  // for the §C3.3 queasy lerp toward #BFD9A8.
+  const CHEEK_QUEASY = new THREE.Color('#BFD9A8');
+  /** @type {THREE.Mesh[]} */
+  const cheekMeshes = [];
+  group.traverse((o) => {
+    if (o.name === 'cheekL' || o.name === 'cheekR') cheekMeshes.push(o);
+  });
+  let cheekMat = null;
+  let cheekBaseColor = null;
+  if (cheekMeshes.length > 0 && cheekMeshes[0].material) {
+    cheekMat = cheekMeshes[0].material.clone();
+    cheekMat.userData.shared = false;
+    ownedMats.push(cheekMat);
+    cheekBaseColor = cheekMat.color.clone();
+    for (const m of cheekMeshes) m.material = cheekMat;
+  }
+
+  // Thermometer-in-mouth prop (§C3.4, procedural): white stem + red tip,
+  // poking out of the mouth corner; visible only while sick.
+  const thermoTipMat = new THREE.MeshStandardMaterial({ color: 0xe85d5d, roughness: 0.45 });
+  ownedMats.push(thermoTipMat);
+  const thermo = new THREE.Group();
+  thermo.name = 'thermometer';
+  const thermoStem = mesh('thermoStem', new THREE.CylinderGeometry(0.011, 0.011, 0.17, 8), goobyMat('tooth'));
+  thermoStem.rotation.x = Math.PI / 2; // along +Z (out of the mouth)
+  thermoStem.position.z = 0.05;
+  thermo.add(thermoStem);
+  const thermoTip = mesh('thermoTip', new THREE.SphereGeometry(0.02, 10, 8), thermoTipMat);
+  thermoTip.position.z = 0.13;
+  thermo.add(thermoTip);
+  thermo.position.set(0.045, 0.04, 0.28); // mouth corner (headGrp-local, §D2.2)
+  thermo.rotation.set(0.22, -0.5, 0); // out to Gooby's right, tip dipped
+  thermo.visible = false;
+  headGrp.add(thermo);
+  // ======================================================== end V2/G20 build =
+
   // -------------------------------------------------------------------------
   // State
   // -------------------------------------------------------------------------
@@ -305,10 +370,21 @@ export function createGooby(opts = {}) {
 
     /**
      * Play a clip (§D2.4). Resolves when the clip ends (loop/hold: on stop()).
+     * V2/G20 (§C4.3 anim flavor): chonky amplifies pokeWobble dir +20 %;
+     * floof runs bounce clips 10 % slower (both only when the caller didn't
+     * pass its own speed/dir tuning).
      * @param {string} clip @param {{loop?: boolean|'hold', speed?: number, dir?: {x:number,z:number}}} [playOpts]
      */
     play(clip, playOpts = {}) {
-      return player.play(clip, playOpts);
+      let opts = playOpts;
+      // V2/G20: §C4.3 tier flavor
+      if (weightTier === 'chonky' && clip === 'pokeWobble' && opts.dir) {
+        opts = { ...opts, dir: { x: opts.dir.x * 1.2, z: opts.dir.z * 1.2 } };
+      } else if (weightTier === 'floof' && opts.speed == null &&
+        (clip === 'happyBounce' || clip === 'jump' || clip === 'tickle')) {
+        opts = { ...opts, speed: 0.9 };
+      }
+      return player.play(clip, opts);
     },
 
     /** Stop a clip (or all clips when omitted). */
@@ -367,6 +443,54 @@ export function createGooby(opts = {}) {
       face.setDroolOverride(on ? true : null);
     },
 
+    // ---- V2/G20: 2.0 pet-sim visual API (§C3.3/§C3.4/§C4.3) ----
+
+    /**
+     * V2/G20: set the cosmetic weight tier (§C4.3). The body X/Z scale
+     * animates over 2 s (never pops) and the neck outfit anchor re-fits.
+     * @param {'sleek'|'chubby'|'chonky'|'floof'} tier
+     */
+    setWeightTier(tier) {
+      if (!WEIGHT.TIERS.includes(tier)) {
+        console.warn(`[gooby] unknown weight tier '${tier}'`);
+        return;
+      }
+      if (tier === weightTier) return;
+      weightTier = tier;
+      tierScaleFrom = tierScaleCur;
+      tierScaleTo = WEIGHT.TIER_SCALE[tier];
+      tierAnimT = 0;
+    },
+
+    /** @returns {string} current weight tier (V2/G20) */
+    weightTier: () => weightTier,
+
+    /**
+     * V2/G20: set the sickness state (§C3.3/§C3.4): drives the queasy cheek
+     * lerp + queasyWobble idle + ~40 s sneezes (queasy) and droopy ears +
+     * thermometer prop + ~20 s sneezes (sick). `api.onSneeze` (assignable)
+     * fires at each sneeze snap so the caller can play the squeak.
+     * @param {'healthy'|'queasy'|'sick'} state
+     */
+    setHealth(state) {
+      if (!['healthy', 'queasy', 'sick'].includes(state)) {
+        console.warn(`[gooby] unknown health state '${state}'`);
+        return;
+      }
+      if (state === healthState) return;
+      healthState = state;
+      thermo.visible = state === 'sick';
+      sneezeIn = state === 'queasy' ? sneezeJitter(SNEEZE_EVERY_QUEASY_SEC)
+        : state === 'sick' ? sneezeJitter(SNEEZE_EVERY_SICK_SEC) : 0;
+      hiccupIn = state === 'queasy' ? 5 + Math.random() * 4 : 0;
+    },
+
+    /** @returns {string} current health state (V2/G20) */
+    healthState: () => healthState,
+
+    /** V2/G20: assignable sneeze callback (audio hookup lives in interactions). */
+    onSneeze: null,
+
     /** Sum of render triangles in the whole rig (≤ 6000 — §D2.2 budget). */
     triangleCount() {
       let tris = 0;
@@ -389,7 +513,9 @@ export function createGooby(opts = {}) {
       const pose = restPose();
       player.update(dt, pose, { event: onClipEvent });
       if (!player.activeIds().some((id) => !CLIPS[id].overlay)) {
-        player.play('idle');
+        // V2/G20: §C4.3 idle cadence flavor (sleek quicker, floof slower)
+        const idleSpeed = weightTier === 'sleek' ? 1.08 : weightTier === 'floof' ? 0.92 : 1;
+        player.play('idle', { speed: idleSpeed });
         player.update(0, pose, { event: onClipEvent });
       }
 
@@ -401,6 +527,26 @@ export function createGooby(opts = {}) {
       emo.armsHang += (faceDef.armsHang - emo.armsHang) * k;
       wetDroop += ((wet ? 0.85 : 0) - wetDroop) * Math.min(1, dt * 4);
       bodyMat.roughness += ((wet ? 0.28 : 0.65) - bodyMat.roughness) * Math.min(1, dt * 4);
+
+      // --- V2/G20: weight tier scale tween (§C4.3, 2 s ease, never pops) ---
+      if (tierAnimT < 1) {
+        tierAnimT = Math.min(1, tierAnimT + dt / TIER_ANIM_SEC);
+        const e = tierAnimT < 0.5
+          ? 2 * tierAnimT * tierAnimT
+          : 1 - ((-2 * tierAnimT + 2) ** 2) / 2; // easeInOutQuad
+        tierScaleCur = tierScaleFrom + (tierScaleTo - tierScaleFrom) * e;
+        body.scale.set(tierScaleCur, 1, tierScaleCur);
+        belly.scale.set(tierScaleCur, 1.05, 0.42 * tierScaleCur);
+        anchors.neck.position.z = 0.06 * tierScaleCur; // outfit-anchor re-fit
+      }
+
+      // --- V2/G20: sickness visuals (§C3.3/§C3.4) ---
+      sickDroop += ((healthState === 'sick' ? 0.55 : 0) - sickDroop) * Math.min(1, dt * 3);
+      if (cheekMat) {
+        const cheekTarget = healthState === 'healthy' ? 0 : 1;
+        cheekLerp += (cheekTarget - cheekLerp) * Math.min(1, dt * 2.5);
+        cheekMat.color.copy(cheekBaseColor).lerp(CHEEK_QUEASY, cheekLerp);
+      }
 
       // --- ecstatic bouncy idle (§D2.5) ---
       if (faceDef.bounceIdle && player.isPlaying('idle')) {
@@ -424,6 +570,73 @@ export function createGooby(opts = {}) {
             rumbleT = 0;
             rumbleIn = faceDef.rumbleEverySec * (0.85 + Math.random() * 0.3);
           }
+        }
+      }
+
+      // --- V2/G20: queasyWobble idle — slow sway + occasional hiccup (§C3.3) ---
+      if (healthState === 'queasy' && player.isPlaying('idle')) {
+        pose.rotZ += Math.sin(clockSec * 1.35) * 0.045;
+        pose.posX += Math.sin(clockSec * 0.7) * 0.012;
+        if (hiccupT >= 0) {
+          hiccupT += dt;
+          if (hiccupT > 0.28) hiccupT = -1;
+          else {
+            const env = Math.sin((hiccupT / 0.28) * Math.PI);
+            pose.scaleY *= 1 + 0.07 * env;
+            pose.posY += 0.012 * env;
+          }
+        } else {
+          hiccupIn -= dt;
+          if (hiccupIn <= 0) {
+            hiccupT = 0;
+            hiccupIn = 5 + Math.random() * 5;
+          }
+        }
+      }
+
+      // --- V2/G20: sneeze — ~40 s queasy / ~20 s sick (§C3.3/§C3.4) ---
+      if ((healthState === 'queasy' || healthState === 'sick') && sneezeT < 0) {
+        sneezeIn -= dt;
+        if (sneezeIn <= 0) {
+          sneezeT = 0;
+          sneezeSquealed = false;
+          sneezeIn = sneezeJitter(
+            healthState === 'sick' ? SNEEZE_EVERY_SICK_SEC : SNEEZE_EVERY_QUEASY_SEC
+          );
+        }
+      }
+      if (sneezeT >= 0) {
+        sneezeT += dt;
+        const st = sneezeT;
+        if (st < 0.35) {
+          // inhale: head tips back, chest swells, ears perk
+          const k = st / 0.35;
+          pose.headPitch -= 0.28 * k;
+          pose.scaleY *= 1 + 0.05 * k;
+          pose.earL -= 0.25 * k;
+          pose.earR -= 0.25 * k;
+        } else if (st < 0.5) {
+          // ACHOO: head snaps down, squash, ears flap
+          if (!sneezeSquealed) {
+            sneezeSquealed = true;
+            api.onSneeze?.();
+          }
+          const k = (st - 0.35) / 0.15;
+          pose.headPitch += -0.28 + 0.65 * k;
+          pose.scaleY *= 1.05 - 0.17 * k;
+          pose.scaleX *= 1 + 0.06 * k;
+          pose.earL += -0.25 + 0.75 * k;
+          pose.earR += -0.25 + 0.75 * k;
+        } else if (st < SNEEZE_SEC) {
+          // recover back to neutral
+          const e = 1 - (st - 0.5) / (SNEEZE_SEC - 0.5);
+          pose.headPitch += 0.37 * e;
+          pose.scaleY *= 1 - 0.12 * e;
+          pose.scaleX *= 1 + 0.06 * e;
+          pose.earL += 0.5 * e;
+          pose.earR += 0.5 * e;
+        } else {
+          sneezeT = -1;
         }
       }
 
@@ -455,8 +668,8 @@ export function createGooby(opts = {}) {
         pose.headRoll
       );
 
-      const droopL = emo.earL + pose.earL + wetDroop;
-      const droopR = emo.earR + pose.earR + wetDroop;
+      const droopL = emo.earL + pose.earL + wetDroop + sickDroop; // V2/G20: sick droopy ears
+      const droopR = emo.earR + pose.earR + wetDroop + sickDroop;
       earGrps.L.rotation.x = -droopL * 0.55;
       earGrps.L.rotation.z = EAR_TILT + Math.max(-0.1, droopL) * 0.8 + pose.earLRoll;
       earGrps.R.rotation.x = -droopR * 0.55;
