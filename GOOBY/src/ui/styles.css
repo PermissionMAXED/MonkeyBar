@@ -773,6 +773,8 @@
 }
 .shop-banner {
   display: flex;
+  flex-wrap: wrap; /* F7: trailing hint/button drops to its own row instead of
+                      crushing the pitch text at narrow widths */
   align-items: center;
   gap: 10px;
   background: linear-gradient(100deg, rgba(89, 201, 185, 0.18), rgba(255, 209, 102, 0.22));
@@ -781,7 +783,12 @@
   margin: 2px 0 10px;
 }
 .shop-banner .shop-banner-text {
-  flex: 1;
+  flex: 1 1 160px; /* F7: real basis so long trailing content wraps below
+                      instead of shrinking this to 0 (it painted text-on-text) */
+  min-width: 0;
+}
+.shop-banner .shop-banner-hint {
+  flex: 0 1 auto;
   min-width: 0;
 }
 .shop-banner .shop-banner-title {
