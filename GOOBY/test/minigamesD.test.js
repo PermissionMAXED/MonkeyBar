@@ -42,6 +42,41 @@ import {
   rollSpawn,
   applyCatch,
 } from '../src/minigames/games/burgerBuild.logic.js';
+// --- V2/G27 imports (wave-4 append: veggieChop + goalieGooby, §C1.2 #4/#7) ---
+import {
+  CHOP,
+  VEGGIES,
+  JUNK_ITEMS,
+  maxWaveSizeAt,
+  waveSizeAt,
+  spawnIntervalAt as chopSpawnIntervalAt,
+  junkChanceAt,
+  rollItem as chopRollItem,
+  vyForApex,
+  makeArc,
+  arcPos,
+  arcApex,
+  chopPoints,
+  swipeScore,
+  applyPoints as chopApplyPoints,
+  segmentHitsCircle,
+} from '../src/minigames/games/veggieChop.logic.js';
+import {
+  GOALIE,
+  telegraphSecAt,
+  speedMultAt,
+  flightSecAt,
+  rollKick,
+  laneFromSwipe,
+  vKindFromSwipe,
+  saveMatches,
+  diveCovers,
+  isSuperSave,
+  savePoints,
+  cheersAt,
+  autoplayErrAt as goalieErrAt,
+} from '../src/minigames/games/goalieGooby.logic.js';
+// --- end V2/G27 imports ---
 import { COIN_TABLE } from '../src/data/constants.js';
 import { computeCoins } from '../src/data/minigames.js';
 import { EN, DE } from '../src/data/strings.js';
@@ -365,3 +400,292 @@ test('V2/G24 in-game strings exist in EN and DE', () => {
     assert.ok(EN[key].length > 0 && DE[key].length > 0, `empty string for ${key}`);
   }
 });
+
+// ═══════════════════════════════════════════════════════════════ V2/G27 ═══
+// Wave-4 append: veggieChop + goalieGooby (§C1.2 #4/#7). §C1.5 scope:
+// veggieChop arc solver + combo counter; goalieGooby telegraph→lane mapping
+// + ramp. Appended below the V2/G24 blocks per the file's header contract.
+
+test('V2/G27 .logic.js modules import no three.js/DOM', () => {
+  for (const id of ['veggieChop', 'goalieGooby']) {
+    const src = readFileSync(
+      fileURLToPath(new URL(`../src/minigames/games/${id}.logic.js`, import.meta.url)),
+      'utf8'
+    );
+    assert.ok(!/from\s+['"]three['"]/.test(src), `${id}.logic.js imports three`);
+    assert.ok(!/document\.|window\./.test(src), `${id}.logic.js touches the DOM`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #4 veggieChop (§C1.2): arc solver, combo counter, wave/junk ramps
+// ---------------------------------------------------------------------------
+
+test('veggieChop: §C1.2 #4 binding numbers verbatim', () => {
+  assert.equal(CHOP.DURATION_SEC, 60);
+  assert.equal(CHOP.CHOP_PTS, 2);
+  assert.equal(CHOP.COMBO_BONUS, 1);
+  assert.equal(CHOP.JUNK_PTS, -3);
+  assert.equal(CHOP.STUN_SEC, 0.5);
+  assert.equal(CHOP.MAX_MISSES, 3);
+});
+
+test('veggieChop: the 8 §C1.2 whole+half food-kit pairs, keys verbatim', () => {
+  const pairs = Object.fromEntries(VEGGIES.map((v) => [v.key, v.half]));
+  assert.deepEqual(pairs, {
+    apple: 'apple-half',
+    pear: 'pear-half',
+    lemon: 'lemon-half',
+    onion: 'onion-half',
+    mushroom: 'mushroom-half',
+    paprika: 'paprika-slice',
+    tomato: 'tomato-slice',
+    coconut: 'coconut-half',
+  });
+  assert.deepEqual([...JUNK_ITEMS], ['soda', 'boot']); // §C1.2: soda can + boot
+});
+
+test('veggieChop: waves ramp 1 → 3 items (§C1.2)', () => {
+  assert.equal(maxWaveSizeAt(0), 1);
+  assert.equal(maxWaveSizeAt(CHOP.WAVE2_FROM_SEC - 0.01), 1);
+  assert.equal(maxWaveSizeAt(CHOP.WAVE2_FROM_SEC), 2);
+  assert.equal(maxWaveSizeAt(CHOP.WAVE3_FROM_SEC), 3);
+  assert.equal(maxWaveSizeAt(9999), 3);
+  const rng = rngFrom(9);
+  for (let i = 0; i < 200; i += 1) {
+    const early = waveSizeAt(rng, 0);
+    const late = waveSizeAt(rng, 60);
+    assert.equal(early, 1);
+    assert.ok(late >= 1 && late <= 3, `late wave ${late} out of 1–3`);
+  }
+});
+
+test('veggieChop: cadence tightens and junk odds ramp linearly', () => {
+  assert.equal(chopSpawnIntervalAt(0), CHOP.SPAWN_START_SEC);
+  assert.equal(chopSpawnIntervalAt(60), CHOP.SPAWN_END_SEC);
+  assert.ok(chopSpawnIntervalAt(30) < CHOP.SPAWN_START_SEC);
+  assert.ok(chopSpawnIntervalAt(30) > CHOP.SPAWN_END_SEC);
+  assert.equal(junkChanceAt(0), CHOP.JUNK_CHANCE_START);
+  assert.equal(junkChanceAt(60), CHOP.JUNK_CHANCE_END);
+  assert.ok(Math.abs(junkChanceAt(30) - (CHOP.JUNK_CHANCE_START + CHOP.JUNK_CHANCE_END) / 2) < 1e-9);
+});
+
+test('veggieChop: item rolls are deterministic per seed; junk rate matches', () => {
+  for (const seed of [4, 77, 20260717]) {
+    const a = [];
+    const b = [];
+    const rngA = rngFrom(seed);
+    const rngB = rngFrom(seed);
+    for (let i = 0; i < 60; i += 1) {
+      a.push(chopRollItem(rngA, i));
+      b.push(chopRollItem(rngB, i));
+    }
+    assert.deepEqual(a, b, `seed ${seed} diverged`);
+  }
+  const rng = rngFrom(31);
+  let junk = 0;
+  for (let i = 0; i < 4000; i += 1) {
+    if (chopRollItem(rng, 30).kind === 'junk') junk += 1;
+  }
+  const rate = junk / 4000;
+  assert.ok(Math.abs(rate - junkChanceAt(30)) < 0.03, `junk rate ${rate} far from ${junkChanceAt(30)}`);
+});
+
+test('veggieChop: arc solver — apex is the peak and the arc returns home (§C1.5)', () => {
+  // vyForApex ↔ apexFor are inverses: apex height v²/2g
+  assert.ok(Math.abs(vyForApex(2, 8) - Math.sqrt(32)) < 1e-12);
+  const rng = rngFrom(12);
+  for (let i = 0; i < 100; i += 1) {
+    const arc = makeArc(rng, 1.9, -4.8);
+    const apex = arcApex(arc);
+    // apex y inside the §CHOP band (float epsilon)
+    assert.ok(apex.y >= CHOP.APEX_MIN_Y - 1e-9 && apex.y <= CHOP.APEX_MAX_Y + 1e-9,
+      `apex ${apex.y} outside band`);
+    // the apex IS the maximum of the arc
+    assert.ok(arcPos(arc, apex.t - 0.1).y < apex.y + 1e-9);
+    assert.ok(arcPos(arc, apex.t + 0.1).y < apex.y + 1e-9);
+    // ballistic symmetry: back at launch height at 2·tApex
+    assert.ok(Math.abs(arcPos(arc, apex.t * 2).y - arc.y0) < 1e-9);
+    // horizontal drift keeps the apex inside the safe view
+    assert.ok(Math.abs(apex.x) <= 1.9 - 0.55 + 1e-9);
+  }
+});
+
+test('veggieChop: combo counter — 2n + (n−1) per swipe (§C1.2/§C1.5)', () => {
+  assert.equal(swipeScore(0), 0);
+  assert.equal(swipeScore(1), 2);
+  assert.equal(swipeScore(2), 5);
+  assert.equal(swipeScore(3), 8);
+  // chopPoints streams the same totals one chop at a time
+  for (const n of [1, 2, 3, 5]) {
+    let sum = 0;
+    for (let k = 1; k <= n; k += 1) sum += chopPoints(k);
+    assert.equal(sum, swipeScore(n), `chopPoints sum diverges at n=${n}`);
+  }
+  assert.equal(chopApplyPoints(1, CHOP.JUNK_PTS), 0); // floors at 0
+  assert.equal(chopApplyPoints(10, CHOP.JUNK_PTS), 7);
+});
+
+test('veggieChop: swipe segment-vs-item chop test', () => {
+  // straight through the center
+  assert.ok(segmentHitsCircle(-1, 0, 1, 0, 0, 0, 0.4));
+  // grazing inside the radius
+  assert.ok(segmentHitsCircle(-1, 0.3, 1, 0.3, 0, 0, 0.4));
+  // passing outside
+  assert.ok(!segmentHitsCircle(-1, 0.5, 1, 0.5, 0, 0, 0.4));
+  // short segment ending before the circle
+  assert.ok(!segmentHitsCircle(-2, 0, -1, 0, 0, 0, 0.4));
+  // zero-length "segment" (a point) inside
+  assert.ok(segmentHitsCircle(0.1, 0.1, 0.1, 0.1, 0, 0, 0.4));
+});
+
+test('veggieChop: typical raw ≈ 70 pays inside the §C1.1 row (5/4/26)', () => {
+  const row = COIN_TABLE.veggieChop;
+  assert.deepEqual({ ...row }, { divisor: 5, min: 4, max: 26 });
+  assert.equal(computeCoins(row, 70, false), 14); // ≈ typical ~14c
+  assert.equal(computeCoins(row, 0, false), 4); // min clamp
+  assert.equal(computeCoins(row, 999, false), 26); // max clamp
+});
+
+// ---------------------------------------------------------------------------
+// #7 goalieGooby (§C1.2): telegraph→lane mapping, ramp, saves, cheers
+// ---------------------------------------------------------------------------
+
+test('goalieGooby: §C1.2 #7 binding numbers verbatim', () => {
+  assert.equal(GOALIE.DURATION_SEC, 60);
+  assert.equal(GOALIE.LANES, 5);
+  assert.equal(GOALIE.TELEGRAPH_START_SEC, 0.9);
+  assert.equal(GOALIE.TELEGRAPH_END_SEC, 0.45);
+  assert.equal(GOALIE.SAVE_PTS, 4);
+  assert.equal(GOALIE.SUPER_PTS, 2);
+  assert.equal(GOALIE.SUPER_WINDOW_SEC, 0.15);
+  assert.equal(GOALIE.MAX_GOALS, 3);
+  assert.equal(GOALIE.CHEER_EVERY_SAVES, 10);
+  assert.equal(GOALIE.CHEER_SPEED_MULT, 1.1);
+  assert.equal(GOALIE.AUTOPLAY_LEAD_SEC, 0.2);
+});
+
+test('goalieGooby: telegraph ramps 0.9 s → 0.45 s linearly and clamps (§C1.2)', () => {
+  assert.equal(telegraphSecAt(0), 0.9);
+  assert.ok(Math.abs(telegraphSecAt(30) - 0.675) < 1e-9);
+  assert.equal(telegraphSecAt(60), 0.45);
+  assert.equal(telegraphSecAt(9999), 0.45); // clamped past the end
+  assert.equal(telegraphSecAt(-5), 0.9); // clamped before the start
+});
+
+test('goalieGooby: crowd cheers speed things up ×1.1 per 10 saves (§C1.2)', () => {
+  assert.equal(cheersAt(0), 0);
+  assert.equal(cheersAt(9), 0);
+  assert.equal(cheersAt(10), 1);
+  assert.equal(cheersAt(29), 2);
+  assert.equal(speedMultAt(0), 1);
+  assert.ok(Math.abs(speedMultAt(1) - 1.1) < 1e-12);
+  assert.ok(Math.abs(speedMultAt(2) - 1.21) < 1e-12);
+  assert.ok(Math.abs(flightSecAt(1) - GOALIE.FLIGHT_SEC / 1.1) < 1e-12);
+});
+
+test('goalieGooby: telegraph→lane mapping (§C1.5) — swipe angle picks the lane', () => {
+  // pure horizontal swipes hit the outer lanes
+  assert.equal(laneFromSwipe(-200, 0), 0);
+  assert.equal(laneFromSwipe(200, 0), 4);
+  // diagonals (≈45°) hit the inner lanes
+  assert.equal(laneFromSwipe(-120, -120), 1);
+  assert.equal(laneFromSwipe(120, -120), 3);
+  // near-vertical swipes stay center
+  assert.equal(laneFromSwipe(0, -160), 2);
+  assert.equal(laneFromSwipe(20, 160), 2);
+  // bucket boundaries: 18° and 54° from vertical
+  const at = (deg, len = 200) => [
+    Math.sin((deg * Math.PI) / 180) * len,
+    -Math.cos((deg * Math.PI) / 180) * len,
+  ];
+  assert.equal(laneFromSwipe(...at(17.9)), 2);
+  assert.equal(laneFromSwipe(...at(18.1)), 3);
+  assert.equal(laneFromSwipe(...at(53.9)), 3);
+  assert.equal(laneFromSwipe(...at(54.1)), 4);
+  assert.equal(laneFromSwipe(...at(-18.1)), 1);
+  assert.equal(laneFromSwipe(...at(-54.1)), 0);
+});
+
+test('goalieGooby: vertical intent — lobs need up, rollers need down (§C1.2)', () => {
+  assert.equal(vKindFromSwipe(-80), 'up');
+  assert.equal(vKindFromSwipe(80), 'down');
+  assert.equal(vKindFromSwipe(0), 'mid');
+  assert.equal(vKindFromSwipe(GOALIE.VKIND_MIN_PX - 1), 'mid');
+  // save matrix: lane must match; straight takes any vertical intent
+  const dive = (lane, v) => ({ lane, v });
+  assert.ok(saveMatches({ lane: 1, kind: 'straight' }, dive(1, 'mid')));
+  assert.ok(saveMatches({ lane: 1, kind: 'straight' }, dive(1, 'up')));
+  assert.ok(!saveMatches({ lane: 1, kind: 'straight' }, dive(2, 'mid')));
+  assert.ok(saveMatches({ lane: 3, kind: 'lob' }, dive(3, 'up')));
+  assert.ok(!saveMatches({ lane: 3, kind: 'lob' }, dive(3, 'mid')));
+  assert.ok(saveMatches({ lane: 0, kind: 'roller' }, dive(0, 'down')));
+  assert.ok(!saveMatches({ lane: 0, kind: 'roller' }, dive(0, 'up')));
+});
+
+test('goalieGooby: dive cover + super-save window (§C1.2: last 0.15 s)', () => {
+  assert.ok(diveCovers(10, 10.2));
+  assert.ok(diveCovers(10, 10 + GOALIE.DIVE_HOLD_SEC));
+  assert.ok(!diveCovers(10, 10 + GOALIE.DIVE_HOLD_SEC + 0.01)); // too early a dive
+  assert.ok(!diveCovers(10.3, 10.2)); // dive after the ball crossed
+  assert.ok(isSuperSave(10, 10.15));
+  assert.ok(!isSuperSave(10, 10.151));
+  assert.equal(savePoints(false), 4);
+  assert.equal(savePoints(true), 6);
+});
+
+test('goalieGooby: kicks are seeded-deterministic; specials mix in later', () => {
+  for (const seed of [2, 55, 4711]) {
+    const a = [];
+    const b = [];
+    const rngA = rngFrom(seed);
+    const rngB = rngFrom(seed);
+    for (let i = 0; i < 40; i += 1) {
+      a.push(rollKick(rngA, i * 1.5));
+      b.push(rollKick(rngB, i * 1.5));
+    }
+    assert.deepEqual(a, b, `seed ${seed} diverged`);
+    for (const kick of a) {
+      assert.ok(kick.lane >= 0 && kick.lane < GOALIE.LANES);
+      assert.ok(['straight', 'lob', 'roller'].includes(kick.kind));
+    }
+  }
+  // intro kicks are always straight; lobs+rollers appear afterwards
+  const rng = rngFrom(8);
+  for (let i = 0; i < 100; i += 1) {
+    assert.equal(rollKick(rng, GOALIE.MIX_FROM_SEC - 0.01).kind, 'straight');
+  }
+  const kinds = new Set();
+  for (let i = 0; i < 400; i += 1) kinds.add(rollKick(rng, 30).kind);
+  assert.deepEqual([...kinds].sort(), ['lob', 'roller', 'straight']);
+});
+
+test('goalieGooby: bot flub odds ramp as the telegraph shrinks', () => {
+  assert.ok(Math.abs(goalieErrAt(GOALIE.TELEGRAPH_START_SEC) - GOALIE.AUTOPLAY_ERR_BASE) < 1e-12);
+  assert.ok(Math.abs(
+    goalieErrAt(GOALIE.TELEGRAPH_END_SEC)
+    - (GOALIE.AUTOPLAY_ERR_BASE + GOALIE.AUTOPLAY_ERR_RAMP)
+  ) < 1e-12);
+  assert.ok(goalieErrAt(0.6) > goalieErrAt(0.8));
+});
+
+test('goalieGooby: typical raw ≈ 48 pays inside the §C1.1 row (3/4/26)', () => {
+  const row = COIN_TABLE.goalieGooby;
+  assert.deepEqual({ ...row }, { divisor: 3, min: 4, max: 26 });
+  assert.equal(computeCoins(row, 48, false), 16); // ≈ typical ~15c
+  assert.equal(computeCoins(row, 0, false), 4); // min clamp
+  assert.equal(computeCoins(row, 999, false), 26); // max clamp
+});
+
+test('V2/G27 in-game strings exist in EN and DE', () => {
+  const keys = [
+    'mg.chop.combo', 'mg.chop.junk', 'mg.chop.miss', 'mg.chop.over',
+    'mg.goalie.super', 'mg.goalie.goal', 'mg.goalie.cheer', 'mg.goalie.over',
+  ];
+  for (const key of keys) {
+    assert.equal(typeof EN[key], 'string', `EN missing ${key}`);
+    assert.equal(typeof DE[key], 'string', `DE missing ${key}`);
+    assert.ok(EN[key].length > 0 && DE[key].length > 0, `empty string for ${key}`);
+  }
+});
+// ═══════════════════════════════════════════════════════════ end V2/G27 ═══

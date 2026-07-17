@@ -116,6 +116,9 @@ export default {
 
     this.phase = 'play'; // 'play' | 'ending' | 'done'
     this.score = 0;
+    // V2/G27: successful-trick counter → onEnd meta.tricks (§B3; the G23
+    // framework block forwards it as 'tricks:trampoline' → quest q.tricks5).
+    this.tricksDone = 0;
     this.endT = 0;
     // bounce state
     this.h = 0; //          height above the mat (wu)
@@ -277,6 +280,7 @@ export default {
     const mult = heightMultiplier(apexFor(this.launchVy));
     const pts = trickPoints(kind, mult);
     this.score += pts;
+    this.tricksDone += 1; // V2/G27: meta.tricks (§B3 — every landed trick counts)
     this.ctx.onScore(pts);
     this.ctx.audio.play('tramp.trick');
     const key = kind === 'flip' ? 'mg.tramp.flip' : kind === 'spin' ? 'mg.tramp.spin' : 'mg.tramp.twist';
@@ -438,7 +442,9 @@ export default {
       this.endT += dt;
       if (this.endT >= 1.5 && this.phase !== 'done') {
         this.phase = 'done';
-        ctx.onEnd({ score: this.score });
+        // V2/G27: forward the trick count so quest q.tricks5 is fulfillable
+        // (§B3 meta — the framework's V2/G23 block does the rest).
+        ctx.onEnd({ score: this.score, meta: { tricks: this.tricksDone } });
       }
       return;
     }

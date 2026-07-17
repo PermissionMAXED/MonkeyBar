@@ -32,6 +32,16 @@ export const EN = {
   'mg.burger.ing.tomato': 'Tomato',
   'mg.burger.ing.salad': 'Salad',
   'mg.burger.ing.onion': 'Onion',
+  // --- V2/G27 veggieChop (§C1.2 #4) ---
+  'mg.chop.combo': 'Combo! +1',
+  'mg.chop.junk': 'Yuck! −3',
+  'mg.chop.miss': 'Dropped! {n} left…',
+  'mg.chop.over': 'Too many dropped…',
+  // --- V2/G27 goalieGooby (§C1.2 #7) ---
+  'mg.goalie.super': 'Super save! +6',
+  'mg.goalie.goal': 'Goal conceded…',
+  'mg.goalie.cheer': 'The crowd cheers! Faster!',
+  'mg.goalie.over': 'Three goals… all over!',
 };
 
 /** @type {Record<string, string>} */
@@ -59,4 +69,14 @@ export const DE = {
   'mg.burger.ing.tomato': 'Tomate',
   'mg.burger.ing.salad': 'Salat',
   'mg.burger.ing.onion': 'Zwiebel',
+  // --- V2/G27 veggieChop (§C1.2 #4) ---
+  'mg.chop.combo': 'Combo! +1',
+  'mg.chop.junk': 'Igitt! −3',
+  'mg.chop.miss': 'Verpasst! Noch {n}…',
+  'mg.chop.over': 'Zu viel verpasst…',
+  // --- V2/G27 goalieGooby (§C1.2 #7) ---
+  'mg.goalie.super': 'Superparade! +6',
+  'mg.goalie.goal': 'Tor kassiert…',
+  'mg.goalie.cheer': 'Die Menge jubelt! Schneller!',
+  'mg.goalie.over': 'Drei Tore… vorbei!',
 };
