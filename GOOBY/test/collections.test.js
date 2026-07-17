@@ -182,3 +182,84 @@ test('collections functions are pure: deep-frozen slices never throw/mutate', ()
   award(freeze(claimed), 'landmarks', 'shop');
   setProgress(frozen, LANDMARKS);
 });
+
+// ═══════════════════════════════════════════════════════════════ V2/G23 ═══
+// fishingPond species roll (§C6 row 1): seeded size → species mapping,
+// goldenFish 2% (±0.5 over 10k rolls), night-gated nightEel, determinism.
+// Pure logic from fishingPond.logic.js (no three.js — the slot G18 left).
+
+import {
+  FISH_SPECIES,
+  GOLDEN_FISH_CHANCE,
+  SPECIES_COLORS,
+  rollSpecies,
+} from '../src/minigames/games/fishingPond.logic.js';
+
+/** mulberry32 — the same seeded stream recipe the engines use (§B7). */
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function next() {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+test('V2/G23 species map: §C6 size → candidates verbatim, all 8 tinted', () => {
+  assert.deepEqual([...FISH_SPECIES.S], ['tinyMinnow', 'blueDace', 'sunnyCarp']);
+  assert.deepEqual([...FISH_SPECIES.M], ['pinkKoi', 'stripeBass']);
+  assert.deepEqual([...FISH_SPECIES.L], ['bigWhopper', 'nightEel']);
+  // every §C6 fish-set sticker id is rollable + has a visible pond color
+  const rollable = new Set([...FISH_SPECIES.S, ...FISH_SPECIES.M, ...FISH_SPECIES.L, 'goldenFish']);
+  assert.deepEqual(rollable, new Set(FISH.entries));
+  for (const id of FISH.entries) {
+    assert.match(SPECIES_COLORS[id], /^#[0-9A-Fa-f]{6}$/, `${id} color`);
+  }
+  assert.equal(GOLDEN_FISH_CHANCE, 0.02, '§C6: 2% on any L');
+});
+
+test('V2/G23 rollSpecies: deterministic per seeded rng stream', () => {
+  const seqOf = (seed) => {
+    const rng = mulberry32(seed);
+    const kinds = ['S', 'M', 'L', 'S', 'L', 'M'];
+    return Array.from({ length: 120 }, (_, i) => rollSpecies(kinds[i % 6], rng, i % 2 === 0));
+  };
+  assert.deepEqual(seqOf(1234), seqOf(1234), 'same seed → same species sequence');
+  assert.notDeepEqual(seqOf(1234), seqOf(4321), 'different seed differs');
+});
+
+test('V2/G23 rollSpecies: S/M pick only their candidates, never golden', () => {
+  const rng = mulberry32(77);
+  for (let i = 0; i < 2000; i += 1) {
+    assert.equal(FISH_SPECIES.S.includes(rollSpecies('S', rng, true)), true);
+    assert.equal(FISH_SPECIES.M.includes(rollSpecies('M', rng, true)), true);
+  }
+});
+
+test('V2/G23 rollSpecies: nightEel is night-band gated (§C10.3)', () => {
+  const day = mulberry32(99);
+  for (let i = 0; i < 5000; i += 1) {
+    assert.notEqual(rollSpecies('L', day, false), 'nightEel', 'day L never eels');
+  }
+  const night = mulberry32(99);
+  const rolled = new Set(Array.from({ length: 5000 }, () => rollSpecies('L', night, true)));
+  assert.equal(rolled.has('nightEel'), true, 'night L rolls eels');
+  assert.equal(rolled.has('bigWhopper'), true, 'night L still rolls whoppers');
+});
+
+test('V2/G23 rollSpecies: goldenFish 2% ±0.5 over 10k seeded L rolls', () => {
+  const rng = mulberry32(20260717);
+  let golden = 0;
+  const N = 10_000;
+  for (let i = 0; i < N; i += 1) {
+    if (rollSpecies('L', rng, i % 2 === 0) === 'goldenFish') golden += 1;
+  }
+  const rate = golden / N;
+  assert.ok(rate >= 0.015 && rate <= 0.025, `golden rate ${rate} within 2% ±0.5`);
+  // golden also appears in pure day rolls (any L catch, §C6)
+  const dayRng = mulberry32(5);
+  const daySpecies = new Set(Array.from({ length: 5000 }, () => rollSpecies('L', dayRng, false)));
+  assert.equal(daySpecies.has('goldenFish'), true);
+});
+// ═══════════════════════════════════════════════════════════ end V2/G23 ═══

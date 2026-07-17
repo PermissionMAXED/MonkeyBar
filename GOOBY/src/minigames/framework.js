@@ -13,6 +13,12 @@ import { t } from '../data/strings.js';
 import { clampStat, isExhausted } from '../systems/stats.js';
 import { isMinigameUnlocked } from '../systems/leveling.js';
 import { awardMinigame } from '../systems/economy.js';
+// ── V2/G23 imports: §B3 meta forwarding + §C3.4 sick gate (pure modules) ──
+import { canPlayMinigame } from '../systems/health.js';
+import { onMinigameEnd as weightOnMinigameEnd } from '../systems/weight.js';
+import { getAchievementsEngine } from '../systems/achievementsEngine.js';
+import { now } from '../core/clock.js';
+// ── end V2/G23 imports ──
 import { hasGame, loadGame } from './registry.js';
 import { icon } from '../ui/icons.js';
 import { burstConfettiDom, flyCoinsDom } from '../gfx/particles.js'; // G14: results polish
@@ -141,6 +147,91 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
       sceneManager.switchTo('home').catch((err) => console.error('[minigames] exit failed:', err));
     }
   }
+
+  // ══════════════════════════════════════════════════════════════ V2/G23 ═══
+  // §B3 meta forwarding on the end path: games call onEnd({score, meta?}) and
+  // THIS block fans the round out to quests / collections / achievements /
+  // weight. Wave-3/4 games need zero wiring — just pass `meta`.
+  //
+  // QUEST EVENT VOCABULARY (== §C5.1 `event` column, verbatim):
+  //   gameFinish          n=1 per finished round (any game)
+  //   gameDistinct        n=1, meta {id: gameId} — distinct-games set per day
+  //   gameCoins           n = coins earned this round (after clamp/×2)
+  //   score:<gameId>      n = final score — 'max' semantics (single round)
+  //   fishCaught          n = meta.caught.length (fishingPond §C6 species)
+  //   tricks:<gameId>     n = meta.tricks (trampoline §C5.1 q.tricks5)
+  //   round:<gameId>      n = meta.round (goobySays q.says6; derived from
+  //                       score when absent — §C1.2 #1: score = 10·rounds + 0–8)
+  //   deliver             via the `deliveries` counter (meta.deliveries)
+  //   cleanDrive          meta.crashes === 0 on NON-shopTrip drives (shop
+  //                       trips ride the cleanTrips counter → same event)
+  // Care/garden/economy events (feed, wash, pet, …) ride the achievements
+  // counter diff in systems/achievementsEngine.js — not this block.
+  //
+  // KNOWN §B3 META SHAPES: fishingPond {caught: string[]} · cityDrive /
+  // deliveryRush {landmarks: string[], crashes, distanceM(, deliveries)} ·
+  // miniGolf {strokes, holeInOnes}. meta.distanceM is NOT forwarded here —
+  // cityDrive feeds profile.distanceM itself via its 'gooby:driveDistance'
+  // bridge (G21), so forwarding again would double-count.
+  //
+  // Also fed here: collections fish + landmark stickers (landmarks firstOnly —
+  // G21 awards live during the drive too), `holeInOnes`/`deliveries` counters,
+  // `nightPlays` counter for rounds finished 22:00–06:00 (§C10.3), and
+  // weight.onMinigameEnd (§B5). play21 (§C5.3) needs no feed — its special
+  // reads minigames.plays, which economy.awardMinigame already increments.
+
+  /**
+   * @param {string} gameId
+   * @param {number} score final (clamped) round score
+   * @param {number} coins coins paid for the round
+   * @param {object|undefined} gameMeta the game's §B3 onEnd meta
+   * @param {object} launchParams framework launch params (mode detection)
+   * @param {boolean} devGame dev-only games (_smoke) skip progression
+   */
+  function forwardProgression(gameId, score, coins, gameMeta, launchParams, devGame) {
+    if (devGame) return;
+    try {
+      const engine = getAchievementsEngine();
+      if (engine?.quests) {
+        const quests = engine.quests;
+        quests.track('gameFinish', 1);
+        quests.track('gameDistinct', 1, { id: gameId });
+        if (coins > 0) quests.track('gameCoins', coins);
+        if (score > 0) quests.track(`score:${gameId}`, score);
+        const caught = Array.isArray(gameMeta?.caught) ? gameMeta.caught : null;
+        if (caught && caught.length > 0) {
+          quests.track('fishCaught', caught.length);
+          for (const speciesId of caught) engine.collections.award('fish', speciesId);
+        }
+        if (Array.isArray(gameMeta?.landmarks)) {
+          for (const landmarkId of gameMeta.landmarks) {
+            engine.collections.award('landmarks', landmarkId, 1, { firstOnly: true });
+          }
+        }
+        const tricks = Math.floor(Number(gameMeta?.tricks) || 0);
+        if (tricks > 0) quests.track(`tricks:${gameId}`, tricks);
+        const round = Math.floor(Number(gameMeta?.round) || 0)
+          || (gameId === 'goobySays' ? Math.floor(score / 10) : 0);
+        if (round > 0) quests.track(`round:${gameId}`, round);
+        const holeInOnes = Math.floor(Number(gameMeta?.holeInOnes) || 0);
+        if (holeInOnes > 0) engine.track('holeInOnes', holeInOnes);
+        const deliveries = Math.floor(Number(gameMeta?.deliveries) || 0);
+        if (deliveries > 0) engine.track('deliveries', deliveries);
+        if (gameMeta && Number(gameMeta.crashes) === 0 && launchParams?.mode !== 'shopTrip') {
+          quests.track('cleanDrive', 1);
+        }
+        const hour = new Date(now()).getHours();
+        if (hour >= 22 || hour < 6) engine.track('nightPlays');
+      }
+    } catch (err) {
+      console.warn('[minigames] V2/G23 progression forwarding error:', err);
+    }
+    // §B5: every finished round nudges the weight (active games −1.0 / −0.25)
+    store.update((state) => {
+      state.weight = weightOnMinigameEnd(state.weight, gameId);
+    });
+  }
+  // ══════════════════════════════════════════════════════════ end V2/G23 ═══
 
   // ---------------------------------------------------------------- minigame scene
   sceneManager.register('minigame', (ctx) => {
@@ -324,7 +415,7 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
     }
 
     /** §E8 ctx.onEnd — rewards, persistence, results screen. */
-    function onEnd({ score: finalScore, coins: coinsOverride } = {}) {
+    function onEnd({ score: finalScore, coins: coinsOverride, meta: gameMeta } = {}) { // V2/G23: + §B3 meta
       if (ended) return;
       ended = true;
       running = false;
@@ -333,6 +424,10 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
       // G11: economy.awardMinigame is the single payout path (§C6 coins incl.
       // daily ×2, +fun, XP + level-up coins, plays/best/lastPlayDay — §C1.5).
       const reward = awardMinigame(store, meta.id, s, { coinsOverride });
+
+      // ── V2/G23: §B3 meta forwarding + progression wiring ─────────────────
+      forwardProgression(meta.id, reward.score, reward.coins, gameMeta, launchParams, !!meta.dev);
+      // ── end V2/G23 ────────────────────────────────────────────────────────
 
       lastResult = {
         gameId: reward.gameId,
@@ -465,6 +560,12 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
     }
     if (isExhausted(store.get('stats'))) {
       ui.toast('toast.tooSleepy');
+      return false;
+    }
+    // V2/G23 wires (§C3.4/§B5): sick Gooby refuses minigames — mirrors the
+    // exhausted gate right above; health.canPlayMinigame is G20's contract.
+    if (!canPlayMinigame(store.get('health'))) {
+      ui.toast('toast.tooSick');
       return false;
     }
     ui.closeAll();

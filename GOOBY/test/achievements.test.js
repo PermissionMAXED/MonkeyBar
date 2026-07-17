@@ -260,6 +260,9 @@ test('applyUnlocks: simultaneous unlocks sum their rewards', () => {
   state.coins = 1000; // coins1000 satisfied
   state.level = 10; // level10 satisfied
   state.achievements.counters.tickles = 100; // tickle100 satisfied
+  // V2/G23: L10 would now ALSO satisfy neverSick (§C5.3) — disqualify it so
+  // this stays the v1 three-way sum it always tested.
+  state.achievements.counters.sickEver = 1;
   const r = applyUnlocks(state, 1);
   assert.deepEqual(new Set(r.unlocked.map((d) => d.id)), new Set(['coins1000', 'level10', 'tickle100']));
   assert.equal(r.state.coins, 1000 + 50 + 100 + 60);
@@ -272,12 +275,16 @@ test('every one of the 16 achievements is unlockable through applyUnlocks', () =
   Object.assign(state.achievements.counters, {
     feeds: 100, washes: 50, sleeps: 20, trips: 25, cleanTrips: 1, tickles: 100,
   });
+  // V2/G23: the §C5.3 specials are wired now — keep this the pure-v1 check by
+  // disqualifying neverSick (sickEver) and play21 (only 12 of 21 played);
+  // the all-33 companion test lives in the V2/G23 section below.
+  state.achievements.counters.sickEver = 1;
   state.outfits.equipped = { hat: 'crown', glasses: 'starGlasses', neck: 'scarfRed' };
   state.furniture.placed = Object.fromEntries(
     Array.from({ length: 10 }, (_, i) => [`living:slot${i}`, `fancyItem${i}`])
   );
   state.daily.streak = 7;
-  for (const id of MINIGAME_IDS) state.minigames.plays[id] = 1;
+  for (const id of MINIGAME_IDS.slice(0, 12)) state.minigames.plays[id] = 1; // V2/G23: 12 of 21
   const r = applyUnlocks(state, 7);
   assert.equal(r.unlocked.length, 16, 'all 16 unlock');
   // V2/G16: SPEC_COINS now lists all 33 — sum only the 16 v1 unlocks here
@@ -378,3 +385,329 @@ test('engine: noCrash framework interception decorates shopTrip launch params', 
   assert.equal(captured, plain);
   resetAchievementsEngineForTests();
 });
+
+// ═══════════════════════════════════════════════════════════════ V2/G23 ═══
+// Achievements 2.0 (§C5.3 specials, all 33 reachable) + live progression
+// wiring (V2_QUEST_POOL decoration, quest track/claim/reroll through the
+// engine, counter-diff forwarding, sticker XP, set claim, photo XP cap).
+
+import {
+  V2_QUEST_POOL,
+  questCtxOf,
+  v2SpecialProgress,
+  photoXpGrant,
+} from '../src/systems/achievementsEngine.js';
+import { localDay } from '../src/core/clock.js';
+import { LEVELING, UNLOCKS, PHOTO } from '../src/data/constants.js';
+import { QUEST_POOL } from '../src/data/quests.js';
+
+/** Fixture: today's quests already rolled (rollDaily no-ops on init). */
+function withQuests(state, ids) {
+  state.quests = {
+    day: localDay(),
+    active: ids.map((id) => ({ id, progress: 0, claimed: false })),
+    rerolledDay: '',
+    completedTotal: 0,
+  };
+  return state;
+}
+
+test('V2/G23 V2_QUEST_POOL: all 28 rows decorated with reward + mode', () => {
+  assert.equal(V2_QUEST_POOL.length, 28);
+  for (const row of V2_QUEST_POOL) {
+    const raw = QUEST_POOL.find((r) => r.id === row.id);
+    assert.deepEqual(row.reward, { coins: raw.coins, xp: raw.xp }, `${row.id} reward`);
+  }
+  // §B7 modes: score/round/tricks → 'max', gameDistinct → 'distinct', else 'add'
+  const modeOf = (id) => V2_QUEST_POOL.find((r) => r.id === id).mode;
+  for (const id of ['q.catch30', 'q.hop10', 'q.run200', 'q.dance150', 'q.golfPar']) {
+    assert.equal(modeOf(id), 'max', `${id} single-round best`);
+  }
+  assert.equal(modeOf('q.tricks5'), 'max');
+  assert.equal(modeOf('q.says6'), 'max');
+  assert.equal(modeOf('q.play2distinct'), 'distinct');
+  assert.equal(modeOf('q.feed3'), 'add');
+  assert.equal(modeOf('q.earn60'), 'add');
+});
+
+test('V2/G23 questCtxOf: level/unlocked games/garden gate', () => {
+  const state = freshState();
+  state.level = 1;
+  let ctx = questCtxOf(state);
+  assert.equal(ctx.level, 1);
+  assert.equal(ctx.gardenUnlocked, false);
+  assert.equal(ctx.unlockedGameIds.includes('carrotCatch'), true);
+  assert.equal(ctx.unlockedGameIds.includes('fishingPond'), false);
+  state.level = UNLOCKS.GARDEN;
+  ctx = questCtxOf(state);
+  assert.equal(ctx.gardenUnlocked, true);
+});
+
+test('V2/G23 specials: allCrops / stickers / setsClaimed progress', () => {
+  const state = freshState();
+  const allCrops = ACHIEVEMENTS_BY_ID.allCrops;
+  const firstSticker = ACHIEVEMENTS_BY_ID.firstSticker;
+  const setComplete = ACHIEVEMENTS_BY_ID.setComplete;
+  const albumFull = ACHIEVEMENTS_BY_ID.albumFull;
+  assert.equal(isSatisfied(allCrops, state), false);
+  const crops = ['radish', 'carrot', 'salad', 'tomato', 'corn', 'eggplant', 'pumpkin', 'watermelon'];
+  for (const c of crops) state.collections.entries[`veggies.${c}`] = 2;
+  assert.equal(v2SpecialProgress(allCrops, state), 8);
+  assert.equal(isSatisfied(allCrops, state), true);
+  assert.equal(isSatisfied(firstSticker, state), true); // any entry ≥ 1
+  assert.equal(isSatisfied(setComplete, state), false);
+  state.collections.claimedSets = { veggies: 111 };
+  assert.equal(isSatisfied(setComplete, state), true);
+  assert.equal(progressOf(albumFull, state).current, 1);
+  state.collections.claimedSets = { veggies: 1, fish: 2, landmarks: 3, treats: 4 };
+  assert.equal(isSatisfied(albumFull, state), true);
+});
+
+test('V2/G23 specials: neverSick latches on the sickEver counter', () => {
+  const def = ACHIEVEMENTS_BY_ID.neverSick;
+  const state = freshState();
+  assert.equal(isSatisfied(def, state), false, 'level 1: not yet');
+  state.level = 10;
+  assert.equal(isSatisfied(def, state), true, 'L10 + never sick');
+  state.achievements.counters.sickEver = 1;
+  assert.equal(isSatisfied(def, state), false, 'ever sick disqualifies');
+});
+
+test('V2/G23 specials: chonkZone (weightMax 86) / sleekMode (weightMin 25)', () => {
+  const chonk = ACHIEVEMENTS_BY_ID.chonkZone;
+  const sleek = ACHIEVEMENTS_BY_ID.sleekMode;
+  const state = freshState(); // weight.value 50
+  assert.equal(isSatisfied(chonk, state), false);
+  assert.equal(isSatisfied(sleek, state), false);
+  state.weight.value = 86;
+  assert.equal(isSatisfied(chonk, state), true);
+  assert.deepEqual(progressOf(chonk, state), { current: 86, target: 86 });
+  state.weight.value = 25;
+  assert.equal(isSatisfied(sleek, state), true);
+  state.weight.value = 26;
+  assert.equal(isSatisfied(sleek, state), false);
+});
+
+test('V2/G23 specials: play21 needs all 21 catalog games; holeInOne counter', () => {
+  const play21 = ACHIEVEMENTS_BY_ID.play21;
+  const state = freshState();
+  for (const id of MINIGAME_IDS.slice(0, 20)) state.minigames.plays[id] = 3;
+  state.minigames.plays._smoke = 9; // dev game never counts
+  assert.equal(progressOf(play21, state).current, 20);
+  assert.equal(isSatisfied(play21, state), false);
+  state.minigames.plays[MINIGAME_IDS[20]] = 1;
+  assert.equal(isSatisfied(play21, state), true);
+
+  const hole = ACHIEVEMENTS_BY_ID.holeInOne;
+  assert.equal(isSatisfied(hole, state), false);
+  state.achievements.counters.holeInOnes = 1; // framework forwards miniGolf meta
+  assert.equal(isSatisfied(hole, state), true);
+});
+
+test('V2/G23: ALL 33 achievements reachable via counters/specials', () => {
+  const state = freshState();
+  state.coins = 1000;
+  state.level = 10;
+  Object.assign(state.achievements.counters, {
+    feeds: 100, washes: 50, sleeps: 20, trips: 25, cleanTrips: 1, tickles: 100,
+    harvests: 50, questsDone: 50, cures: 1, vetTrips: 1, deliveries: 10,
+    photosTaken: 10, holeInOnes: 1, sickEver: 0,
+  });
+  state.outfits.equipped = { hat: 'crown', glasses: 'starGlasses', neck: 'scarfRed' };
+  state.furniture.placed = Object.fromEntries(
+    Array.from({ length: 10 }, (_, i) => [`living:slot${i}`, `fancyItem${i}`])
+  );
+  state.daily.streak = 7;
+  for (const id of MINIGAME_IDS) state.minigames.plays[id] = 1;
+  for (const c of ['radish', 'carrot', 'salad', 'tomato', 'corn', 'eggplant', 'pumpkin', 'watermelon']) {
+    state.collections.entries[`veggies.${c}`] = 1;
+  }
+  state.collections.claimedSets = { veggies: 1, fish: 2, landmarks: 3, treats: 4 };
+  state.weight.value = 86; // chonkZone first …
+  const pass1 = applyUnlocks(state, 7);
+  assert.equal(pass1.unlocked.length, 32, 'everything except sleekMode');
+  pass1.state.weight = { value: 25 }; // … then slim down for sleekMode
+  const pass2 = applyUnlocks(pass1.state, 8);
+  assert.deepEqual(pass2.unlocked.map((d) => d.id), ['sleekMode']);
+  assert.equal(Object.keys(pass2.state.achievements.unlocked).length, 33, 'all 33');
+});
+
+test('V2/G23 photoXpGrant: +1 XP per photo, cap 5/day, day rollover resets', () => {
+  let c = { photoXpDay: '', photoXpToday: 0 };
+  for (let i = 0; i < PHOTO.XP_DAILY_CAP; i += 1) {
+    const g = photoXpGrant(c, '2026-07-17');
+    assert.equal(g.xp, PHOTO.XP_PER_PHOTO, `photo ${i + 1} grants`);
+    c = g.counters;
+  }
+  const capped = photoXpGrant(c, '2026-07-17');
+  assert.equal(capped.xp, 0, '6th photo same day: capped');
+  const nextDay = photoXpGrant(capped.counters, '2026-07-18');
+  assert.equal(nextDay.xp, PHOTO.XP_PER_PHOTO, 'fresh day resets the cap');
+});
+
+test('V2/G23 engine: counter diff forwards quest events; claim pays once', () => {
+  resetAchievementsEngineForTests();
+  const toasts = [];
+  const store = createStore(
+    withQuests(freshState(), ['q.feed3', 'q.wash1', 'q.play3']),
+    { autosave: false }
+  );
+  const engine = initAchievements({
+    store,
+    ui: { toast: (key, vars) => toasts.push({ key, vars }) },
+    audio: { play: () => {} },
+  });
+  // rollDaily no-oped (fixture day matches localDay)
+  assert.deepEqual(store.get('quests').active.map((e) => e.id), ['q.feed3', 'q.wash1', 'q.play3']);
+
+  engine.track('feeds'); // ANY counter bump path forwards 'feed' via the diff
+  store.flush();
+  assert.equal(store.get('quests').active[0].progress, 1);
+  engine.track('feeds', 2);
+  store.flush();
+  assert.equal(store.get('quests').active[0].progress, 3);
+  assert.equal(engine.quests.claimable(), 1);
+
+  const coins0 = store.get('coins');
+  const xp0 = store.get('xp');
+  const reward = engine.quests.claim('q.feed3');
+  assert.deepEqual(reward, { coins: 20, xp: 10 }, '§C5.1 q.feed3 reward');
+  assert.equal(store.get('coins') >= coins0 + 20, true, 'economy payout (+ possible unlocks)');
+  assert.equal(store.get('xp'), xp0 + 10, 'leveling payout');
+  assert.equal(store.get('achievements.counters.questsDone'), 1);
+  assert.equal(store.get('quests').active[0].claimed, true);
+  assert.equal(engine.quests.claimable(), 0);
+  assert.equal(engine.quests.claim('q.feed3'), null, 'double claim refused');
+  store.flush();
+  assert.equal(store.get('achievements.unlocked.firstQuest') > 0, true, 'questsDone feeds firstQuest');
+  resetAchievementsEngineForTests();
+});
+
+test('V2/G23 engine: feedHealthy + buyFood inventory-diff detection', () => {
+  resetAchievementsEngineForTests();
+  const store = createStore(
+    withQuests(freshState(), ['q.feedHealthy2', 'q.buyFood1', 'q.wash1']),
+    { autosave: false }
+  );
+  initAchievements({ store, ui: { toast: () => {} }, audio: { play: () => {} } });
+
+  // a feed consumes a NON-junk food + bumps the feeds counter in one flush
+  store.update((s) => {
+    s.inventory.carrot -= 1; // starter inventory has 3
+    s.achievements.counters.feeds += 1;
+  });
+  store.flush();
+  assert.equal(store.get('quests').active[0].progress, 1, 'carrot is healthy');
+
+  // junk food never counts for feedHealthy
+  store.update((s) => {
+    s.inventory.cupcake -= 1; // junk: true (§C7)
+    s.achievements.counters.feeds += 1;
+  });
+  store.flush();
+  assert.equal(store.get('quests').active[0].progress, 1, 'cupcake ignored');
+
+  // a buy = food gained + coins spent in the same flush (no harvest)
+  store.update((s) => {
+    s.inventory.apple = (s.inventory.apple ?? 0) + 1;
+    s.coins -= 6;
+    s.profile.coinsSpent += 6;
+  });
+  store.flush();
+  assert.equal(store.get('quests').active[1].progress, 1, 'buyFood detected');
+
+  // a harvest gains food WITHOUT a spend — never a buy
+  store.update((s) => {
+    s.inventory.radish = (s.inventory.radish ?? 0) + 1;
+    s.achievements.counters.harvests += 1;
+  });
+  store.flush();
+  assert.equal(store.get('quests').active[1].progress, 1, 'harvest not a buy');
+  resetAchievementsEngineForTests();
+});
+
+test('V2/G23 engine: first-time sticker pays §C5.2 XP + toast exactly once', () => {
+  resetAchievementsEngineForTests();
+  const toasts = [];
+  const store = createStore(freshState(), { autosave: false });
+  const engine = initAchievements({
+    store,
+    ui: { toast: (key, vars) => toasts.push({ key, vars }) },
+    audio: { play: () => {} },
+  });
+  store.flush(); // settle the boot roll before baselining
+  const xp0 = store.get('xp');
+  assert.equal(engine.collections.award('fish', 'pinkKoi'), true, 'first: true');
+  store.flush();
+  assert.equal(store.get('xp'), xp0 + LEVELING.XP_STICKER);
+  const stickerToasts = toasts.filter((x) => x.key === 'toast.sticker');
+  assert.equal(stickerToasts.length, 1);
+  assert.equal(stickerToasts[0].vars.xp, LEVELING.XP_STICKER);
+
+  assert.equal(engine.collections.award('fish', 'pinkKoi'), false, 'repeat: not first');
+  store.flush();
+  assert.equal(store.get('collections.entries')['fish.pinkKoi'], 2, 'count stacks');
+  assert.equal(toasts.filter((x) => x.key === 'toast.sticker').length, 1, 'no repeat toast');
+
+  // firstOnly (landmark forwarding): owned → skipped
+  assert.equal(engine.collections.award('fish', 'pinkKoi', 1, { firstOnly: true }), false);
+  assert.equal(store.get('collections.entries')['fish.pinkKoi'], 2);
+  resetAchievementsEngineForTests();
+});
+
+test('V2/G23 engine: set claim pays coins+XP once, deco lands in furniture.owned', () => {
+  resetAchievementsEngineForTests();
+  const store = createStore(freshState(), { autosave: false });
+  const engine = initAchievements({ store, ui: { toast: () => {} }, audio: { play: () => {} } });
+  const fish = ['sunnyCarp', 'blueDace', 'pinkKoi', 'stripeBass', 'tinyMinnow', 'bigWhopper', 'nightEel', 'goldenFish'];
+  for (const id of fish) engine.collections.award('fish', id);
+  store.flush();
+
+  const coins0 = store.get('coins');
+  const reward = engine.collections.claimSet('fish');
+  assert.equal(reward.coins, 200, '§C6 fish set reward');
+  assert.equal(store.get('coins') >= coins0 + 200, true);
+  assert.equal(store.get('furniture.owned').includes('proc:goldfishBowl'), true);
+  assert.equal(store.get('collections.claimedSets').fish > 0, true);
+  assert.equal(engine.collections.claimSet('fish'), null, 'single claim only');
+  store.flush();
+  assert.equal(store.get('achievements.unlocked.setComplete') > 0, true);
+  resetAchievementsEngineForTests();
+});
+
+test('V2/G23 engine: reroll once per day through the live API', () => {
+  resetAchievementsEngineForTests();
+  const store = createStore(
+    withQuests(freshState(), ['q.feed3', 'q.wash1', 'q.tickle3']),
+    { autosave: false }
+  );
+  const engine = initAchievements({ store, ui: { toast: () => {} }, audio: { play: () => {} } });
+  assert.equal(engine.quests.reroll(), true, 'first reroll ok');
+  assert.equal(store.get('quests').rerolledDay, localDay());
+  assert.equal(store.get('quests').active.length, 3, 'board stays full');
+  assert.equal(engine.quests.reroll(), false, 'second reroll refused');
+  resetAchievementsEngineForTests();
+});
+
+test('V2/G23 engine: sickEver latch feeds neverSick bookkeeping', () => {
+  resetAchievementsEngineForTests();
+  const store = createStore(freshState(), { autosave: false });
+  initAchievements({ store, ui: { toast: () => {} }, audio: { play: () => {} } });
+  store.flush();
+  store.update((s) => {
+    s.health.state = 'sick';
+  });
+  store.flush();
+  assert.equal(store.get('achievements.counters.sickEver'), 1, 'transition latched');
+  store.update((s) => {
+    s.health.state = 'healthy';
+  });
+  store.flush();
+  store.update((s) => {
+    s.health.state = 'sick';
+  });
+  store.flush();
+  assert.equal(store.get('achievements.counters.sickEver'), 2, 'every transition counts');
+  resetAchievementsEngineForTests();
+});
+// ═══════════════════════════════════════════════════════════ end V2/G23 ═══

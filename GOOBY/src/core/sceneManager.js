@@ -122,6 +122,33 @@ export function createSceneManager({ canvas, assets, input, audio, store, ui }) 
       return switching;
     },
 
+    // ── V2/G23: photo-mode capture (§C12.2) ─────────────────────────────────
+    /**
+     * Render the current scene once and read the canvas back as a PNG blob.
+     * The render + toBlob happen in the SAME task, so the WebGL backbuffer is
+     * still valid — no preserveDrawingBuffer needed (§C12.2 capture pipeline).
+     * @returns {Promise<Blob|null>} null when no scene is active or toBlob fails
+     */
+    captureFrame() {
+      const inst = current?.instance;
+      if (!inst?.scene || !inst?.camera) return Promise.resolve(null);
+      try {
+        renderer.render(inst.scene, inst.camera);
+      } catch (err) {
+        console.error('[sceneManager] captureFrame render failed:', err);
+        return Promise.resolve(null);
+      }
+      return new Promise((resolve) => {
+        try {
+          renderer.domElement.toBlob((blob) => resolve(blob), 'image/png');
+        } catch (err) {
+          console.error('[sceneManager] captureFrame toBlob failed:', err);
+          resolve(null);
+        }
+      });
+    },
+    // ── end V2/G23 ──────────────────────────────────────────────────────────
+
     /**
      * Switch to a scene (§E1): fade out → exit+dispose old → preload assets →
      * enter new → fade in.

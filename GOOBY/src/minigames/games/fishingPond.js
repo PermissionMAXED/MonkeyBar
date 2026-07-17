@@ -27,7 +27,13 @@ import {
   fishSpeedFor,
   shouldSpawnBoot,
   applyCatch,
+  rollSpecies, // V2/G23: §C6 fish-set species roll
+  SPECIES_COLORS, // V2/G23: visible species tint
 } from './fishingPond.logic.js';
+// ── V2/G23: §C6 species meta — night band gates the nightEel (§C10.3) ──
+import { bandAt } from '../../systems/dayNight.js';
+import { now } from '../../core/clock.js';
+// ── end V2/G23 ──
 
 /** World layout (camera z=10, FOV 45 → half-height ≈ 4.1, half-width ≈ 1.9). */
 const SURFACE_Y = 0.9;
@@ -136,6 +142,13 @@ export default {
     this.bootRollT = 0;
     this.emotionT = 0;
     this.fireflyT = 1.5;
+    // ── V2/G23: §C6 species meta ──
+    this.night = bandAt(now()) === 'night'; // §C10.3: nightEel gate, fixed per round
+    /** @type {string[]} §B3 meta.caught — species ids, in catch order */
+    this.caught = [];
+    /** @type {Record<string, THREE.MeshBasicMaterial>} lazy per-species tints */
+    this.speciesMats = {};
+    // ── end V2/G23 ──
 
     const camera = ctx.camera;
     camera.position.set(0, 0, 10);
@@ -331,9 +344,13 @@ export default {
     const { rng, assets } = this.ctx;
     const kind = rollFishKind(rng);
     const holder = fitModel(assets.getModel('food-kit/fish'), FISHING.SIZES[kind].scale + 0.25);
+    // ── V2/G23: §C6 species roll at spawn (seeded, deterministic) — the
+    // species tint is visible in the pond; catches report meta.caught (§B3).
+    const species = rollSpecies(kind, rng, this.night);
     holder.traverse((o) => {
-      if (o.isMesh) o.material = this.fishSilhouette;
+      if (o.isMesh) o.material = this.speciesMat(species);
     });
+    // ── end V2/G23 ──
     const dir = rng() < 0.5 ? 1 : -1;
     const depth =
       FISHING.FISH_DEPTH_MIN + rng() * (FISHING.FISH_DEPTH_MAX - FISHING.FISH_DEPTH_MIN);
@@ -342,6 +359,7 @@ export default {
       : -dir * (FISHING.POND_HALF_W + 0.3); // swim in from the edge
     const fish = {
       kind,
+      species, // V2/G23: §C6 species id
       holder,
       x,
       depth,
@@ -357,6 +375,22 @@ export default {
     this.swimmers.push(fish);
     return fish;
   },
+
+  // ── V2/G23: lazy per-species tint (muted like the old silhouette so the
+  // dusk mood survives, but the §C6 "visible color roll" reads clearly) ──
+  speciesMat(species) {
+    if (!this.speciesMats[species]) {
+      const mat = new THREE.MeshBasicMaterial({
+        color: SPECIES_COLORS[species] ?? '#22364A',
+        transparent: true,
+        opacity: 0.95,
+      });
+      this.speciesMats[species] = mat;
+      this.ownedMats.push(mat);
+    }
+    return this.speciesMats[species];
+  },
+  // ── end V2/G23 ──
 
   /** Spawn the drifting boot (procedural: shaft + foot boxes). */
   spawnBoot() {
@@ -434,7 +468,7 @@ export default {
       item.active = false;
       item.respawnT = Infinity; // removed below; respawn on landing
     }
-    this.hooked = { kind: item.kind, holder: item.holder };
+    this.hooked = { kind: item.kind, species: item.species, holder: item.holder }; // V2/G23: + species
   },
 
   /** Hook reached the surface — resolve whatever is on it. */
@@ -444,7 +478,7 @@ export default {
       this.state = 'idle';
       return;
     }
-    const { kind, holder } = this.hooked;
+    const { kind, species, holder } = this.hooked; // V2/G23: + species
     const value = catchValue(kind);
     const prev = this.score;
     this.score = applyCatch(this.score, value);
@@ -457,8 +491,23 @@ export default {
       this.reactGooby('grumpy', 'refuse');
     } else {
       this.ctx.audio.play('fish.catch');
-      const key = kind === 'S' ? 'mg.fish.small' : kind === 'M' ? 'mg.fish.medium' : 'mg.fish.large';
-      this.floats.spawn(t(key, { pts: value }), pos, kind === 'L' ? '#FFE08A' : '#BFF0C8');
+      // ── V2/G23: §C6 species meta — record the catch + species float text ──
+      if (species) {
+        this.caught.push(species);
+        this.floats.spawn(
+          t('mg.fish.species', { name: t(`sticker.fish.${species}.name`), pts: value }),
+          pos,
+          species === 'goldenFish' ? '#FFD24A' : kind === 'L' ? '#FFE08A' : '#BFF0C8'
+        );
+        if (species === 'goldenFish') {
+          this.ctx.hud.banner(t('mg.fish.golden'));
+          this.particles.emit('confetti', pos, { count: 14 });
+        }
+      } else {
+        const key = kind === 'S' ? 'mg.fish.small' : kind === 'M' ? 'mg.fish.medium' : 'mg.fish.large';
+        this.floats.spawn(t(key, { pts: value }), pos, kind === 'L' ? '#FFE08A' : '#BFF0C8');
+      }
+      // ── end V2/G23 ──
       this.reactGooby(kind === 'L' ? 'ecstatic' : 'happy', 'happyBounce');
       if (kind === 'L') {
         this.particles.emit('confetti', this.gooby.group.position.clone().add(new THREE.Vector3(0, 0.8, 0)), { count: 10 });
@@ -572,7 +621,7 @@ export default {
       this.endT += dt;
       if (this.endT >= 1.5 && this.phase !== 'done') {
         this.phase = 'done';
-        ctx.onEnd({ score: this.score });
+        ctx.onEnd({ score: this.score, meta: { caught: this.caught } }); // V2/G23: §B3 species meta
       }
       return;
     }
@@ -693,6 +742,7 @@ export default {
     // sweep handles GPU frees; drop references only.
     this.ownedGeos = [];
     this.ownedMats = [];
+    this.speciesMats = {}; // V2/G23: tints live in ownedMats, disposed above
     this.swimmers = [];
     this.boot = null;
     this.hooked = null;

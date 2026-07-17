@@ -157,3 +157,57 @@ export function shouldSpawnBoot(rng, sinceLastBootSec) {
 export function applyCatch(score, value) {
   return Math.max(0, score + value);
 }
+
+// ══════════════════════════════════════════════════════════════ V2/G23 ═══
+// §C6 fish-set species roll (album set 1, 8 species): every spawned fish gets
+// a species from its size via the seeded ctx.rng — the species COLOR is
+// visible in the pond, the catch reports `meta.caught` (§B3) and the album
+// awards ride the framework's V2/G23 forwarding block. Binding rules (§C6):
+// S → minnow/dace/carp · M → koi/bass · L → whopper/eel; goldenFish = 2% roll
+// on any L; nightEel only during the night band (§C10.3 — the game checks
+// dayNight.bandAt at init and passes `night` here).
+
+/** Size → species candidates (§C6 row 1, verbatim mapping). */
+export const FISH_SPECIES = Object.freeze({
+  S: Object.freeze(['tinyMinnow', 'blueDace', 'sunnyCarp']),
+  M: Object.freeze(['pinkKoi', 'stripeBass']),
+  L: Object.freeze(['bigWhopper', 'nightEel']),
+});
+
+/** §C6: goldenFish chance on any L roll (2%). */
+export const GOLDEN_FISH_CHANCE = 0.02;
+
+/** Night L split when the golden roll misses: eel vs whopper (50/50). */
+export const NIGHT_EEL_CHANCE = 0.5;
+
+/** Species tint for the pond swimmers (visible color roll, §C6). */
+export const SPECIES_COLORS = Object.freeze({
+  tinyMinnow: '#9FB2C8',
+  blueDace: '#5B8BD9',
+  sunnyCarp: '#E8A33D',
+  pinkKoi: '#E88BB0',
+  stripeBass: '#7A9E7E',
+  bigWhopper: '#4E6E8E',
+  nightEel: '#6E5E9E',
+  goldenFish: '#FFD24A',
+});
+
+/**
+ * Roll a species for a spawned fish (§C6, deterministic per rng stream):
+ * L first rolls goldenFish at 2%, then (night only) eel vs whopper 50/50 —
+ * day L is always the whopper. S/M pick uniformly from their candidates.
+ * @param {'S'|'M'|'L'} kind size from rollFishKind
+ * @param {() => number} rng seeded 0..1 stream (ctx.rng)
+ * @param {boolean} [night] night band active (§C10.3 gate for nightEel)
+ * @returns {string} §C6 species id
+ */
+export function rollSpecies(kind, rng, night = false) {
+  if (kind === 'L') {
+    if (rng() < GOLDEN_FISH_CHANCE) return 'goldenFish';
+    if (night && rng() < NIGHT_EEL_CHANCE) return 'nightEel';
+    return 'bigWhopper';
+  }
+  const options = FISH_SPECIES[kind] ?? FISH_SPECIES.S;
+  return options[Math.min(options.length - 1, Math.floor(rng() * options.length))];
+}
+// ══════════════════════════════════════════════════════════ end V2/G23 ═══

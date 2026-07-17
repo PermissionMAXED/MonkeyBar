@@ -1,11 +1,219 @@
-// V2/G16: strings module stub (PLAN2 §E0.1-1) — OWNED BY AGENT G23.
-// Scope: progression UI: quest board, sticker album, profile screen, photo mode, HUD badges (PLAN2 §C5/§C6/§C12).
-// G23 adds every key of that scope here (BOTH EN and DE — §A parity rule);
-// nobody else edits this file, and src/data/strings.js itself stays untouched
-// after wave 1 (it already spreads this module after all v1 entries).
+// V2/G23: strings module (PLAN2 §E0.1-1) — OWNED BY AGENT G23.
+// Scope: progression UI: quest board, sticker album, profile screen, photo
+// mode, HUD badges (PLAN2 §C5/§C6/§C12). Every key exists in BOTH EN and DE
+// (§A parity rule). Quest titles/descs + sticker names/flavors + collection
+// set names live in v2-core.js (G16); this module adds the surrounding UI.
 
 /** @type {Record<string, string>} */
-export const EN = {};
+export const EN = {
+  // --- HUD additions (§C5.1/§C12) ---
+  'hud.quests': 'Quests',
+  'hud.camera': 'Photo',
+  'hud.profile': 'Profile',
+  'hud.sickChip': 'Gooby is not feeling well — tap for care',
+
+  // --- framework sick refusal gate (§C3.4/§B5, mirrors toast.tooSleepy) ---
+  'toast.tooSick': 'Gooby is too sick to play… 🤒',
+
+  // --- daily quest board (§C5.1) ---
+  'quests.title': 'Daily Quests',
+  'quests.midnight': 'New quests at midnight',
+  'quests.claim': 'Claim',
+  'quests.claimed': 'Done!',
+  'quests.reroll': 'Reroll',
+  'quests.rerollUsed': 'Reroll used today',
+  'quests.reward': '+{coins}',
+  'quests.xp': '+{xp} XP',
+  'quests.lockedTitle': 'Locked',
+  'quests.lockedTeaser': 'Daily quests unlock at level {level} — keep playing!',
+  'toast.questClaimed': 'Quest done! +{coins} coins, +{xp} XP',
+  'toast.questsRerolled': 'Fresh quests rolled!',
+  'toast.rerollRefused': 'Only one reroll per day',
+
+  // --- sticker album (§C6) ---
+  'album.title': 'Sticker Album',
+  'album.unknown': '???',
+  'album.claim': 'Claim reward',
+  'album.claimed': 'Collected!',
+  'album.setProgress': '{have}/{total} stickers',
+  'toast.sticker': 'New sticker: {name}! +{xp} XP',
+  'toast.setClaimed': '{name} complete! +{coins} coins & “{item}” added!',
+  'album.reward.fish': 'Goldfish Bowl',
+  'album.reward.veggies': 'Golden Watering Can',
+  'album.reward.landmarks': 'Toy City',
+  'album.reward.treats': 'Candy Jar',
+
+  // --- profile / stats screen (§C12.1) ---
+  'profile.title': 'Profile',
+  'profile.name': 'Gooby',
+  'profile.joined': 'Joined {date}',
+  'profile.skin': 'Fur',
+  'profile.skinDefault': 'Classic Cream',
+  'profile.vitals': 'Vitals',
+  'profile.weight': 'Weight',
+  'profile.health': 'Health',
+  'profile.mood': 'Mood',
+  'profile.health.healthy': 'Healthy',
+  'profile.health.queasy': 'Queasy',
+  'profile.health.sick': 'Sick',
+  'profile.mood.ecstatic': 'Ecstatic',
+  'profile.mood.happy': 'Happy',
+  'profile.mood.neutral': 'Okay',
+  'profile.mood.grumpy': 'Grumpy',
+  'profile.mood.miserable': 'Miserable',
+  'profile.totals': 'Lifetime Totals',
+  'profile.playtime': 'Playtime',
+  'profile.feeds': 'Feeds',
+  'profile.washes': 'Washes',
+  'profile.naps': 'Naps',
+  'profile.tickles': 'Tickles',
+  'profile.balls': 'Ball fetches',
+  'profile.trips': 'Shop trips',
+  'profile.vetVisits': 'Vet visits',
+  'profile.deliveries': 'Deliveries',
+  'profile.harvests': 'Harvests',
+  'profile.photos': 'Photos',
+  'profile.questsDone': 'Quests done',
+  'profile.coinsEarned': 'Coins earned',
+  'profile.coinsSpent': 'Coins spent',
+  'profile.distance': 'Distance driven',
+  'profile.minigames': 'Minigames',
+  'profile.best': 'Best',
+  'profile.plays': 'Plays',
+  'profile.lockedRow': 'Level {level}',
+  'profile.collections': 'Collections',
+
+  // --- photo mode (§C12.2) ---
+  'photo.pose': 'Pose',
+  'photo.emotion': 'Mood',
+  'photo.frame': 'Frame',
+  'photo.pose.wave': 'Wave',
+  'photo.pose.bounce': 'Bounce',
+  'photo.pose.dance': 'Dance',
+  'photo.pose.sit': 'Sit',
+  'photo.pose.sleep': 'Sleep',
+  'photo.emo.happy': 'Happy',
+  'photo.emo.ecstatic': 'Ecstatic',
+  'photo.emo.sleepy': 'Sleepy',
+  'photo.emo.grumpy': 'Grumpy',
+  'photo.frame.none': 'None',
+  'photo.frame.polaroid': 'Polaroid',
+  'photo.frame.stars': 'Stars',
+  'photo.shutter': 'Take photo',
+  'photo.exit': 'Close photo mode',
+  'photo.caption': 'Gooby ♥',
+  'toast.photoSaved': 'Photo saved! 📸 +{xp} XP',
+  'toast.photoSavedNoXp': 'Photo saved! 📸',
+  'toast.photoFailed': 'Capture failed — try again',
+
+  // --- fishing pond species (§C6 fish set) ---
+  'mg.fish.golden': 'GOLDEN FISH!',
+  'mg.fish.species': '{name}! +{pts}',
+};
 
 /** @type {Record<string, string>} */
-export const DE = {};
+export const DE = {
+  // --- HUD additions (§C5.1/§C12) ---
+  'hud.quests': 'Quests',
+  'hud.camera': 'Foto',
+  'hud.profile': 'Profil',
+  'hud.sickChip': 'Gooby geht es nicht gut — tippe für Pflege',
+
+  // --- framework sick refusal gate (§C3.4/§B5) ---
+  'toast.tooSick': 'Gooby ist zu krank zum Spielen… 🤒',
+
+  // --- daily quest board (§C5.1) ---
+  'quests.title': 'Tagesquests',
+  'quests.midnight': 'Neue Quests um Mitternacht',
+  'quests.claim': 'Abholen',
+  'quests.claimed': 'Erledigt!',
+  'quests.reroll': 'Neu würfeln',
+  'quests.rerollUsed': 'Heute schon gewürfelt',
+  'quests.reward': '+{coins}',
+  'quests.xp': '+{xp} XP',
+  'quests.lockedTitle': 'Gesperrt',
+  'quests.lockedTeaser': 'Tagesquests gibt es ab Level {level} — weiterspielen!',
+  'toast.questClaimed': 'Quest geschafft! +{coins} Münzen, +{xp} XP',
+  'toast.questsRerolled': 'Neue Quests gewürfelt!',
+  'toast.rerollRefused': 'Nur einmal pro Tag neu würfeln',
+
+  // --- sticker album (§C6) ---
+  'album.title': 'Stickeralbum',
+  'album.unknown': '???',
+  'album.claim': 'Belohnung abholen',
+  'album.claimed': 'Abgeholt!',
+  'album.setProgress': '{have}/{total} Sticker',
+  'toast.sticker': 'Neuer Sticker: {name}! +{xp} XP',
+  'toast.setClaimed': '{name} komplett! +{coins} Münzen & „{item}“ dazu!',
+  'album.reward.fish': 'Goldfischglas',
+  'album.reward.veggies': 'Goldene Gießkanne',
+  'album.reward.landmarks': 'Spielzeugstadt',
+  'album.reward.treats': 'Bonbonglas',
+
+  // --- profile / stats screen (§C12.1) ---
+  'profile.title': 'Profil',
+  'profile.name': 'Gooby',
+  'profile.joined': 'Dabei seit {date}',
+  'profile.skin': 'Fell',
+  'profile.skinDefault': 'Cremeklassiker',
+  'profile.vitals': 'Befinden',
+  'profile.weight': 'Gewicht',
+  'profile.health': 'Gesundheit',
+  'profile.mood': 'Laune',
+  'profile.health.healthy': 'Gesund',
+  'profile.health.queasy': 'Flau im Bauch',
+  'profile.health.sick': 'Krank',
+  'profile.mood.ecstatic': 'Überglücklich',
+  'profile.mood.happy': 'Fröhlich',
+  'profile.mood.neutral': 'Okay',
+  'profile.mood.grumpy': 'Grummelig',
+  'profile.mood.miserable': 'Miserabel',
+  'profile.totals': 'Gesamtstatistik',
+  'profile.playtime': 'Spielzeit',
+  'profile.feeds': 'Fütterungen',
+  'profile.washes': 'Wäschen',
+  'profile.naps': 'Nickerchen',
+  'profile.tickles': 'Kitzler',
+  'profile.balls': 'Ballwürfe',
+  'profile.trips': 'Einkaufsfahrten',
+  'profile.vetVisits': 'Tierarztbesuche',
+  'profile.deliveries': 'Lieferungen',
+  'profile.harvests': 'Ernten',
+  'profile.photos': 'Fotos',
+  'profile.questsDone': 'Quests geschafft',
+  'profile.coinsEarned': 'Münzen verdient',
+  'profile.coinsSpent': 'Münzen ausgegeben',
+  'profile.distance': 'Gefahrene Strecke',
+  'profile.minigames': 'Minispiele',
+  'profile.best': 'Rekord',
+  'profile.plays': 'Runden',
+  'profile.lockedRow': 'Level {level}',
+  'profile.collections': 'Sammlungen',
+
+  // --- photo mode (§C12.2) ---
+  'photo.pose': 'Pose',
+  'photo.emotion': 'Laune',
+  'photo.frame': 'Rahmen',
+  'photo.pose.wave': 'Winken',
+  'photo.pose.bounce': 'Hüpfen',
+  'photo.pose.dance': 'Tanzen',
+  'photo.pose.sit': 'Sitzen',
+  'photo.pose.sleep': 'Schlafen',
+  'photo.emo.happy': 'Fröhlich',
+  'photo.emo.ecstatic': 'Überglücklich',
+  'photo.emo.sleepy': 'Müde',
+  'photo.emo.grumpy': 'Grummelig',
+  'photo.frame.none': 'Ohne',
+  'photo.frame.polaroid': 'Polaroid',
+  'photo.frame.stars': 'Sterne',
+  'photo.shutter': 'Foto machen',
+  'photo.exit': 'Fotomodus schließen',
+  'photo.caption': 'Gooby ♥',
+  'toast.photoSaved': 'Foto gespeichert! 📸 +{xp} XP',
+  'toast.photoSavedNoXp': 'Foto gespeichert! 📸',
+  'toast.photoFailed': 'Aufnahme fehlgeschlagen — nochmal versuchen',
+
+  // --- fishing pond species (§C6 fish set) ---
+  'mg.fish.golden': 'GOLDFISCH!',
+  'mg.fish.species': '{name}! +{pts}',
+};

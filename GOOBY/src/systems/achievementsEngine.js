@@ -23,6 +23,19 @@ import { MINIGAME_IDS } from '../data/minigames.js';
 import { OUTFIT_SLOTS } from '../data/outfits.js';
 import { t } from '../data/strings.js';
 import { now } from '../core/clock.js';
+// ── V2/G23 imports: progression wiring (quests/collections live + specials) ──
+// All pure modules (§B rule) — node:test keeps running this file headlessly.
+import { UNLOCKS, LEVELING, PHOTO } from '../data/constants.js';
+import { QUEST_POOL } from '../data/quests.js';
+import { getCollectionSet } from '../data/collections.js';
+import { getFood } from '../data/foods.js';
+import * as questsEngine from './quests.js';
+import * as collectionsEngine from './collections.js';
+import * as profileStats from './profileStats.js';
+import { award as economyAward } from './economy.js';
+import { applyXp, unlockedMinigames } from './leveling.js';
+import { localDay } from '../core/clock.js';
+// ── end V2/G23 imports ──
 
 const DEFAULT_ITEM_SET = new Set(DECOR_DEFAULT_ITEMS);
 
@@ -89,12 +102,143 @@ export function progressOf(def, state) {
         current = MINIGAME_IDS.filter((id) => (plays[id] ?? 0) >= 1).length;
         break;
       }
+      // ── V2/G23: 2.0 specials (§C5.3) — evaluation in v2SpecialProgress ──
+      case 'allCrops':
+      case 'stickers':
+      case 'setsClaimed':
+      case 'neverSick':
+      case 'weightMax':
+      case 'weightMin':
+      case 'play21':
+      case 'holeInOne':
+        current = v2SpecialProgress(def, state);
+        break;
+      // ── end V2/G23 ──
       default:
         current = 0;
     }
   }
   return { current: Math.max(0, Math.min(def.target, current)), target: def.target };
 }
+
+// ═══════════════════════════════════════════════════════════════ V2/G23 ═══
+// Achievements 2.0 + live progression wiring (§C5.3 specials, §B7 quests &
+// collections riding the SAME call sites this engine already instruments).
+//
+// HOW QUEST EVENTS FLOW (the §B7 "same call sites" ruling, zero edits in
+// other agents' files): most §C5.1 events are counter-backed — feeds, washes,
+// tickles, balls, sleeps, trips, cleanTrips, plantings, waterings, harvests,
+// sells, deliveries, photosTaken. Whether a counter is bumped through
+// engine.track() OR mutated directly in the store (interactions.js, sleep.js,
+// shopTrip.js, garden wiring …), it flows through the coalesced 'change'
+// event — the wiring below DIFFS the counters on every flush and forwards
+// each increment to quests.track exactly once. Non-counter events come from
+// dedicated call sites: minigame events from the framework's V2/G23 onEnd
+// block, 'statsScreen' from the profile screen mount, 'feedHealthy'/'buyFood'
+// from inventory diffs, 'pet' from the petsToday/tickles daily counters.
+
+/**
+ * §C5.1 pool decorated for the §B7 engine: constants.QUEST_POOL rows carry
+ * flat `coins`/`xp` — systems/quests.js expects `reward: {coins, xp}` and the
+ * `mode` progress arithmetic. Event-name patterns pick the mode:
+ * score:<id> / round:<id> / tricks:<id> → 'max' (single-round bests),
+ * gameDistinct → 'distinct' (seen-ids set), everything else → 'add'.
+ * @type {import('./quests.js').QuestDef[]}
+ */
+export const V2_QUEST_POOL = Object.freeze(
+  QUEST_POOL.map((row) =>
+    Object.freeze({
+      ...row,
+      reward: Object.freeze({ coins: row.coins, xp: row.xp }),
+      mode:
+        /^(score|round|tricks):/.test(row.event) ? 'max'
+          : row.event === 'gameDistinct' ? 'distinct'
+            : 'add',
+    })
+  )
+);
+
+/**
+ * §B7 QuestCtx from the live state (requires-filtering for rolls/rerolls).
+ * @param {object} state
+ * @returns {import('./quests.js').QuestCtx}
+ */
+export function questCtxOf(state) {
+  const level = Math.max(1, Math.floor(Number(state?.level) || 1));
+  return {
+    level,
+    unlockedGameIds: unlockedMinigames(level),
+    gardenUnlocked: level >= UNLOCKS.GARDEN,
+  };
+}
+
+/**
+ * Progress for the 8 §C5.3 v2 specials (pure — progressOf clamps to target).
+ *   allCrops    veggie stickers owned ≥ 1 (collections, §C6 row 2)
+ *   stickers    distinct collection entries owned
+ *   setsClaimed sets in collections.claimedSets
+ *   neverSick   level ≥ 10 with counters.sickEver === 0 (fed by the wiring
+ *               below on every healthy/queasy → sick transition)
+ *   weightMax   live weight.value ("reached": unlock latches via checkNow)
+ *   weightMin   target when value ≤ target, else 0 (§C4 downward milestone)
+ *   play21      distinct catalog games played ≥ 1
+ *   holeInOne   counters.holeInOnes (framework forwards miniGolf meta)
+ * @param {import('../data/achievements.js').AchievementDef} def
+ * @param {object} state
+ * @returns {number}
+ */
+export function v2SpecialProgress(def, state) {
+  switch (def.special) {
+    case 'allCrops': {
+      const set = getCollectionSet('veggies');
+      const entries = state?.collections?.entries ?? {};
+      return set.entries.filter((e) => Math.floor(Number(entries[`veggies.${e.id}`]) || 0) >= 1).length;
+    }
+    case 'stickers':
+      return Object.values(state?.collections?.entries ?? {})
+        .filter((n) => Math.floor(Number(n) || 0) >= 1).length;
+    case 'setsClaimed':
+      return Object.keys(state?.collections?.claimedSets ?? {}).length;
+    case 'neverSick': {
+      const level = Math.floor(Number(state?.level) || 0);
+      const sickEver = Math.floor(Number(state?.achievements?.counters?.sickEver) || 0);
+      return level >= 10 && sickEver === 0 ? 1 : 0;
+    }
+    case 'weightMax':
+      return Math.floor(Number(state?.weight?.value) || 0);
+    case 'weightMin': {
+      const v = Number(state?.weight?.value);
+      return Number.isFinite(v) && v > 0 && v <= def.target ? def.target : 0;
+    }
+    case 'play21': {
+      const plays = state?.minigames?.plays ?? {};
+      return MINIGAME_IDS.filter((id) => (plays[id] ?? 0) >= 1).length;
+    }
+    case 'holeInOne':
+      return Math.floor(Number(state?.achievements?.counters?.holeInOnes) || 0);
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Photo-mode XP grant (§C12.2: +1 XP, max 5/day) — pure on the counters map,
+ * mirrors interactions.js applyPetTickleGain's petsDay day-key pattern.
+ * @param {object} counters achievements.counters (photoXpDay/photoXpToday)
+ * @param {string} day localDay string
+ * @returns {{counters: object, xp: number}}
+ */
+export function photoXpGrant(counters, day) {
+  const c = { ...counters };
+  if (c.photoXpDay !== day) {
+    c.photoXpDay = day;
+    c.photoXpToday = 0;
+  }
+  const xp = (c.photoXpToday ?? 0) < PHOTO.XP_DAILY_CAP ? PHOTO.XP_PER_PHOTO : 0;
+  if (xp > 0) c.photoXpToday = (c.photoXpToday ?? 0) + 1;
+  return { counters: c, xp };
+}
+// ═══════════════════════════════════════════════════════════ end V2/G23 ═══
 
 /**
  * @param {import('../data/achievements.js').AchievementDef} def
@@ -138,6 +282,9 @@ export function applyUnlocks(state, nowMs = now()) {
 
 /** @type {ReturnType<typeof initAchievements>|null} */
 let engineSingleton = null;
+
+/** V2/G23: disposer for the quest midnight-rollover timer (test hygiene). */
+let v2Cleanup = null;
 
 /**
  * Wire the engine to the live store (idempotent). Subscribes centrally to the
@@ -220,7 +367,252 @@ export function initAchievements({ store, ui, audio, framework }) {
   store.on('change', checkNow);
   checkNow(); // catch conditions already met by the loaded save
 
+  // ══════════════════════════════════════════════════════════ V2/G23 ═══
+  // Live progression wiring: daily quests, sticker album, photo XP, and the
+  // quest-forwarding hook (module-header "HOW QUEST EVENTS FLOW").
+
+  /** Forward one §C5.1 quest event into the persisted quests slice. */
+  function trackQuest(event, n = 1, meta = undefined) {
+    const q = store.get('quests');
+    if (!q?.active?.length) return false;
+    const r = questsEngine.track(q, event, n, meta, V2_QUEST_POOL);
+    if (!r.changed) return false;
+    store.update((state) => {
+      state.quests = r.q;
+    });
+    return true;
+  }
+
+  /** Roll/refresh today's quests (no-op when quests.day already matches). */
+  function rollQuestsNow() {
+    const state = store.get();
+    const rolled = questsEngine.rollDaily(state.quests, now(), V2_QUEST_POOL, questCtxOf(state));
+    if (rolled !== state.quests) {
+      store.update((s) => {
+        s.quests = rolled;
+      });
+    }
+  }
+
+  /** Apply XP through the §C5.2 curve (level-up coins ride economy's rule). */
+  function grantXp(state, amount) {
+    const p = applyXp({ xp: state.xp, level: state.level }, amount);
+    state.xp = p.xp;
+    state.level = p.level;
+    state.coins += p.coinsAwarded;
+    state.profile.coinsEarned += p.coinsAwarded;
+  }
+
+  /**
+   * Claim a completed quest (§B7): marks claimed, pays coins via economy +
+   * XP via leveling, bumps the questsDone counter. Returns the reward or null.
+   */
+  function claimQuest(id) {
+    const r = questsEngine.claim(store.get('quests'), id, V2_QUEST_POOL);
+    if (!r.q) return null;
+    store.update((state) => {
+      state.quests = r.q;
+      const counters = state.achievements.counters;
+      counters.questsDone = Math.floor(Number(counters.questsDone) || 0) + 1;
+    });
+    economyAward(store, r.reward.coins, 'quest');
+    store.update((state) => grantXp(state, r.reward.xp));
+    checkNow();
+    return r.reward;
+  }
+
+  /** Free daily reroll (§B7). Returns whether the reroll happened. */
+  function rerollQuests() {
+    const state = store.get();
+    const r = questsEngine.reroll(state.quests, now(), V2_QUEST_POOL, questCtxOf(state));
+    if (!r.ok) return false;
+    store.update((s) => {
+      s.quests = r.q;
+    });
+    return true;
+  }
+
+  /** HUD badge count (§B7). */
+  function claimableQuests() {
+    return questsEngine.claimableCount(store.get('quests'), V2_QUEST_POOL);
+  }
+
+  /**
+   * Earn a sticker into the persisted collections slice (§B7). First-time
+   * toast + §C5.2 sticker XP fire centrally from the diff watcher below, so
+   * every award path (this API, garden/feed/landmark wiring) behaves alike.
+   * @param {boolean} [opts.firstOnly] skip when already owned (landmark
+   *   forwarding — G21 triggers award live during the drive too)
+   */
+  function awardSticker(setId, entryId, n = 1, opts = {}) {
+    const c = store.get('collections');
+    if (opts.firstOnly && collectionsEngine.countOf(c, setId, entryId) >= 1) return false;
+    const r = collectionsEngine.award(c, setId, entryId, n);
+    if (r.c === c) return false;
+    store.update((state) => {
+      state.collections = r.c;
+    });
+    return r.first;
+  }
+
+  /**
+   * Claim a completed set ONCE (§C6): coins via economy, +50 XP, reward deco
+   * into furniture.owned. Returns the reward or null.
+   */
+  function claimCollectionSet(setId) {
+    const setDef = getCollectionSet(setId);
+    if (!setDef) return null;
+    const r = collectionsEngine.claimSet(store.get('collections'), setId, setDef, now());
+    if (!r.c) return null;
+    store.update((state) => {
+      state.collections = r.c;
+      if (r.reward.furniture && !state.furniture.owned.includes(r.reward.furniture)) {
+        state.furniture.owned.push(r.reward.furniture);
+      }
+    });
+    economyAward(store, r.reward.coins, 'album');
+    store.update((state) => grantXp(state, r.reward.xp ?? LEVELING.XP_SET_COMPLETE));
+    checkNow();
+    return r.reward;
+  }
+
+  /**
+   * Photo-mode capture bookkeeping (§C12.2): photosTaken counter (feeds the
+   * shutterbug achievement + the 'photo' quest event via the diff watcher),
+   * profile.photos, and +1 XP capped at 5/day. Returns the XP granted.
+   */
+  function photoTaken() {
+    let granted = 0;
+    store.update((state) => {
+      const g = photoXpGrant(state.achievements.counters, localDay());
+      state.achievements.counters = g.counters;
+      const counters = state.achievements.counters;
+      counters.photosTaken = Math.floor(Number(counters.photosTaken) || 0) + 1;
+      state.profile = profileStats.onPhoto(state.profile);
+      if (g.xp > 0) {
+        grantXp(state, g.xp);
+        granted = g.xp;
+      }
+    });
+    checkNow();
+    return granted;
+  }
+
+  // --- quest-forwarding hook: counter/inventory diff on every flush ---
+  /** counter id → §C5.1 quest event (verbatim event column). */
+  const COUNTER_QUEST_EVENTS = Object.freeze({
+    feeds: 'feed', washes: 'wash', tickles: 'tickle', balls: 'ball',
+    sleeps: 'sleep', trips: 'shopTrip', cleanTrips: 'cleanDrive',
+    plantings: 'plant', waterings: 'water', harvests: 'harvest',
+    sells: 'sell', deliveries: 'deliver', photosTaken: 'photo',
+  });
+
+  function progressSnapshot(state) {
+    const counters = state?.achievements?.counters ?? {};
+    const snap = {
+      counters: {},
+      petsToday: Math.floor(Number(counters.petsToday) || 0),
+      petsDay: counters.petsDay,
+      inventory: { ...(state?.inventory ?? {}) },
+      coinsSpent: Number(state?.profile?.coinsSpent) || 0,
+      healthState: state?.health?.state ?? 'healthy',
+      owned: new Set(
+        Object.entries(state?.collections?.entries ?? {})
+          .filter(([, n]) => Math.floor(Number(n) || 0) >= 1)
+          .map(([key]) => key)
+      ),
+    };
+    for (const id of Object.keys(COUNTER_QUEST_EVENTS)) {
+      snap.counters[id] = Math.floor(Number(counters[id]) || 0);
+    }
+    return snap;
+  }
+
+  /** First-time sticker: +5 XP (§C5.2) + toast + jingle, exactly once. */
+  function onFirstSticker(key) {
+    const dot = key.indexOf('.');
+    if (dot <= 0) return;
+    const setId = key.slice(0, dot);
+    const entryId = key.slice(dot + 1);
+    store.update((state) => grantXp(state, LEVELING.XP_STICKER));
+    ui?.toast?.('toast.sticker', { name: t(`sticker.${setId}.${entryId}.name`), xp: LEVELING.XP_STICKER });
+    audio?.play?.('sticker.get');
+  }
+
+  let progressPrev = progressSnapshot(store.get());
+  store.on('change', (state) => {
+    const cur = progressSnapshot(state);
+    const prev = progressPrev;
+    progressPrev = cur; // swap BEFORE forwarding (re-entrancy guard)
+
+    /** @type {Array<[string, number, object|undefined]>} */
+    const events = [];
+    for (const [counterId, event] of Object.entries(COUNTER_QUEST_EVENTS)) {
+      const d = cur.counters[counterId] - prev.counters[counterId];
+      if (d > 0) events.push([event, d, undefined]);
+    }
+    // 'pet' (§C5.1 q.pet5): petsToday counts pet AND tickle XP grants
+    // (interactions.applyPetTickleGain) — subtract the tickle share; a
+    // petsDay rollover resets the counter, so re-baseline instead of diffing.
+    let petsDelta = cur.petsToday - prev.petsToday;
+    if (cur.petsDay !== prev.petsDay) petsDelta = cur.petsToday;
+    const tickleDelta = Math.max(0, cur.counters.tickles - prev.counters.tickles);
+    const petStrokes = Math.max(0, petsDelta - tickleDelta);
+    if (petStrokes > 0) events.push(['pet', petStrokes, undefined]);
+    // 'feedHealthy' / 'buyFood' via inventory diffs: a feed consumes a food
+    // from the inventory (junk flag on the food row, §C7); a buy adds food
+    // AND spends coins in the same flush (harvests add food without a spend).
+    const feedsDelta = cur.counters.feeds - prev.counters.feeds;
+    let healthyFed = 0;
+    let foodGained = 0;
+    for (const key of new Set([...Object.keys(prev.inventory), ...Object.keys(cur.inventory)])) {
+      const d = (Number(cur.inventory[key]) || 0) - (Number(prev.inventory[key]) || 0);
+      if (d === 0) continue;
+      const food = getFood(key);
+      if (!food) continue; // seeds etc. never count as food buys/feeds
+      if (d < 0 && feedsDelta > 0 && food.junk !== true) healthyFed += -d;
+      if (d > 0) foodGained += d;
+    }
+    if (healthyFed > 0) events.push(['feedHealthy', Math.min(healthyFed, feedsDelta), undefined]);
+    const spentDelta = cur.coinsSpent - prev.coinsSpent;
+    const harvestsDelta = cur.counters.harvests - prev.counters.harvests;
+    if (foodGained > 0 && spentDelta > 0 && harvestsDelta <= 0) events.push(['buyFood', 1, undefined]);
+    // neverSick bookkeeping (§C5.3): latch every → sick transition
+    if (cur.healthState === 'sick' && prev.healthState !== 'sick') track('sickEver');
+    // first-time stickers (§C5.2): +5 XP + toast, whoever awarded them
+    for (const key of cur.owned) {
+      if (!prev.owned.has(key)) onFirstSticker(key);
+    }
+    for (const [event, n, meta] of events) trackQuest(event, n, meta);
+  });
+
+  // Boot roll + midnight rollover (§C5.1 "new quests at midnight"): rollDaily
+  // no-ops while quests.day matches, so a coarse timer is enough.
+  rollQuestsNow();
+  const rolloverTimer = setInterval(rollQuestsNow, 60_000);
+  if (typeof rolloverTimer === 'object' && rolloverTimer?.unref) rolloverTimer.unref();
+  v2Cleanup = () => clearInterval(rolloverTimer);
+
+  const v2Api = {
+    quests: {
+      pool: V2_QUEST_POOL,
+      ctx: () => questCtxOf(store.get()),
+      rollNow: rollQuestsNow,
+      track: trackQuest,
+      claim: claimQuest,
+      reroll: rerollQuests,
+      claimable: claimableQuests,
+    },
+    collections: {
+      award: awardSticker,
+      claimSet: claimCollectionSet,
+    },
+    photoTaken,
+  };
+  // ══════════════════════════════════════════════════════ end V2/G23 ═══
+
   engineSingleton = { track, trackTripResult, checkNow };
+  Object.assign(engineSingleton, v2Api); // V2/G23: live progression APIs
   return engineSingleton;
 }
 
@@ -232,4 +624,7 @@ export function getAchievementsEngine() {
 /** Test-only: drop the singleton so initAchievements can re-wire a fresh store. */
 export function resetAchievementsEngineForTests() {
   engineSingleton = null;
+  // V2/G23: stop the quest rollover timer of the dropped engine
+  v2Cleanup?.();
+  v2Cleanup = null;
 }

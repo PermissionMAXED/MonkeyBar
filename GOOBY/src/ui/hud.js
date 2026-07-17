@@ -8,6 +8,8 @@ import { STATS, XP, UI_COLORS } from '../data/constants.js';
 import { t, getLang } from '../data/strings.js';
 import { icon } from './icons.js';
 import { xpToNext } from '../systems/leveling.js';
+// V2/G23: claimable-quests badge reads the live engine (§B7 claimableCount)
+import { getAchievementsEngine } from '../systems/achievementsEngine.js';
 
 const RING_R = 20;
 const RING_C = 2 * Math.PI * RING_R;
@@ -166,6 +168,96 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
     muteBtn.classList.toggle('g5-muted', store.get('settings.sfx') === false);
   }
 
+  // ════════════════════════════════════════════════════════════ V2/G23 ═══
+  // Progression buttons (§C5.1/§C12): quest clipboard + claimable badge,
+  // photo-mode camera, profile avatar — plus the 🤒 sick chip (§C3.4) that
+  // opens G20's 'careSheet' panel. Bespoke inline SVGs (icons.js is shared —
+  // §E0.2 keeps it out of the append list, so the shapes live here).
+  const G23_ICONS = {
+    clipboard: '<rect x="5" y="4" width="14" height="17" rx="2.5"/><rect x="8" y="2" width="8" height="4" rx="1.5" fill="#fff" opacity="0.55"/><path d="M8 10h8M8 13.5h8M8 17h5" stroke="#fff" stroke-width="1.8" stroke-linecap="round" opacity="0.75"/>',
+    camera: '<path d="M4 7h3l1.6-2.4A1.5 1.5 0 0 1 9.9 4h4.2a1.5 1.5 0 0 1 1.3.6L17 7h3a1.5 1.5 0 0 1 1.5 1.5V19a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 19V8.5A1.5 1.5 0 0 1 4 7z"/><circle cx="12" cy="13.5" r="4" fill="#fff" opacity="0.55"/><circle cx="12" cy="13.5" r="2.1"/>',
+    avatar: '<circle cx="12" cy="8.5" r="4.4"/><path d="M4 21c.6-4.4 3.9-7 8-7s7.4 2.6 8 7H4z"/><path d="M8.8 4.6C8 2.7 8.6 1.4 9.5 1.3c.9-.1 1.6 1 1.7 2.9M15.2 4.6c.8-1.9.2-3.2-.7-3.3-.9-.1-1.6 1-1.7 2.9" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/>',
+  };
+  const g23Icon = (name, size = 22) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${G23_ICONS[name]}</svg>`;
+
+  if (!document.querySelector('style[data-owner="g23-hud"]')) {
+    const g23Style = document.createElement('style');
+    g23Style.dataset.owner = 'g23-hud';
+    g23Style.textContent = `
+.g5-hud-btn{position:relative;}
+.g23-badge{position:absolute;top:-5px;right:-5px;min-width:19px;height:19px;padding:0 5px;border-radius:999px;background:var(--pink);color:#fff;font-size:11px;font-weight:800;display:none;align-items:center;justify-content:center;font-variant-numeric:tabular-nums;box-shadow:var(--shadow-soft);}
+.g23-badge.g23-show{display:inline-flex;}
+.g23-sick-chip{position:absolute;top:calc(118px + var(--safe-top));left:50%;transform:translateX(-50%);display:none;align-items:center;gap:7px;max-width:86vw;pointer-events:auto;border:none;border-radius:999px;padding:9px 14px;background:var(--white);color:var(--brown);font-family:inherit;font-size:12px;font-weight:800;box-shadow:var(--shadow-soft);cursor:pointer;-webkit-tap-highlight-color:transparent;animation:g23chip 1.6s ease-in-out infinite;}
+.g23-sick-chip.g23-show{display:inline-flex;}
+.g23-sick-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+@keyframes g23chip{0%,100%{transform:translateX(-50%) scale(1);}50%{transform:translateX(-50%) scale(1.035);}}`;
+    document.head.appendChild(g23Style);
+  }
+
+  function g23Button(id, iconName, labelKey, onTap, extraClass = '') {
+    const b = document.createElement('button');
+    b.className = `g5-hud-btn ${extraClass}`.trim();
+    b.dataset.hud = id;
+    b.innerHTML = `${g23Icon(iconName, 22)}<span class="g5-btn-label">${t(labelKey)}</span>`;
+    b.addEventListener('click', () => {
+      audio.play('ui.tap');
+      onTap(b);
+    });
+    btns.appendChild(b);
+    labeled.push({ b, labelKey }); // rides the F3 live re-label loop
+    return b;
+  }
+
+  const questBtn = g23Button('quests', 'clipboard', 'hud.quests', () => {
+    ui.showScreen('questBoard'); // V2/G23: ui/questBoard.js (§C5.1)
+  }, 'g5-btn-teal');
+  const questBadge = document.createElement('span');
+  questBadge.className = 'g23-badge';
+  questBtn.appendChild(questBadge);
+
+  g23Button('camera', 'camera', 'hud.camera', () => {
+    // V2/G23: ui/photoMode.js consumes this event (§C12.2 — shopTrip pattern).
+    window.dispatchEvent(new CustomEvent('gooby:photoMode'));
+  }, 'g5-btn-yellow');
+
+  g23Button('profile', 'avatar', 'hud.profile', () => {
+    ui.showScreen('profile'); // V2/G23: ui/profileScreen.js (§C12.1)
+  });
+
+  /** Claimable-quests badge (§B7 claimableCount via the live engine). */
+  function syncQuestBadge() {
+    let n = 0;
+    try {
+      n = getAchievementsEngine()?.quests?.claimable?.() ?? 0;
+    } catch { n = 0; }
+    questBadge.textContent = String(n);
+    questBadge.classList.toggle('g23-show', n > 0);
+  }
+
+  // 🤒 sick chip (§C3.4): shows while health.state === 'sick'; opens G20's
+  // careSheet panel (degrades to the care sheet's own toast when unregistered).
+  const sickChip = document.createElement('button');
+  sickChip.className = 'g23-sick-chip';
+  sickChip.innerHTML = `<span>🤒 ${t('hud.sickChip')}</span>`;
+  sickChip.addEventListener('click', () => {
+    audio.play('ui.tap');
+    ui.openPanel('careSheet');
+  });
+  el.appendChild(sickChip);
+  function syncSickChip() {
+    sickChip.classList.toggle('g23-show', store.get('health')?.state === 'sick');
+    sickChip.querySelector('span').textContent = `🤒 ${t('hud.sickChip')}`;
+  }
+  const offsG23 = [
+    store.on('healthChanged', syncSickChip), // G20's §B3 event
+    store.on('questsChanged', syncQuestBadge),
+    store.on('change', () => { syncSickChip(); syncQuestBadge(); }), // fallback
+  ];
+  syncSickChip();
+  syncQuestBadge();
+  // ══════════════════════════════════════════════════════ end V2/G23 ═══
+
   el.appendChild(btns);
   ui.el.appendChild(el);
 
@@ -234,6 +326,7 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
     refresh,
     dispose() {
       for (const off of offs) off?.();
+      for (const off of offsG23) off?.(); // V2/G23: badge + sick-chip listeners
       if (visTimer != null) clearInterval(visTimer);
       el.remove();
     },
