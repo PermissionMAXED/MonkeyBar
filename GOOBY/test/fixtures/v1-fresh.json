@@ -1,0 +1,74 @@
+{
+  "v": 1,
+  "createdAt": 1784281282655,
+  "lastTickAt": 1784281282655,
+  "stats": {
+    "hunger": 80,
+    "energy": 90,
+    "hygiene": 85,
+    "fun": 70
+  },
+  "sleep": {
+    "sleeping": false,
+    "startedAt": 0,
+    "wakeAt": 0
+  },
+  "grumpyUntil": 0,
+  "coins": 100,
+  "xp": 0,
+  "level": 1,
+  "inventory": {
+    "carrot": 3,
+    "apple": 1,
+    "cupcake": 1
+  },
+  "furniture": {
+    "owned": [],
+    "placed": {}
+  },
+  "decor": {
+    "wallpaper": {},
+    "floor": {}
+  },
+  "outfits": {
+    "owned": [],
+    "equipped": {
+      "hat": null,
+      "glasses": null,
+      "neck": null
+    }
+  },
+  "minigames": {
+    "best": {},
+    "plays": {},
+    "lastPlayDay": {}
+  },
+  "achievements": {
+    "unlocked": {},
+    "counters": {
+      "feeds": 0,
+      "washes": 0,
+      "sleeps": 0,
+      "trips": 0,
+      "tickles": 0,
+      "petsToday": 0,
+      "petsDay": ""
+    }
+  },
+  "daily": {
+    "lastClaimDay": "",
+    "streak": 0
+  },
+  "quickDelivery": false,
+  "settings": {
+    "lang": "auto",
+    "sfx": true,
+    "music": true,
+    "haptics": true,
+    "notifications": "unasked"
+  },
+  "onboarding": {
+    "done": false,
+    "step": 0
+  }
+}

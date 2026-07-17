@@ -1,6 +1,24 @@
 // Bilingual EN + DE string table (§A ruling, §C7 copy). ALL user-facing text goes
 // through t(key, vars) — no hardcoded strings anywhere else. Pure data: no DOM/three.
 // Later agents add keys to BOTH dictionaries.
+//
+// V2/G16 (PLAN2 §E0.1-1): 2.0 strings live in per-feature modules under
+// ./strings/ — spread below AFTER all v1 entries. This file is edited exactly
+// ONCE for 2.0 (this edit); every 2.0 agent adds keys ONLY to their own
+// v2-*.js module (ownership headers inside each module).
+
+// V2/G16: per-feature 2.0 string modules (§E0.1-1) — static imports, spread below.
+import { EN as V2_CORE_EN, DE as V2_CORE_DE } from './strings/v2-core.js';
+import { EN as V2_GARDEN_EN, DE as V2_GARDEN_DE } from './strings/v2-garden.js';
+import { EN as V2_HEALTH_EN, DE as V2_HEALTH_DE } from './strings/v2-health.js';
+import { EN as V2_CITY_EN, DE as V2_CITY_DE } from './strings/v2-city.js';
+import { EN as V2_SHOP_EN, DE as V2_SHOP_DE } from './strings/v2-shop.js';
+import { EN as V2_PROGRESS_EN, DE as V2_PROGRESS_DE } from './strings/v2-progress.js';
+import { EN as V2_GAMES_D_EN, DE as V2_GAMES_D_DE } from './strings/v2-games-d.js';
+import { EN as V2_GAMES_E_EN, DE as V2_GAMES_E_DE } from './strings/v2-games-e.js';
+import { EN as V2_AMBIENCE_EN, DE as V2_AMBIENCE_DE } from './strings/v2-ambience.js';
+import { EN as V2_AUDIO_EN, DE as V2_AUDIO_DE } from './strings/v2-audio.js';
+import { EN as V2_POLISH_EN, DE as V2_POLISH_DE } from './strings/v2-polish.js';
 
 /** @type {Record<string, string>} */
 export const EN = {
@@ -474,6 +492,19 @@ export const EN = {
   'ob.shop.title': 'One more thing…',
   'ob.shop.body': 'When the fridge is empty, we drive to the shop! Tap the cart button or the front door.',
   'ob.done': 'Have fun with Gooby!',
+
+  // --- V2/G16: 2.0 per-feature modules (§E0.1-1 — after ALL v1 entries) ---
+  ...V2_CORE_EN,
+  ...V2_GARDEN_EN,
+  ...V2_HEALTH_EN,
+  ...V2_CITY_EN,
+  ...V2_SHOP_EN,
+  ...V2_PROGRESS_EN,
+  ...V2_GAMES_D_EN,
+  ...V2_GAMES_E_EN,
+  ...V2_AMBIENCE_EN,
+  ...V2_AUDIO_EN,
+  ...V2_POLISH_EN,
 };
 
 /** @type {Record<string, string>} */
@@ -948,6 +979,19 @@ export const DE = {
   'ob.shop.title': 'Noch etwas…',
   'ob.shop.body': 'Wenn der Kühlschrank leer ist, fahren wir einkaufen! Tippe auf den Wagen-Button oder die Haustür.',
   'ob.done': 'Viel Spaß mit Gooby!',
+
+  // --- V2/G16: 2.0 per-feature modules (§E0.1-1 — after ALL v1 entries) ---
+  ...V2_CORE_DE,
+  ...V2_GARDEN_DE,
+  ...V2_HEALTH_DE,
+  ...V2_CITY_DE,
+  ...V2_SHOP_DE,
+  ...V2_PROGRESS_DE,
+  ...V2_GAMES_D_DE,
+  ...V2_GAMES_E_DE,
+  ...V2_AMBIENCE_DE,
+  ...V2_AUDIO_DE,
+  ...V2_POLISH_DE,
 };
 
 const DICTS = { en: EN, de: DE };

@@ -14,6 +14,18 @@
 //     'decor'      ≥ N non-default items placed     (store 'decorChanged', G11)
 //     'streak'     daily-bonus streak ≥ N           (§C8.2 dailyBonus claim)
 //     'play12'     N distinct games played ≥ 1      (minigames.plays map, §E3)
+//
+//   V2/G16 specials (PLAN2 §C5.3 — evaluation lands with G23's engine
+//   extension in wave 2; the v1 engine safely treats unknown specials as
+//   progress 0, so these defs are inert until then):
+//     'allCrops'   all 8 crops harvested ≥ 1        (collections veggies set)
+//     'stickers'   total collection entries ≥ N     (collections.entries)
+//     'setsClaimed' claimed sticker sets ≥ N        (collections.claimedSets)
+//     'neverSick'  level ≥ 10 with 0 sick states ever (health history)
+//     'weightMax'  weight.value ≥ N reached         (store 'weightChanged')
+//     'weightMin'  weight.value ≤ N reached         (store 'weightChanged')
+//     'play21'     N distinct games played ≥ 1 over all 21 ids
+//     'holeInOne'  miniGolf meta.holeInOnes ≥ N     (§B3 onEnd meta)
 
 /**
  * @typedef {Object} AchievementDef
@@ -26,7 +38,7 @@
  * @property {number} target    threshold the progress value must reach
  */
 
-/** @type {AchievementDef[]} all 16, in §C8.3 table order. */
+/** @type {AchievementDef[]} all 33: 16 v1 (§C8.3) + 17 v2 (PLAN2 §C5.3), in table order. */
 export const ACHIEVEMENTS = Object.freeze(
   [
     { id: 'firstFeed', counter: 'feeds', target: 1, coins: 10 },
@@ -48,6 +60,25 @@ export const ACHIEVEMENTS = Object.freeze(
     { id: 'decorator', special: 'decor', target: 10, coins: 80 },
     { id: 'streak7', special: 'streak', target: 7, coins: 150 },
     { id: 'tickle100', counter: 'tickles', target: 100, coins: 60 },
+    // V2/G16: +17 achievements (PLAN2 §C5.3 verbatim — counters land in the
+    // §B2 save-schema extension; specials in G23's engine, wave 2).
+    { id: 'firstHarvest', counter: 'harvests', target: 1, coins: 15 },
+    { id: 'harvest50', counter: 'harvests', target: 50, coins: 100 },
+    { id: 'allCrops', special: 'allCrops', target: 8, coins: 120 },
+    { id: 'firstQuest', counter: 'questsDone', target: 1, coins: 10 },
+    { id: 'quest50', counter: 'questsDone', target: 50, coins: 120 },
+    { id: 'firstSticker', special: 'stickers', target: 1, coins: 10 },
+    { id: 'setComplete', special: 'setsClaimed', target: 1, coins: 60 },
+    { id: 'albumFull', special: 'setsClaimed', target: 4, coins: 300 },
+    { id: 'firstCure', counter: 'cures', target: 1, coins: 20 },
+    { id: 'vetVisit', counter: 'vetTrips', target: 1, coins: 20 },
+    { id: 'neverSick', special: 'neverSick', target: 1, coins: 150 },
+    { id: 'chonkZone', special: 'weightMax', target: 86, coins: 40 },
+    { id: 'sleekMode', special: 'weightMin', target: 25, coins: 40 },
+    { id: 'play21', special: 'play21', target: 21, coins: 250 },
+    { id: 'delivery10', counter: 'deliveries', target: 10, coins: 80 },
+    { id: 'holeInOne', special: 'holeInOne', target: 1, coins: 50 },
+    { id: 'shutterbug', counter: 'photosTaken', target: 10, coins: 60 },
   ].map((a) => Object.freeze({ ...a, nameKey: `ach.${a.id}.name`, descKey: `ach.${a.id}.desc` }))
 );
 

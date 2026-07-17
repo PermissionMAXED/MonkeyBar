@@ -4,7 +4,7 @@
 // a fresh state — load() never crashes. Pure module: no three.js/DOM imports
 // (localStorage access is guarded so node:test can run it headlessly).
 
-import { SAVE, ECONOMY } from '../data/constants.js';
+import { SAVE, ECONOMY, LEVELING } from '../data/constants.js'; // V2/G16: + LEVELING (§B2.4)
 import { now } from './clock.js';
 
 // --- storage backend (swappable for tests / Capacitor Preferences later) ---
@@ -73,8 +73,42 @@ initPreferencesMirror();
 
 // --- schema ---
 
+// --- V2/G16: schema v2 slice factories (PLAN2 §B2, exact defaults) ---------
+// Factories (not shared literals) so defaultState(), migrations[1] and
+// validate() each get fresh, un-aliased objects.
+
+/** One empty garden plot (§B2). @returns {object} */
+function defaultPlot() {
+  return { crop: null, plantedAt: 0, progressMin: 0, wateredUntil: 0, waterings: 0, fertilized: false };
+}
+
+/** The v2 top-level slices at their exact §B2 defaults. @returns {object} */
+function v2SliceDefaults() {
+  return {
+    garden: {
+      plotsOwned: 4, // plots 5/6 purchasable (§B6 gating)
+      plots: Array.from({ length: 6 }, defaultPlot), // ALWAYS length 6
+      lastTickAt: 0, // growth accrual bookkeeping (offline-aware)
+    },
+    health: { state: 'healthy', junkScore: 0, neglectMin: 0, recoverMin: 0, since: 0 },
+    weight: { value: 50 }, // 5–95 clamp (§C4)
+    quests: { day: '', active: [], rerolledDay: '', completedTotal: 0 },
+    collections: { entries: {}, claimedSets: {} },
+    skins: { owned: ['cream'], equipped: 'cream' },
+    items: { medicine: 0, fertilizer: 0 }, // non-food consumables (NOT in `inventory`)
+    profile: { playtimeMin: 0, coinsEarned: 0, coinsSpent: 0, distanceM: 0, photos: 0 },
+  };
+}
+
+/** §B2 additions to achievements.counters (v1 keys unchanged). */
+const V2_COUNTER_DEFAULTS = Object.freeze({
+  harvests: 0, plantings: 0, waterings: 0, sells: 0, cures: 0, vetTrips: 0,
+  deliveries: 0, questsDone: 0, photosTaken: 0, nightPlays: 0, medsGiven: 0, balls: 0,
+});
+// --- end V2/G16 slice factories ---
+
 /**
- * Fresh save-state per schema v1 (§E3).
+ * Fresh save-state per schema v2 (§E3 + PLAN2 §B2).
  * @returns {object}
  */
 export function defaultState() {
@@ -96,12 +130,18 @@ export function defaultState() {
     minigames: { best: {}, plays: {}, lastPlayDay: {} },
     achievements: {
       unlocked: {},
-      counters: { feeds: 0, washes: 0, sleeps: 0, trips: 0, tickles: 0, petsToday: 0, petsDay: '' },
+      counters: {
+        feeds: 0, washes: 0, sleeps: 0, trips: 0, tickles: 0, petsToday: 0, petsDay: '',
+        ...V2_COUNTER_DEFAULTS, // V2/G16 (§B2)
+      },
     },
     daily: { lastClaimDay: '', streak: 0 },
     quickDelivery: false,
     settings: { lang: 'auto', sfx: true, music: true, haptics: true, notifications: 'unasked' },
-    onboarding: { done: false, step: 0 },
+    // V2/G16: whatsNew2Seen true for FRESH saves — only migrated v1 veterans
+    // get false and see the one-time "What's new" panel (§E0.1-6; G30 builds it).
+    onboarding: { done: false, step: 0, whatsNew2Seen: true },
+    ...v2SliceDefaults(), // V2/G16 (§B2)
   };
 }
 
@@ -113,6 +153,39 @@ export function defaultState() {
 export const migrations = [
   // v0 → v1: pre-versioned saves get defaults merged in.
   (state) => ({ ...state, v: 1 }),
+  // V2/G16 — v1 → v2 (PLAN2 §B2, exact behavior):
+  //  1. spread the new top-level slices ONLY when absent ({...defaults,
+  //     ...state} ordering — v1 saves never contain them),
+  //  2. never rewrite any existing key (every v1 field passes through
+  //     verbatim; mergeDefaults in validate() fills nested gaps),
+  //  3. set v = 2,
+  //  plus the §B2 explicit slice extensions: the new achievements counters
+  //  (defaults first — existing v1 counter values win) and
+  //  onboarding.whatsNew2Seen = false so v1 veterans see the one-time
+  //  "What's new" panel (§E0.1-6).
+  //  NOTE (§B2 deviation, deliberate): furniture.placed does NOT gain a
+  //  'garden' key — v1's placed map is FLAT ('roomId:slotId' → itemId, see
+  //  systems/furniturePlacement.js §E3 header), so garden decor slots need no
+  //  schema change ('garden:<slot>' keys just appear); an object-valued
+  //  'garden' key would corrupt that invariant (placedNonDefaultCount etc.).
+  (state) => {
+    // Corruption guard: spreading a wrong-typed container (e.g. counters:
+    // "many") would silently object-ify it and defeat the F2 recovery
+    // contract — leave such payloads untouched so validate()'s mergeDefaults
+    // still throws and load() backs up + recovers.
+    const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
+    const out = { ...v2SliceDefaults(), ...state, v: 2 };
+    if (isObj(out.achievements) && (out.achievements.counters == null || isObj(out.achievements.counters))) {
+      out.achievements = {
+        ...out.achievements,
+        counters: { ...V2_COUNTER_DEFAULTS, ...out.achievements.counters },
+      };
+    }
+    if (out.onboarding == null || isObj(out.onboarding)) {
+      out.onboarding = { ...out.onboarding, whatsNew2Seen: false };
+    }
+    return out;
+  },
 ];
 
 /**
@@ -161,6 +234,9 @@ function mergeDefaults(defaults, src, path = 'save') {
 
 /**
  * Validate/clamp a loaded state: numeric coercion + stat range clamps.
+ * V2/G16 (§B2.4): level clamps to LEVELING.MAX_LEVEL (40); weight clamps to
+ * [5, 95]; garden.plots is normalized to exactly 6 entries; health.state is
+ * coerced to 'healthy' when not one of the 3 valid strings.
  * @param {object} state
  * @returns {object}
  */
@@ -172,7 +248,18 @@ function validate(state) {
   }
   s.coins = Math.max(0, Math.floor(Number(s.coins) || 0));
   s.xp = Math.max(0, Number(s.xp) || 0);
-  s.level = Math.min(30, Math.max(1, Math.floor(Number(s.level) || 1)));
+  s.level = Math.min(LEVELING.MAX_LEVEL, Math.max(1, Math.floor(Number(s.level) || 1)));
+  // --- V2/G16: v2 slice validation (§B2.4) ---
+  const w = Number(s.weight.value);
+  s.weight.value = Number.isFinite(w) ? Math.min(95, Math.max(5, w)) : 50;
+  if (!['healthy', 'queasy', 'sick'].includes(s.health.state)) s.health.state = 'healthy';
+  const plots = Array.isArray(s.garden.plots) ? s.garden.plots : [];
+  s.garden.plots = Array.from({ length: 6 }, (_, i) =>
+    plots[i] != null && typeof plots[i] === 'object' && !Array.isArray(plots[i])
+      ? { ...defaultPlot(), ...plots[i] }
+      : defaultPlot()
+  );
+  // --- end V2/G16 ---
   return s;
 }
 

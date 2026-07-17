@@ -1,5 +1,7 @@
-// Minigame metadata integrity (§C6, binding): 12 ids, coin table clamps,
+// Minigame metadata integrity (§C6, binding): 12 v1 ids, coin table clamps,
 // unlock levels, bilingual titles, payout math incl. daily ×2.
+// V2/G16 (PLAN2 §C1.1/§B6): +9 2.0 games — 21 shipping ids, 9 new coin rows,
+// UNLOCKS.MINIGAMES levels (deep §C1.1 row checks live in dataV2.test.js).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -10,7 +12,7 @@ import {
   getMinigame,
   computeCoins,
 } from '../src/data/minigames.js';
-import { COIN_TABLE, UNLOCK_LEVELS, MINIGAME } from '../src/data/constants.js';
+import { COIN_TABLE, UNLOCK_LEVELS, UNLOCKS, MINIGAME } from '../src/data/constants.js';
 import { EN, DE } from '../src/data/strings.js';
 
 // §C6 coin table, copied verbatim from PLAN.md as an independent check.
@@ -44,9 +46,25 @@ const EXPECTED_UNLOCKS = {
   trampoline: 10,
 };
 
-test('exactly 12 shipping game ids (§C6)', () => {
-  assert.equal(MINIGAME_IDS.length, 12);
-  assert.deepEqual([...MINIGAME_IDS].sort(), Object.keys(EXPECTED_UNLOCKS).sort());
+// V2/G16: the 9 new §B6 games with their unlock levels (verbatim).
+const EXPECTED_V2_UNLOCKS = {
+  goobySays: 2,
+  gardenRush: 4,
+  burgerBuild: 5,
+  veggieChop: 6,
+  deliveryRush: 7,
+  miniGolf: 9,
+  goalieGooby: 11,
+  starHopper: 12,
+  pipeFlow: 14,
+};
+
+test('exactly 21 shipping game ids (§C6 + V2 §C1.1)', () => {
+  assert.equal(MINIGAME_IDS.length, 21);
+  assert.deepEqual(
+    [...MINIGAME_IDS].sort(),
+    [...Object.keys(EXPECTED_UNLOCKS), ...Object.keys(EXPECTED_V2_UNLOCKS)].sort()
+  );
 });
 
 test('coin table rows match §C6 verbatim', () => {
@@ -77,18 +95,27 @@ test('unlock levels match §C6.3 verbatim', () => {
   }
 });
 
-test('energy costs: 8 per play, 6 for the drive (§C6)', () => {
-  for (const m of MINIGAMES) {
-    assert.equal(m.energyCost, m.id === 'cityDrive' ? 6 : 8, `energyCost for ${m.id}`);
+test('V2/G16: 2.0 unlock levels match §B6 verbatim (UNLOCKS.MINIGAMES)', () => {
+  assert.deepEqual({ ...UNLOCKS.MINIGAMES }, EXPECTED_V2_UNLOCKS);
+  for (const [id, level] of Object.entries(EXPECTED_V2_UNLOCKS)) {
+    assert.equal(MINIGAMES_BY_ID[id].minLevel, level, `minLevel for ${id}`);
   }
 });
 
-test('_smoke is dev-only and hidden from the menu; 13 total entries', () => {
-  assert.equal(MINIGAMES.length, 13);
+test('energy costs: 8 per play, 6 for the drives (§C6 + V2 §C1.1)', () => {
+  for (const m of MINIGAMES) {
+    // V2/G16: deliveryRush reuses the city-drive energy cost (§C1.1 row).
+    const drive = m.id === 'cityDrive' || m.id === 'deliveryRush';
+    assert.equal(m.energyCost, drive ? 6 : 8, `energyCost for ${m.id}`);
+  }
+});
+
+test('_smoke is dev-only and hidden from the menu; 22 total entries', () => {
+  assert.equal(MINIGAMES.length, 22); // V2/G16: 21 shipping + _smoke
   const smoke = getMinigame('_smoke');
   assert.ok(smoke, '_smoke registered');
   assert.equal(smoke.dev, true);
-  assert.ok(MINIGAMES.filter((m) => !m.dev).length === 12);
+  assert.ok(MINIGAMES.filter((m) => !m.dev).length === 21);
 });
 
 test('every title key exists in EN and DE dictionaries (bilingual §A)', () => {

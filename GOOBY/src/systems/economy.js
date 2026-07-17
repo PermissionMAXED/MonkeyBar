@@ -9,14 +9,22 @@
 // Pure module (§B): no three.js/DOM imports — node:test runs it headlessly.
 // The store is injected per call (first parameter) so tests can run many
 // isolated stores; all numbers come from data/constants.js.
+//
+// V2/G16 (PLAN2 §B3, all additive): every award/spend also increments
+// profile.coinsEarned/coinsSpent; new APIs sellHarvest / buySeed / buyItem /
+// useMedicine / payVet / buySkin / buyPlot (garden §C2, care §C3.5, vet
+// §C9.2, skins §C8.5, plots §B6). ALL coin movement still flows exclusively
+// through this module.
 
-import { ECONOMY, MINIGAME } from '../data/constants.js';
+import { ECONOMY, MINIGAME, ITEM_PRICES, UNLOCKS, VET } from '../data/constants.js'; // V2/G16: + v2 tables
 import { getMinigame, computeCoins } from '../data/minigames.js';
 import { getFood } from '../data/foods.js';
+import { getCrop } from '../data/crops.js'; // V2/G16 (§C2.3)
+import { getSkin } from '../data/skins.js'; // V2/G16 (§C8.5)
 import { applyXp, minigameXp } from './leveling.js';
 import { clampStat } from './stats.js';
-import { add as invAdd } from './inventory.js';
-import { localDay } from '../core/clock.js';
+import { add as invAdd, has as invHas, remove as invRemove } from './inventory.js'; // V2/G16: + has/remove
+import { localDay, now } from '../core/clock.js'; // V2/G16: + now (health calls)
 
 /**
  * @typedef {import('../core/store.js').createStore} _store
@@ -26,6 +34,19 @@ import { localDay } from '../core/clock.js';
 /** Normalize a coin amount: integer ≥ 0 (fractions round AGAINST the player). */
 const normAward = (n) => Math.max(0, Math.floor(Number(n) || 0));
 const normCost = (n) => Math.max(0, Math.ceil(Number(n) || 0));
+
+// --- V2/G16: optional health engine (PLAN2 §B3/§C3.5) -----------------------
+// systems/health.js is G17's pure state machine (same wave). Economy only
+// consumes it when the module exists at runtime — lazy dynamic import, so
+// neither node:test nor the bundler hard-require it. // V2/G20 wires fully
+// (tick/notification/UI effects); until then useMedicine/payVet already apply
+// the §C3.5 health-slice effects through these pure calls when available.
+let healthApi = null;
+/** Resolves once the optional health module has been probed (tests await it). */
+export const healthReady = import('./health.js').then(
+  (mod) => { healthApi = mod; },
+  () => { healthApi = null; }
+);
 
 /**
  * Can the player pay `amount` coins right now?
@@ -49,6 +70,7 @@ export function award(store, amount, reason = '') {
   if (n === 0) return 0;
   store.update((state) => {
     state.coins += n;
+    state.profile.coinsEarned += n; // V2/G16: lifetime total (§B2/§C12.1)
   });
   if (reason) console.debug(`[economy] +${n}c (${reason})`);
   return n;
@@ -67,6 +89,7 @@ export function spend(store, amount, reason = '') {
   if (!canAfford(store, n)) return false;
   store.update((state) => {
     state.coins -= n;
+    state.profile.coinsSpent += n; // V2/G16: lifetime total (§B2/§C12.1)
   });
   if (reason) console.debug(`[economy] -${n}c (${reason})`);
   return true;
@@ -119,6 +142,7 @@ export function awardMinigame(store, id, score, opts = {}) {
     state.xp = progress.xp;
     state.level = progress.level;
     state.coins += progress.coinsAwarded;
+    state.profile.coinsEarned += coins + progress.coinsAwarded; // V2/G16 (§B2)
   });
   return {
     gameId: id,
@@ -197,4 +221,186 @@ export function buyQuickDelivery(store) {
     state.quickDelivery = true;
   });
   return { ok: true };
+}
+
+// ============================================================================
+// V2/G16: 2.0 economy APIs (PLAN2 §B3 — all additive; every one mirrors the
+// v1 buyFood contract: pure store-in, {ok:boolean, reason?, total?} out,
+// atomic, coins only ever move through award/spend above).
+// ============================================================================
+
+/**
+ * V2/G16: canonical items-map key for seeds ('seed:<cropId>' — colon-flat like
+ * furniture.placed's 'room:slot' keys, because store.get() paths split on
+ * dots). Seeds live in the `items` slice (§B2: non-food consumables, NOT in
+ * `inventory` — the fridge tray lists every inventory key as food).
+ * @param {string} cropId
+ * @returns {string}
+ */
+export const seedKey = (cropId) => `seed:${cropId}`;
+
+/**
+ * Sell harvested crop food from the inventory at the §C2.3 sell price
+ * (compost-bin sell sheet, §C2.2). Only crop foods are sellable (crop id ==
+ * food id); sell price < shop buy price per crop, so there is no buy-sell
+ * arbitrage. Bumps `achievements.counters.sells` by qty (quest event 'sell'
+ * — G23 wires).
+ * @param {Store} store
+ * @param {string} foodId crop-food id ('radish', …)
+ * @param {number} [qty]
+ * @returns {{ok: boolean, reason?: 'unknown'|'qty'|'none', total?: number}}
+ */
+export function sellHarvest(store, foodId, qty = 1) {
+  const crop = getCrop(foodId);
+  if (!crop) return { ok: false, reason: 'unknown' };
+  const n = Math.floor(Number(qty) || 0);
+  if (n < 1) return { ok: false, reason: 'qty' };
+  if (!invHas(store.get('inventory'), foodId, n)) return { ok: false, reason: 'none' };
+  store.update((state) => {
+    state.inventory = invRemove(state.inventory, foodId, n);
+    state.achievements.counters.sells += n;
+  });
+  const total = award(store, crop.sellPrice * n, 'sellHarvest');
+  return { ok: true, total };
+}
+
+/**
+ * Buy crop seeds (§C2.3 seed prices; seed-picker buy row §C2.2). Seeds land
+ * in `items[seedKey(cropId)]`; planting consumes one from there (G19 wires —
+ * systems/garden.js stays slice-pure). Level-gated per UNLOCKS.CROPS.
+ * @param {Store} store
+ * @param {string} cropId
+ * @param {number} [qty]
+ * @returns {{ok: boolean, reason?: 'unknown'|'qty'|'level'|'coins', total?: number}}
+ */
+export function buySeed(store, cropId, qty = 1) {
+  const crop = getCrop(cropId);
+  if (!crop) return { ok: false, reason: 'unknown' };
+  const n = Math.floor(Number(qty) || 0);
+  if (n < 1) return { ok: false, reason: 'qty' };
+  if ((store.get('level') ?? 1) < crop.unlock) return { ok: false, reason: 'level' };
+  const total = crop.seedPrice * n;
+  if (!spend(store, total, 'seed')) return { ok: false, reason: 'coins' };
+  store.update((state) => {
+    const key = seedKey(cropId);
+    state.items[key] = (state.items[key] ?? 0) + n;
+  });
+  return { ok: true, total };
+}
+
+/**
+ * Buy a non-food consumable (§C3.5 medicine 40c / §C2.2 fertilizer 25c —
+ * the shop Care row; quick-delivery eligible per §C3.5 is a UI concern, the
+ * price here is always the catalog price). Lands in the `items` slice.
+ * @param {Store} store
+ * @param {'medicine'|'fertilizer'} itemId
+ * @param {number} [qty]
+ * @returns {{ok: boolean, reason?: 'unknown'|'qty'|'coins', total?: number}}
+ */
+export function buyItem(store, itemId, qty = 1) {
+  const price = ITEM_PRICES[itemId];
+  if (price == null) return { ok: false, reason: 'unknown' };
+  const n = Math.floor(Number(qty) || 0);
+  if (n < 1) return { ok: false, reason: 'qty' };
+  const total = price * n;
+  if (!spend(store, total, itemId)) return { ok: false, reason: 'coins' };
+  store.update((state) => {
+    state.items[itemId] = (state.items[itemId] ?? 0) + n;
+  });
+  return { ok: true, total };
+}
+
+/**
+ * Use one medicine (§C3.5): sick → queasy, queasy → healthy; refuses while
+ * healthy (nothing consumed). Health-slice transition goes through
+ * systems/health.js when present (see healthReady above; the healthy check
+ * reads the save slice directly, so the gate holds either way). Bumps
+ * `medsGiven`, plus `cures` when the dose lands (§C5.3 firstCure).
+ * @param {Store} store
+ * @returns {{ok: boolean, reason?: 'none'|'healthy'}}
+ */
+export function useMedicine(store) {
+  if ((store.get('items.medicine') ?? 0) < 1) return { ok: false, reason: 'none' };
+  if (store.get('health.state') === 'healthy') return { ok: false, reason: 'healthy' };
+  const cured = healthApi ? healthApi.useMedicine(store.get('health'), now()).h : null;
+  store.update((state) => {
+    state.items.medicine -= 1;
+    if (cured) state.health = cured;
+    state.achievements.counters.medsGiven += 1;
+    state.achievements.counters.cures += 1;
+  });
+  return { ok: true };
+}
+
+/**
+ * Pay the vet (§C3.5/§C9.2). 'cure' — 120c, only while queasy/sick: full cure
+ * (junk/neglect reset via health.vetCure when the module is present) plus
+ * +10 all stats (clamped); bumps `cures`. 'checkup' — 30c anytime: resets
+ * neglectMin (health.vetCheckup). The `vetTrips`/`trips` counters belong to
+ * the trip arrival flow (§C9.2 — G21 wires), NOT to the payment.
+ * @param {Store} store
+ * @param {'cure'|'checkup'} kind
+ * @returns {{ok: boolean, reason?: 'unknown'|'healthy'|'coins', total?: number}}
+ */
+export function payVet(store, kind) {
+  if (kind !== 'cure' && kind !== 'checkup') return { ok: false, reason: 'unknown' };
+  if (kind === 'cure' && store.get('health.state') === 'healthy') {
+    return { ok: false, reason: 'healthy' };
+  }
+  const price = kind === 'cure' ? VET.CURE_PRICE : VET.CHECKUP_PRICE;
+  if (!spend(store, price, `vet:${kind}`)) return { ok: false, reason: 'coins' };
+  store.update((state) => {
+    if (kind === 'cure') {
+      if (healthApi) state.health = healthApi.vetCure(state.health, now());
+      for (const k of Object.keys(state.stats)) {
+        state.stats[k] = clampStat(state.stats[k] + VET.CURE_STAT_BONUS);
+      }
+      state.achievements.counters.cures += 1;
+    } else if (healthApi) {
+      state.health = healthApi.vetCheckup(state.health);
+    }
+  });
+  return { ok: true, total: price };
+}
+
+/**
+ * Buy a fur-color skin (§C8.5; shop Skins tab from UNLOCKS.SKINS = L5).
+ * New skins go straight on (same ruling as v1 outfit purchases).
+ * @param {Store} store
+ * @param {string} id skin id
+ * @returns {{ok: boolean, reason?: 'unknown'|'owned'|'level'|'coins', total?: number}}
+ */
+export function buySkin(store, id) {
+  const skin = getSkin(id);
+  if (!skin) return { ok: false, reason: 'unknown' };
+  if ((store.get('skins.owned') ?? []).includes(id)) return { ok: false, reason: 'owned' };
+  if ((store.get('level') ?? 1) < UNLOCKS.SKINS) return { ok: false, reason: 'level' };
+  if (!spend(store, skin.price, 'skin')) return { ok: false, reason: 'coins' };
+  store.update((state) => {
+    state.skins.owned.push(id);
+    state.skins.equipped = id;
+  });
+  return { ok: true, total: skin.price };
+}
+
+/**
+ * Buy a garden plot (§B6: index 4 at L10/300c, index 5 at L16/600c; plots
+ * unlock strictly in order). Success bumps `garden.plotsOwned` to index + 1.
+ * @param {Store} store
+ * @param {number} index 0-based plot index (only 4 and 5 are purchasable)
+ * @returns {{ok: boolean, reason?: 'unknown'|'owned'|'order'|'level'|'coins', total?: number}}
+ */
+export function buyPlot(store, index) {
+  const idx = Math.floor(Number(index));
+  const owned = store.get('garden.plotsOwned') ?? 4;
+  if (idx >= 0 && idx < owned) return { ok: false, reason: 'owned' };
+  const def = UNLOCKS.GARDEN_PLOTS[idx];
+  if (!def) return { ok: false, reason: 'unknown' };
+  if (idx > owned) return { ok: false, reason: 'order' }; // plot 5 before 6
+  if ((store.get('level') ?? 1) < def.level) return { ok: false, reason: 'level' };
+  if (!spend(store, def.price, 'plot')) return { ok: false, reason: 'coins' };
+  store.update((state) => {
+    state.garden.plotsOwned = idx + 1;
+  });
+  return { ok: true, total: def.price };
 }

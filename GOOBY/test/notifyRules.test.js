@@ -223,7 +223,11 @@ test('all 5 triggers live: cap holds, one per id, sorted by time', () => {
     }
   );
   const items = computeSchedule(s, now);
-  assert.equal(items.length, NOTIFY.MAX_SCHEDULED);
+  // V2/G16: MAX_SCHEDULED is 7 in 2.0 (§B3 — ids harvest:6/sick:7), but only
+  // the 5 v1 triggers exist until G20 wires the new rules; 5 < cap holds.
+  assert.equal(items.length, 5);
+  assert.ok(items.length <= NOTIFY.MAX_SCHEDULED, 'cap holds');
+  assert.equal(NOTIFY.MAX_SCHEDULED, 7);
   assert.equal(new Set(items.map((n) => n.id)).size, 5);
   for (let i = 1; i < items.length; i++) assert.ok(items[i].at >= items[i - 1].at, 'sorted');
 });

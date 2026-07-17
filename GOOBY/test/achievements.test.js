@@ -28,6 +28,11 @@ const SPEC_COINS = {
   firstSleep: 15, sleep20: 100, firstDrive: 20, drive25: 120,
   noCrash: 40, play12: 150, coins1000: 50, level10: 100,
   fullOutfit: 60, decorator: 80, streak7: 150, tickle100: 60,
+  // V2/G16: +17 2.0 rewards (PLAN2 §C5.3 verbatim; deep coverage in dataV2.test.js)
+  firstHarvest: 15, harvest50: 100, allCrops: 120, firstQuest: 10, quest50: 120,
+  firstSticker: 10, setComplete: 60, albumFull: 300, firstCure: 20, vetVisit: 20,
+  neverSick: 150, chonkZone: 40, sleekMode: 40, play21: 250, delivery10: 80,
+  holeInOne: 50, shutterbug: 60,
 };
 
 function freshState() {
@@ -37,7 +42,7 @@ function freshState() {
 // ------------------------------------------------------------------ catalog
 
 test('catalog has all 16 §C8.3 achievements with verbatim coin rewards', () => {
-  assert.equal(ACHIEVEMENTS.length, 16);
+  assert.equal(ACHIEVEMENTS.length, 33); // V2/G16: 16 v1 + 17 §C5.3
   assert.deepEqual(new Set(ACHIEVEMENTS.map((a) => a.id)), new Set(Object.keys(SPEC_COINS)));
   for (const [id, coins] of Object.entries(SPEC_COINS)) {
     assert.equal(ACHIEVEMENTS_BY_ID[id].coins, coins, `${id} reward (§C8.3 binding)`);
@@ -221,7 +226,9 @@ test('streak7: daily streak ≥ 7', () => {
 test('play12: each of the 12 games played ≥ 1 (plays map)', () => {
   const def = ACHIEVEMENTS_BY_ID.play12;
   const state = freshState();
-  assert.equal(MINIGAME_IDS.length, 12);
+  // V2/G16: the catalog now lists 21 games (§C1.1) — play12 needs ANY 12
+  // distinct ones played; play21 (all 21) is the 2.0 tier (§C5.3, G23 wires).
+  assert.equal(MINIGAME_IDS.length, 21);
   for (const id of MINIGAME_IDS.slice(0, 11)) state.minigames.plays[id] = 2;
   state.minigames.plays._smoke = 99; // dev game never counts
   assert.equal(isSatisfied(def, state), false);
@@ -273,7 +280,10 @@ test('every one of the 16 achievements is unlockable through applyUnlocks', () =
   for (const id of MINIGAME_IDS) state.minigames.plays[id] = 1;
   const r = applyUnlocks(state, 7);
   assert.equal(r.unlocked.length, 16, 'all 16 unlock');
-  const totalRewards = Object.values(SPEC_COINS).reduce((a, b) => a + b, 0);
+  // V2/G16: SPEC_COINS now lists all 33 — sum only the 16 v1 unlocks here
+  // (the 17 §C5.3 counters/specials sit at 0 until G23 wires them, wave 2).
+  const totalRewards = r.unlocked.reduce((sum, d) => sum + SPEC_COINS[d.id], 0);
+  assert.equal(totalRewards, 1145, 'v1 §C8.3 rewards sum');
   assert.equal(r.state.coins, 1000 + totalRewards);
 });
 

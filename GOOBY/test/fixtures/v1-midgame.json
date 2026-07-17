@@ -1,0 +1,125 @@
+{
+  "v": 1,
+  "createdAt": 1780000000000,
+  "lastTickAt": 1784281282655,
+  "stats": {
+    "hunger": 62.5,
+    "energy": 71,
+    "hygiene": 88.25,
+    "fun": 54
+  },
+  "sleep": {
+    "sleeping": false,
+    "startedAt": 1784200000000,
+    "wakeAt": 1784227000000
+  },
+  "grumpyUntil": 0,
+  "coins": 5000,
+  "xp": 340,
+  "level": 12,
+  "inventory": {
+    "carrot": 5,
+    "apple": 2,
+    "burger": 1,
+    "ice-cream": 2,
+    "salad": 1
+  },
+  "furniture": {
+    "owned": ["loungeDesignSofa", "televisionModern", "rugRound", "bookcaseClosedWide", "kitchenBar"],
+    "placed": {
+      "living:sofa": "loungeDesignSofa",
+      "living:tv": "televisionModern",
+      "living:rug": "rugRound",
+      "living:bookcase": "bookcaseClosedWide",
+      "kitchen:table": "kitchenBar"
+    }
+  },
+  "decor": {
+    "wallpaper": {
+      "living": "mint",
+      "bedroom": "sky"
+    },
+    "floor": {
+      "living": "tile"
+    }
+  },
+  "outfits": {
+    "owned": ["partyHat", "beanie", "cap", "roundGlasses", "sunglasses", "scarfRed", "bowtie"],
+    "equipped": {
+      "hat": "cap",
+      "glasses": "sunglasses",
+      "neck": "scarfRed"
+    }
+  },
+  "minigames": {
+    "best": {
+      "carrotCatch": 74,
+      "bunnyHop": 41,
+      "cityDrive": 33,
+      "carrotGuard": 66,
+      "memoryMatch": 39,
+      "basketBounce": 58,
+      "pancakeTower": 44,
+      "runner": 391,
+      "bubblePop": 87,
+      "fishingPond": 60,
+      "danceParty": 152,
+      "trampoline": 95
+    },
+    "plays": {
+      "carrotCatch": 31,
+      "bunnyHop": 18,
+      "cityDrive": 12,
+      "carrotGuard": 9,
+      "memoryMatch": 7,
+      "basketBounce": 11,
+      "pancakeTower": 6,
+      "runner": 14,
+      "bubblePop": 8,
+      "fishingPond": 10,
+      "danceParty": 5,
+      "trampoline": 4
+    },
+    "lastPlayDay": {
+      "carrotCatch": "2026-07-17",
+      "runner": "2026-07-17",
+      "fishingPond": "2026-07-16"
+    }
+  },
+  "achievements": {
+    "unlocked": {
+      "firstFeed": 1780000100000,
+      "firstWash": 1780000200000,
+      "firstSleep": 1780086400000,
+      "firstDrive": 1780090000000,
+      "level10": 1783000000000,
+      "coins1000": 1782000000000
+    },
+    "counters": {
+      "feeds": 40,
+      "washes": 22,
+      "sleeps": 15,
+      "trips": 12,
+      "tickles": 63,
+      "petsToday": 3,
+      "petsDay": "2026-07-17",
+      "cleanTrips": 2
+    }
+  },
+  "daily": {
+    "lastClaimDay": "2026-07-17",
+    "streak": 6
+  },
+  "quickDelivery": true,
+  "settings": {
+    "lang": "de",
+    "sfx": true,
+    "music": false,
+    "haptics": true,
+    "notifications": "granted"
+  },
+  "onboarding": {
+    "done": true,
+    "step": 4
+  }
+}

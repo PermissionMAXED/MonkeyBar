@@ -11,6 +11,9 @@ import { FOOD_TABLE } from './constants.js';
  * @property {number} price        shop price in coins
  * @property {{hunger:number, fun:number, energy:number, hygiene:number}} deltas stat changes when eaten
  * @property {boolean} favorite    Gooby's favorite → extra happy squeak (§C5.1 carrot)
+ * @property {boolean} junk        V2/G16: sugary/greasy (PLAN2 §C7) — feeds the
+ *   health junkScore + weight gain (health.onEat/weight.onEat, §B5) and the
+ *   'treats' sticker set (§C6); 🍬 badge in the shop/tray.
  */
 
 /** @type {FoodItem[]} ordered by price ascending (catalog/tray order). */
@@ -28,6 +31,7 @@ export const FOODS = Object.freeze(
         hygiene: row.hygiene ?? 0,
       }),
       favorite: row.favorite === true,
+      junk: row.junk === true, // V2/G16 (§B3/§C7)
     })
   )
 );

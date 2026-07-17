@@ -1,0 +1,91 @@
+{
+  "v": 1,
+  "createdAt": 1781234567890,
+  "lastTickAt": 1784281282655,
+  "stats": {
+    "hunger": 55,
+    "energy": 60,
+    "hygiene": 70,
+    "fun": 80,
+    "swagger": 9001
+  },
+  "sleep": {
+    "sleeping": false,
+    "startedAt": 0,
+    "wakeAt": 0
+  },
+  "grumpyUntil": 0,
+  "coins": 777,
+  "xp": 120,
+  "level": 5,
+  "inventory": {
+    "carrot": 2,
+    "mysteryMeat": 1
+  },
+  "furniture": {
+    "owned": ["loungeDesignSofa"],
+    "placed": {
+      "living:sofa": "loungeDesignSofa"
+    }
+  },
+  "decor": {
+    "wallpaper": {},
+    "floor": {}
+  },
+  "outfits": {
+    "owned": ["beanie"],
+    "equipped": {
+      "hat": "beanie",
+      "glasses": null,
+      "neck": null
+    }
+  },
+  "minigames": {
+    "best": {
+      "carrotCatch": 21
+    },
+    "plays": {
+      "carrotCatch": 3
+    },
+    "lastPlayDay": {
+      "carrotCatch": "2026-07-15"
+    }
+  },
+  "achievements": {
+    "unlocked": {
+      "firstFeed": 1781234600000
+    },
+    "counters": {
+      "feeds": 6,
+      "washes": 2,
+      "sleeps": 1,
+      "trips": 1,
+      "tickles": 4,
+      "petsToday": 0,
+      "petsDay": "",
+      "highFives": 3
+    }
+  },
+  "daily": {
+    "lastClaimDay": "2026-07-15",
+    "streak": 2
+  },
+  "quickDelivery": false,
+  "settings": {
+    "lang": "auto",
+    "sfx": true,
+    "music": true,
+    "haptics": true,
+    "notifications": "unasked",
+    "experimentalShaders": true
+  },
+  "onboarding": {
+    "done": true,
+    "step": 4
+  },
+  "futureFeature": {
+    "hello": "world",
+    "nested": [1, 2, 3]
+  },
+  "modLoader": "gooby-mods v9"
+}

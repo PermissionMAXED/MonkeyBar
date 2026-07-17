@@ -1,5 +1,7 @@
 // XP curve & level logic vs §C1.5 (binding): L→L+1 = 100 + 50*(L-1),
-// L9→10 = 500, cumulative to L10 = 2700, level-up coins 25*newLevel, max 30.
+// L9→10 = 500, cumulative to L10 = 2700, level-up coins 25*newLevel.
+// V2/G16 (PLAN2 §B3/§B6): cap 30 → LEVELING.MAX_LEVEL 40 (curve unchanged,
+// cumulative L40 = 40 950); unlock queries cover the 9 new §B6 games.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -11,7 +13,7 @@ import {
   isMinigameUnlocked,
   unlockedMinigames,
 } from '../src/systems/leveling.js';
-import { XP, UNLOCK_LEVELS } from '../src/data/constants.js';
+import { XP, UNLOCK_LEVELS, UNLOCKS, LEVELING } from '../src/data/constants.js';
 
 test('XP curve: L1→2 = 100, L2→3 = 150, L9→10 = 500', () => {
   assert.equal(xpToNext(1), 100);
@@ -47,15 +49,25 @@ test('applyXp: multi level-up in one grant', () => {
   assert.equal(r.coinsAwarded, 25 * 2 + 25 * 3);
 });
 
-test('applyXp: capped at max level 30, XP no longer accumulates', () => {
-  const r = applyXp({ xp: 0, level: 30 }, 99999);
-  assert.deepEqual(r, { xp: 0, level: 30, levelsGained: 0, coinsAwarded: 0 });
+test('applyXp: capped at max level 40, XP no longer accumulates (V2 §B3)', () => {
+  assert.equal(LEVELING.MAX_LEVEL, 40);
+  const r = applyXp({ xp: 0, level: 40 }, 99999);
+  assert.deepEqual(r, { xp: 0, level: 40, levelsGained: 0, coinsAwarded: 0 });
   // reaching the cap mid-grant stops there
-  const r2 = applyXp({ xp: 0, level: 29 }, 1e9);
-  assert.equal(r2.level, 30);
+  const r2 = applyXp({ xp: 0, level: 39 }, 1e9);
+  assert.equal(r2.level, 40);
   assert.equal(r2.xp, 0);
   assert.equal(r2.levelsGained, 1);
-  assert.equal(r2.coinsAwarded, 25 * 30);
+  assert.equal(r2.coinsAwarded, 25 * 40);
+  // level 30 (the old cap) keeps leveling in 2.0
+  const r3 = applyXp({ xp: 0, level: 30 }, xpToNext(30));
+  assert.equal(r3.level, 31);
+  assert.equal(r3.coinsAwarded, 25 * 31);
+});
+
+test('V2/G16: cumulative XP to the new L40 cap = 40 950 (§B3, curve unchanged)', () => {
+  assert.equal(cumulativeXpToLevel(40), 40950);
+  assert.equal(cumulativeXpToLevel(30), 23200); // old-cap midpoint sanity
 });
 
 test('minigame XP: 10 + min(15, floor(coins/2)) (§C1.5)', () => {
@@ -74,5 +86,26 @@ test('unlock queries follow §C6.3', () => {
   assert.equal(isMinigameUnlocked('trampoline', 10), true);
   assert.equal(isMinigameUnlocked('nope', 99), false);
   assert.deepEqual(unlockedMinigames(1), ['carrotCatch', 'bunnyHop', 'cityDrive']);
-  assert.equal(unlockedMinigames(10).length, Object.keys(UNLOCK_LEVELS).length);
+});
+
+test('V2/G16: unlock queries cover the 9 new §B6 games', () => {
+  assert.equal(isMinigameUnlocked('goobySays', 1), false);
+  assert.equal(isMinigameUnlocked('goobySays', 2), true);
+  assert.equal(isMinigameUnlocked('gardenRush', 4), true);
+  assert.equal(isMinigameUnlocked('burgerBuild', 5), true);
+  assert.equal(isMinigameUnlocked('veggieChop', 6), true);
+  assert.equal(isMinigameUnlocked('deliveryRush', 7), true);
+  assert.equal(isMinigameUnlocked('miniGolf', 8), false);
+  assert.equal(isMinigameUnlocked('miniGolf', 9), true);
+  assert.equal(isMinigameUnlocked('goalieGooby', 11), true);
+  assert.equal(isMinigameUnlocked('starHopper', 12), true);
+  assert.equal(isMinigameUnlocked('pipeFlow', 13), false);
+  assert.equal(isMinigameUnlocked('pipeFlow', 14), true);
+  // L10: all 12 v1 games + the 6 §B6 games gated ≤ 10
+  const atOldMax = Object.keys(UNLOCK_LEVELS).length +
+    Object.values(UNLOCKS.MINIGAMES).filter((l) => l <= 10).length;
+  assert.equal(unlockedMinigames(10).length, atOldMax);
+  // L14+: every one of the 21 games (§C1.1)
+  assert.equal(unlockedMinigames(14).length, 21);
+  assert.equal(unlockedMinigames(40).length, 21);
 });

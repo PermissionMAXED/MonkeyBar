@@ -36,6 +36,9 @@ test('fresh load: no prior save → defaults per §E3', () => {
   assert.deepEqual(state.daily, { lastClaimDay: '', streak: 0 });
   assert.deepEqual(state.achievements.counters, {
     feeds: 0, washes: 0, sleeps: 0, trips: 0, tickles: 0, petsToday: 0, petsDay: '',
+    // V2/G16: §B2 counter extensions (deep coverage in saveV2.test.js)
+    harvests: 0, plantings: 0, waterings: 0, sells: 0, cures: 0, vetTrips: 0,
+    deliveries: 0, questsDone: 0, photosTaken: 0, nightPlays: 0, medsGiven: 0, balls: 0,
   });
   assert.equal(state.onboarding.done, false);
 });
@@ -269,7 +272,7 @@ test('validation clamps hostile numeric fields on load', () => {
   assert.equal(state.stats.hygiene, 85); // non-numeric → schema default
   assert.equal(state.stats.fun, 50);
   assert.equal(state.coins, 0);
-  assert.equal(state.level, 30);
+  assert.equal(state.level, 40); // V2/G16: clamp is LEVELING.MAX_LEVEL now (§B2.4)
   assert.equal(state.xp, 0);
 });
 
