@@ -5,8 +5,18 @@
 //   · wallpaper/floor per room via G4's roomManager setWallpaper/setFloor
 //   · furniture GLB swaps inside the roomManager slot holders (multi-piece
 //     sets use the room defs' piecesByItem layouts)
-//   · procedural pieces built in code: the 3 framed wall-art canvases
-//     (sunset / carrot / abstract) and the mini-Gooby doll plushie
+//   · procedural pieces built in code: the framed wall-art canvases
+//     (sunset / carrot / abstract + V2/G22 skyline / rainbow), the mini-Gooby
+//     doll plushie, and the V2/G22 §C8.3 garden pieces (benches, gnomes,
+//     birdbath, dirt path)
+//
+// V2/G22 (PLAN2 §C8): new indoor slots (ceilingFan/sideboard/bar/washer/
+// sideTable/floorClutter) work through the same slot pipeline; the ceiling
+// fan hangs from its anchor (mount:'ceiling'); garden items resolve
+// pack-qualified GLBs (entry.glb / cluster), get §C8.3 tints (blossom tree,
+// rose bed) and render as soon as G19's garden RoomDef is in ROOM_DEFS —
+// placement/persistence works beforehand via the catalog fallback in
+// systems/furniturePlacement.js.
 //
 // Decorate mode: long-press anywhere in a room (ENGINE.HOLD_MS on the canvas)
 // or the shop's "place now" → the 'decorate' bottom sheet: pick a slot of the
@@ -21,7 +31,7 @@
 import * as THREE from 'three';
 import { ENGINE, ROOMS } from '../data/constants.js';
 import { t } from '../data/strings.js';
-import { getEntry } from '../data/furniture.js';
+import { getEntry, roomSlots } from '../data/furniture.js'; // V2/G22: + roomSlots (garden fallback)
 import {
   place,
   placedItem,
@@ -92,8 +102,11 @@ export function initDecor({ store, ui, audio }) {
     const target = rm;
     for (const def of ROOM_DEFS) {
       if (rm !== target) return; // scene switched mid-apply
-      rm.setWallpaper(def.id, store.get(`decor.wallpaper.${def.id}`) ?? 'cream');
-      rm.setFloor(def.id, store.get(`decor.floor.${def.id}`) ?? 'wood');
+      // V2/G22: outdoor rooms (G19's garden) have no wallpaper/floor decor
+      if (!def.outdoor) {
+        rm.setWallpaper(def.id, store.get(`decor.wallpaper.${def.id}`) ?? 'cream');
+        rm.setFloor(def.id, store.get(`decor.floor.${def.id}`) ?? 'wood');
+      }
       for (const slotId of Object.keys(def.slots)) {
         await applySlot(def, slotId).catch((err) =>
           console.warn(`[decor] slot ${def.id}:${slotId} apply failed:`, err)
@@ -147,23 +160,33 @@ export function initDecor({ store, ui, audio }) {
       },
     };
 
-    if (getEntry(itemId)?.procedural) {
+    const entry = getEntry(itemId); // V2/G22: catalog row drives glb/mount/tint
+    if (entry?.procedural) {
       const proc = buildProcedural(itemId, track);
       if (rm.getSlotHolder(roomId, slotId) !== holder && holder.parent == null) return;
       holder.add(proc);
     } else {
-      // piece layout: variant table from the room def, else a single piece
+      // piece layout: variant table from the room def, else the catalog's
+      // V2/G22 cluster scatter (garden flower beds), else a single piece
       const pieces =
         defEntry?.piecesByItem?.[itemId] ??
         (defEntry?.item === itemId && defEntry?.pieces ? defEntry.pieces : null) ??
+        entry?.cluster ??
         [{ item: itemId, at: [0, 0, 0], rotY: 0 }];
-      const keys = pieces.map((p) => `furniture-kit/${p.item}`);
-      await assets.preload(keys); // cached after the first load
+      // V2/G22: garden entries resolve to pack-qualified keys ('nature-kit/…')
+      // via entry.glb / cluster piece.glb; room-def piece names stay short
+      // furniture-kit GLB names.
+      const keyOf = (p) =>
+        p.glb ?? (p.item === itemId && entry?.glb ? entry.glb : `furniture-kit/${p.item}`);
+      await assets.preload(pieces.map(keyOf)); // cached after the first load
       if (rm.getSlotHolder(roomId, slotId) !== holder && holder.parent == null) return;
       for (const piece of pieces) {
-        const model = assets.getModel(`furniture-kit/${piece.item}`);
+        const model = assets.getModel(keyOf(piece));
         model.scale.setScalar(FURNITURE_SCALE);
-        groundAndCenter(model);
+        // V2/G22: ceiling-mounted items (fan) hang from the anchor instead
+        if (entry?.mount === 'ceiling') hangAndCenter(model);
+        else groundAndCenter(model);
+        if (entry?.tint) tintModel(model, entry.tint, entry.tintTarget, track); // V2/G22
         const pieceHolder = new THREE.Group();
         pieceHolder.position.set(piece.at[0], piece.at[1], piece.at[2]);
         pieceHolder.rotation.y = ((piece.rotY ?? 0) * Math.PI) / 180;
@@ -301,9 +324,15 @@ function createDecoratePanel({ store, ui, audio }) {
      * @param {{roomId?: string, slotId?: string, onApplied?: () => void}} [params]
      */
     mount(el, params = {}) {
-      const roomId = ROOMS.ORDER.includes(params.roomId) ? params.roomId : ROOMS.DEFAULT;
+      // V2/G22: the garden (G19's 5th room) is not in ROOMS.ORDER — accept
+      // any room the CATALOG knows decor slots for, so garden placement works
+      // through the same picker (3D application activates once G19's room
+      // def is in ROOM_DEFS).
+      const known =
+        ROOMS.ORDER.includes(params.roomId) || roomSlots(params.roomId ?? '').length > 0;
+      const roomId = known ? params.roomId : ROOMS.DEFAULT;
       let slotId = params.slotId ?? null;
-      const def = ROOM_DEFS.find((d) => d.id === roomId);
+      const def = ROOM_DEFS.find((d) => d.id === roomId) ?? null;
 
       function render() {
         el.innerHTML = `
@@ -324,7 +353,8 @@ function createDecoratePanel({ store, ui, audio }) {
       }
 
       function renderSlots(grid) {
-        for (const s of Object.keys(def.slots)) {
+        // V2/G22: room-def slot order when available, catalog order otherwise
+        for (const s of def ? Object.keys(def.slots) : roomSlots(roomId)) {
           const current = placedItem(store, roomId, s);
           const card = document.createElement('button');
           card.className = 'shop-card';
@@ -394,6 +424,24 @@ function buildProcedural(itemId, track) {
       return buildWallArt('abstract', track);
     case 'proc:miniGooby':
       return buildMiniGooby(track);
+    // ---- V2/G22 (§C8.1): 2 new canvases ----
+    case 'proc:artSkyline':
+      return buildWallArt('skyline', track);
+    case 'proc:artRainbow':
+      return buildWallArt('rainbow', track);
+    // ---- V2/G22 (§C8.3): garden decor ----
+    case 'proc:benchWood':
+      return buildGardenBench(track, { seat: '#9A6B47', legs: '#7A5238' });
+    case 'proc:benchPastel':
+      return buildGardenBench(track, { seat: '#8FD8CB', legs: '#FFB7D5' });
+    case 'proc:gnome':
+      return buildGnome(track, false);
+    case 'proc:gnomeGold':
+      return buildGnome(track, true);
+    case 'proc:birdbath':
+      return buildBirdbath(track);
+    case 'proc:pathDirt':
+      return buildDirtPath(track);
     default: {
       // unknown procedural id: a friendly placeholder cube (never throws)
       const grp = new THREE.Group();
@@ -403,9 +451,54 @@ function buildProcedural(itemId, track) {
   }
 }
 
-/** Paint one of the 3 §C5.2 art motifs onto a 2D canvas. */
+/** Paint one of the §C5.2 / V2/G22 §C8.1 art motifs onto a 2D canvas. */
 function paintArt(variant, g, W, H) {
-  if (variant === 'sunset') {
+  if (variant === 'skyline') {
+    // V2/G22 „City Skyline": night sky, moon, lit building silhouettes
+    const sky = g.createLinearGradient(0, 0, 0, H);
+    sky.addColorStop(0, '#232B52');
+    sky.addColorStop(1, '#3A4374');
+    g.fillStyle = sky;
+    g.fillRect(0, 0, W, H);
+    g.fillStyle = '#FFF3C4';
+    g.beginPath();
+    g.arc(W * 0.78, H * 0.24, H * 0.1, 0, Math.PI * 2);
+    g.fill();
+    const buildings = [
+      [0.02, 0.42, 0.14], [0.18, 0.3, 0.16], [0.36, 0.5, 0.12],
+      [0.5, 0.24, 0.18], [0.7, 0.44, 0.13], [0.85, 0.34, 0.13],
+    ];
+    for (const [x, top, w] of buildings) {
+      g.fillStyle = '#2A3260';
+      g.fillRect(W * x, H * top, W * w, H * (1 - top));
+      g.fillStyle = '#FFD166';
+      for (let wy = top + 0.07; wy < 0.92; wy += 0.11) {
+        for (let wx = x + 0.025; wx < x + w - 0.03; wx += 0.045) {
+          if ((wx * 31 + wy * 17) % 0.13 < 0.07) g.fillRect(W * wx, H * wy, W * 0.02, H * 0.045);
+        }
+      }
+    }
+  } else if (variant === 'rainbow') {
+    // V2/G22 „Rainbow": arcs over two puffy clouds
+    g.fillStyle = '#DBEEF9';
+    g.fillRect(0, 0, W, H);
+    const cols = ['#E0655F', '#FF9F5A', '#FFD166', '#59C9B9', '#6EC6FF'];
+    g.lineWidth = H * 0.055;
+    for (let i = 0; i < cols.length; i += 1) {
+      g.strokeStyle = cols[i];
+      g.beginPath();
+      g.arc(W / 2, H * 1.05, H * (0.82 - i * 0.06), Math.PI * 1.08, Math.PI * 1.92);
+      g.stroke();
+    }
+    g.fillStyle = '#FFFFFF';
+    for (const [cx, cy] of [[0.16, 0.72], [0.84, 0.72]]) {
+      for (const [dx, dy, r] of [[-0.05, 0, 0.07], [0.05, 0, 0.07], [0, -0.045, 0.08], [0, 0.03, 0.075]]) {
+        g.beginPath();
+        g.arc(W * (cx + dx), H * (cy + dy), H * r, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+  } else if (variant === 'sunset') {
     const sky = g.createLinearGradient(0, 0, 0, H);
     sky.addColorStop(0, '#FFD9A3');
     sky.addColorStop(0.62, '#FF9E7B');
@@ -470,7 +563,7 @@ function paintArt(variant, g, W, H) {
 /**
  * A framed canvas print for the living-room wallArt slot (§C5.2). The slot
  * anchor sits on the back wall (z ≈ −1.47) — the art faces the camera (+z).
- * @param {'sunset'|'carrot'|'abstract'} variant @param {Track} track
+ * @param {'sunset'|'carrot'|'abstract'|'skyline'|'rainbow'} variant @param {Track} track
  */
 function buildWallArt(variant, track) {
   const grp = new THREE.Group();
@@ -551,6 +644,121 @@ function buildMiniGooby(track) {
   return grp;
 }
 
+// ---------------------------------------------------------------------------
+// V2/G22 (§C8.3): procedural garden pieces — benches, gnomes, birdbath, path
+// ---------------------------------------------------------------------------
+
+/**
+ * Garden bench: 2 chunky legs + seat + backrest slats. The pastel variant is
+ * the same build with painted colors (§C8.3).
+ * @param {Track} track @param {{seat: string, legs: string}} colors
+ */
+function buildGardenBench(track, colors) {
+  const grp = new THREE.Group();
+  grp.name = 'gardenBench';
+  const seatMat = standardMat(colors.seat, { roughness: 0.85 });
+  const legMat = standardMat(colors.legs, { roughness: 0.85 });
+  const legGeo = track.geo(new THREE.BoxGeometry(0.09, 0.24, 0.34));
+  for (const sx of [-1, 1]) {
+    const leg = new THREE.Mesh(legGeo, legMat);
+    leg.position.set(sx * 0.38, 0.12, 0);
+    grp.add(leg);
+  }
+  const slatGeo = track.geo(new THREE.BoxGeometry(0.92, 0.035, 0.13));
+  for (const dz of [-0.11, 0.045]) {
+    const slat = new THREE.Mesh(slatGeo, seatMat);
+    slat.position.set(0, 0.255, dz);
+    grp.add(slat);
+  }
+  const backGeo = track.geo(new THREE.BoxGeometry(0.92, 0.09, 0.035));
+  for (const dy of [0.4, 0.53]) {
+    const back = new THREE.Mesh(backGeo, seatMat);
+    back.position.set(0, dy, -0.185);
+    back.rotation.x = -0.14;
+    grp.add(back);
+  }
+  const postGeo = track.geo(new THREE.BoxGeometry(0.07, 0.36, 0.05));
+  for (const sx of [-1, 1]) {
+    const post = new THREE.Mesh(postGeo, legMat);
+    post.position.set(sx * 0.38, 0.42, -0.17);
+    post.rotation.x = -0.14;
+    grp.add(post);
+  }
+  return grp;
+}
+
+/**
+ * Garden gnome (§C8.3): pointy hat, round body, white beard — the golden
+ * variant swaps every material for metallic gold (endgame flex).
+ * @param {Track} track @param {boolean} golden
+ */
+function buildGnome(track, golden) {
+  const grp = new THREE.Group();
+  grp.name = golden ? 'gnomeGold' : 'gnome';
+  const gold = standardMat('#E8C24A', { roughness: 0.35, metalness: 0.6 });
+  const mat = (color, opts) => (golden ? gold : standardMat(color, opts));
+  const body = new THREE.Mesh(track.geo(new THREE.ConeGeometry(0.13, 0.26, 14)), mat('#5B7DB8', { roughness: 0.7 }));
+  body.position.y = 0.13;
+  const head = new THREE.Mesh(track.geo(new THREE.SphereGeometry(0.075, 14, 10)), mat('#F2C9A0', { roughness: 0.7 }));
+  head.position.set(0, 0.29, 0.01);
+  const beard = new THREE.Mesh(
+    track.geo(new THREE.SphereGeometry(0.062, 12, 8, 0, Math.PI * 2, Math.PI * 0.35, Math.PI * 0.65)),
+    mat('#F4F0E6', { roughness: 0.9 })
+  );
+  beard.position.set(0, 0.275, 0.045);
+  beard.scale.set(1, 1.25, 0.8);
+  const hat = new THREE.Mesh(track.geo(new THREE.ConeGeometry(0.085, 0.24, 12)), mat('#E0655F', { roughness: 0.65 }));
+  hat.position.set(0, 0.42, 0);
+  hat.rotation.x = 0.12;
+  const nose = new THREE.Mesh(track.geo(new THREE.SphereGeometry(0.02, 8, 6)), mat('#E8A87C', { roughness: 0.6 }));
+  nose.position.set(0, 0.3, 0.078);
+  const feetGeo = track.geo(new THREE.SphereGeometry(0.035, 8, 6));
+  for (const sx of [-1, 1]) {
+    const foot = new THREE.Mesh(feetGeo, mat('#4A3B36', { roughness: 0.8 }));
+    foot.position.set(sx * 0.055, 0.02, 0.09);
+    foot.scale.set(1, 0.55, 1.4);
+    grp.add(foot);
+  }
+  grp.add(body, head, beard, hat, nose);
+  return grp;
+}
+
+/** Birdbath 240 (§C8.3): stone pedestal + basin + still water disc. */
+function buildBirdbath(track) {
+  const grp = new THREE.Group();
+  grp.name = 'birdbath';
+  const stone = standardMat('#C9C4BA', { roughness: 0.9 });
+  const base = new THREE.Mesh(track.geo(new THREE.CylinderGeometry(0.16, 0.2, 0.07, 16)), stone);
+  base.position.y = 0.035;
+  const column = new THREE.Mesh(track.geo(new THREE.CylinderGeometry(0.055, 0.075, 0.34, 12)), stone);
+  column.position.y = 0.24;
+  const basin = new THREE.Mesh(track.geo(new THREE.CylinderGeometry(0.24, 0.14, 0.09, 18)), stone);
+  basin.position.y = 0.45;
+  const water = new THREE.Mesh(
+    track.geo(new THREE.CylinderGeometry(0.205, 0.205, 0.02, 18)),
+    standardMat('#A9DCF2', { roughness: 0.15 })
+  );
+  water.position.y = 0.485;
+  grp.add(base, column, basin, water);
+  return grp;
+}
+
+/** Free dirt path (§C8.3): 3 flattened earth patches in a walking line. */
+function buildDirtPath(track) {
+  const grp = new THREE.Group();
+  grp.name = 'pathDirt';
+  const dirt = standardMat('#8A6844', { roughness: 1 });
+  const patchGeo = track.geo(new THREE.CylinderGeometry(0.17, 0.19, 0.025, 10));
+  for (const [x, z, s] of [[-0.32, 0.05, 1], [0, -0.06, 0.9], [0.32, 0.04, 1.05]]) {
+    const patch = new THREE.Mesh(patchGeo, dirt);
+    patch.position.set(x, 0.012, z);
+    patch.scale.set(s, 1, s * 0.8);
+    patch.rotation.y = x * 2;
+    grp.add(patch);
+  }
+  return grp;
+}
+
 /**
  * Kenney furniture GLBs have corner origins — recenter the footprint on x/z
  * and drop the bounding-box bottom onto y=0 (mirrors roomManager's grounding
@@ -563,4 +771,48 @@ function groundAndCenter(model) {
   model.position.x -= center.x;
   model.position.z -= center.z;
   model.position.y -= box.min.y;
+}
+
+/**
+ * V2/G22: ceiling-mount grounding (§C8.1 fan) — center x/z but pull the
+ * bounding-box TOP up to y=0 so the model hangs from the slot anchor.
+ * @param {THREE.Object3D} model
+ */
+function hangAndCenter(model) {
+  const box = new THREE.Box3().setFromObject(model);
+  const center = box.getCenter(new THREE.Vector3());
+  model.position.x -= center.x;
+  model.position.z -= center.z;
+  model.position.y -= box.max.y;
+}
+
+/**
+ * V2/G22 (§C8.3): tint a GLB clone's materials — 'foliage' recolors the
+ * green-dominant materials (blossom-tree canopy), 'bloom' recolors everything
+ * else (rose-bed petals; leaves/stems stay green). Materials are cloned per
+ * application (the asset cache's shared materials are never mutated) and
+ * tracked for disposal on the next slot swap.
+ * @param {THREE.Object3D} model @param {string} tintHex
+ * @param {'foliage'|'bloom'|undefined} target @param {Track} track
+ */
+function tintModel(model, tintHex, target, track) {
+  const tint = new THREE.Color(tintHex);
+  const clones = new Map();
+  model.traverse((obj) => {
+    if (!obj.isMesh || !obj.material) return;
+    const swap = (m) => {
+      if (!m?.color) return m;
+      const { r, g, b } = m.color;
+      const greenish = g > r * 1.05 && g > b * 1.05;
+      if ((target === 'foliage') !== greenish) return m;
+      if (!clones.has(m)) {
+        const clone = m.clone();
+        clone.userData.shared = false;
+        clone.color.lerp(tint, 0.72);
+        clones.set(m, track.mat(clone));
+      }
+      return clones.get(m);
+    };
+    obj.material = Array.isArray(obj.material) ? obj.material.map(swap) : swap(obj.material);
+  });
 }

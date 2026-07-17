@@ -29,6 +29,18 @@ import { registerWardrobe } from './ui/wardrobeScreen.js';
 import { registerAchievementsScreen } from './ui/achievementsScreen.js';
 import { initDailyBonus } from './ui/dailyBonusPopup.js';
 // end G12 imports
+// V2/G22: fur-skin applier — import for the marked block below (PLAN2 §C8.5)
+import { initSkinSync } from './character/skins.js';
+// V2/G23: progression UI — imports for the marked block below (PLAN2 §C5/C6/C12)
+import { registerQuestBoard } from './ui/questBoard.js';
+import { registerAlbumScreen } from './ui/albumScreen.js';
+import { registerProfileScreen } from './ui/profileScreen.js';
+import { initPhotoMode } from './ui/photoMode.js';
+// end V2/G23 imports
+// V2/G19: garden panels + interactions — imports for the marked block below
+import { registerGardenUi } from './ui/gardenPanel.js';
+import { initGardenInteractions } from './home/gardenInteractions.js';
+// end V2/G19 imports
 import { initOnboarding } from './ui/onboarding.js'; // G14: first-run tutorial (§C8.1)
 
 // Agent G2's core/assets.js is discovered at transform time; the empty-map
@@ -147,6 +159,13 @@ async function boot() {
   initSleepFlow({ store, ui });
   // ---- end G6 block ----
 
+  // ---- V2/G19: garden — panels + self-wiring 3D interactions (PLAN2 §C2) ----
+  // Panels register once; gardenInteractions polls for the live roomManager
+  // (rebuilt on every home enter — sleepFlow pattern) and wires plots/drags.
+  registerGardenUi({ store, ui });
+  initGardenInteractions({ store, ui, audio, input, assets });
+  // ---- end V2/G19 block ----
+
   // ---- G12: wardrobe/outfits, achievements, daily bonus (single marked G12 block) ----
   // Achievements engine (§C8.3): store-event unlock detection + rewards; the
   // framework handle enables the noCrash shop-trip tap. Wardrobe + achievements
@@ -159,6 +178,24 @@ async function boot() {
   initOutfitSync({ store });
   initDailyBonus({ store, ui, audio, sceneManager });
   // ---- end G12 block ----
+
+  // ---- V2/G23: progression UI wiring (PLAN2 §C5/§C6/§C12) ----
+  // Quest board / sticker album / profile screens + photo mode. The engines
+  // themselves (daily roll + midnight rollover, quest-event forwarding,
+  // sticker XP/toasts, photo XP cap) went live inside initAchievements above
+  // (systems/achievementsEngine.js V2/G23 block); HUD buttons live in hud.js.
+  registerQuestBoard({ store, ui, audio });
+  registerAlbumScreen({ store, ui, audio });
+  registerProfileScreen({ store, ui, audio, sceneManager });
+  initPhotoMode({ ui, audio, sceneManager });
+  // ---- end V2/G23 block ----
+
+  // ---- V2/G22: fur-skin boot application (PLAN2 §C8.5) ----
+  // Applies skins.equipped to the shared Gooby materials at boot, re-applies
+  // on 'skinChanged' and keeps the live home rig tinted (cameos/photo mode
+  // inherit through the shared materials — see character/skins.js).
+  initSkinSync({ store });
+  // ---- end V2/G22 block ----
 
   const timeEngine = createTimeEngine(store);
   timeEngine.start();

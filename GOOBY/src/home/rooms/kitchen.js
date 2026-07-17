@@ -24,8 +24,12 @@ export const ROOM = Object.freeze({
   slots: Object.freeze({
     tableSet: Object.freeze({ default: 'table', items: Object.freeze(['table', 'tableCloth']) }),
     fridge: Object.freeze({ default: 'kitchenFridge', items: Object.freeze(['kitchenFridge', 'kitchenFridgeLarge']) }),
-    appliance: Object.freeze({ default: 'toaster', items: Object.freeze(['toaster', 'kitchenCoffeeMachine', 'kitchenBlender']) }),
+    // V2/G22 (§C8.1): + microwave 4th appliance variant
+    appliance: Object.freeze({ default: 'toaster', items: Object.freeze(['toaster', 'kitchenCoffeeMachine', 'kitchenBlender', 'kitchenMicrowave']) }),
     wallShelf: Object.freeze({ default: 'kitchenCabinetUpper', items: Object.freeze(['kitchenCabinetUpper', 'kitchenCabinetUpperDouble']) }),
+    // V2/G22 (§C8.1) new slot: breakfast-bar corner, empty until bought —
+    // kitchenBar counter or a 2-stool set (stoolBar "pairs with bar")
+    bar: Object.freeze({ default: null, items: Object.freeze(['kitchenBar', 'stoolBar']) }),
   }),
 
   furniture: Object.freeze([
@@ -61,6 +65,18 @@ export const ROOM = Object.freeze({
     }),
     // set dressing
     Object.freeze({ item: 'trashcan', at: Object.freeze([1.42, 0, -1.22]), rotY: 0 }),
+    // ---- V2/G22 (§C8.1): bar slot anchor on the left, facing the table ----
+    Object.freeze({
+      slot: 'bar', at: Object.freeze([-1.15, 0, 0.62]), rotY: 90,
+      // the stool "set" lays out two stools side by side (local x runs along
+      // the wall after the 90° holder turn)
+      piecesByItem: Object.freeze({
+        stoolBar: Object.freeze([
+          Object.freeze({ item: 'stoolBar', at: Object.freeze([-0.3, 0, 0]), rotY: 0 }),
+          Object.freeze({ item: 'stoolBar', at: Object.freeze([0.3, 0, 0]), rotY: 25 }),
+        ]),
+      }),
+    }),
   ]),
 
   /** Point anchors (world y included; goobyIdle is where Gooby stands here). */

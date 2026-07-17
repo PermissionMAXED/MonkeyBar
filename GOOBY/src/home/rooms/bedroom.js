@@ -16,6 +16,11 @@ export const ROOM = Object.freeze({
     nightstand: Object.freeze({ default: 'lampSquareTable', items: Object.freeze(['lampSquareTable', 'lampRoundTable']) }),
     rug: Object.freeze({ default: 'rugRounded', items: Object.freeze(['rugRounded', 'rugRectangle', 'rugRound']) }),
     plushie: Object.freeze({ default: 'bear', items: Object.freeze(['bear', 'proc:miniGooby']) }),
+    // ---- V2/G22 (§C8.1) new slots: both start empty like wallArt ----
+    // side furniture by the bed's footboard (tables, cabinets, coat rack)
+    sideTable: Object.freeze({ default: null, items: Object.freeze(['sideTable', 'sideTableDrawers', 'cabinetBed', 'cabinetBedDrawer', 'coatRackStanding']) }),
+    // cozy floor clutter on the rug corner (pillows, books, trashcan)
+    floorClutter: Object.freeze({ default: null, items: Object.freeze(['pillow', 'pillowBlue', 'books', 'trashcan']) }),
   }),
 
   furniture: Object.freeze([
@@ -50,6 +55,11 @@ export const ROOM = Object.freeze({
     // plushie bear lying on the bed by the pillow (the GLB is authored lying
     // on its back — on the floor it reads as a knocked-over toy)
     Object.freeze({ slot: 'plushie', item: 'bear', at: Object.freeze([-1.18, 0.31, -0.28]), rotY: -20, scale: 0.75 }),
+    // ---- V2/G22 (§C8.1): new slot anchors (empty until bought) ----
+    // side furniture past the bed's footboard on the left (bed spans z ≈ −1.5…0.4)
+    Object.freeze({ slot: 'sideTable', at: Object.freeze([-1.4, 0, 0.95]), rotY: 20 }),
+    // floor clutter on the rug's right edge, clear of the wardrobe (z −1.25)
+    Object.freeze({ slot: 'floorClutter', at: Object.freeze([1.2, 0, 0.85]), rotY: -15 }),
   ]),
 
   anchors: Object.freeze({

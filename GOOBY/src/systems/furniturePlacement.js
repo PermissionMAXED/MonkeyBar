@@ -43,10 +43,23 @@ const slotKey = (roomId, slotId) => `${roomId}:${slotId}`;
 
 /**
  * A room's slot definition ({ default, items }) or null.
+ *
+ * V2/G22: rooms without a def in ROOMS_BY_ID (the garden — its RoomDef is
+ * G19's rooms/garden.js, which this pure module must not import) fall back to
+ * a definition DERIVED from the catalog: the §C8.3 garden entries carry their
+ * slot/rooms/default flags, so ownership/placement rules work identically and
+ * `furniture.placed.garden:*` persists before/independent of the 3D room.
  * @param {string} roomId @param {string} slotId
  */
 export function slotDef(roomId, slotId) {
-  return ROOMS_BY_ID[roomId]?.slots?.[slotId] ?? null;
+  const def = ROOMS_BY_ID[roomId]?.slots?.[slotId];
+  if (def) return def;
+  const entries = furnitureFor(roomId, slotId); // V2/G22 catalog fallback
+  if (entries.length === 0) return null;
+  return {
+    default: entries.find((e) => e.default)?.id ?? null,
+    items: entries.map((e) => e.id),
+  };
 }
 
 /**

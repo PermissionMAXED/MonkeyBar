@@ -1,7 +1,11 @@
-// Shop screen (§C5, §C4 — agent G11): the real shop UI. Full-screen with 4
-// tabs — Food (16 foods, qty picker), Furniture (catalog by room+slot with
-// owned/placed states + "place now"), Walls+Floors (buy+apply swatches per
-// room) and Outfits (opens G12's wardrobe in buy mode — feature-detected).
+// Shop screen (§C5, §C4 — agent G11): the real shop UI. Full-screen with 5
+// tabs — Food (32 foods, qty picker; V2/G22: Alle/Gesund/Süßkram filters,
+// junk 🍬 badges and the Care section: medicine/fertilizer/seed packets per
+// PLAN2 §C7/§C3.5), Furniture (catalog by room+slot with owned/placed states
+// + "place now"; V2/G22: room filter chips incl. the §C8.3 Garden section),
+// Walls+Floors (buy+apply swatches per room), Outfits (opens G12's wardrobe
+// in buy mode — feature-detected) and Skins (V2/G22, PLAN2 §C8.5: fur-color
+// palette cards + live 3D try-on, L5 gate per §B6, economy.buySkin).
 //
 // Modes (§C4): 'trip' — opened by systems/shopTrip.js on arrival, everything
 // purchasable, "Go home" returns to the living room; 'browse' — opened from
@@ -21,10 +25,12 @@
 // Module level stays DOM-free so systems/shopTrip.js (imported by node tests)
 // can import this file headlessly.
 
-import { ECONOMY, ROOMS } from '../data/constants.js';
+import { ECONOMY, ROOMS, UNLOCKS, ITEM_PRICES } from '../data/constants.js'; // V2/G22: + UNLOCKS/ITEM_PRICES
 import { t } from '../data/strings.js';
 import { FOODS } from '../data/foods.js';
 import { WALLPAPERS, FLOORS, furnitureFor, roomSlots } from '../data/furniture.js';
+import { CROPS } from '../data/crops.js'; // V2/G22: seed rows in the Care section (§C7)
+import { SKINS, DEFAULT_SKIN, getSkin } from '../data/skins.js'; // V2/G22: Skins tab (§C8.5)
 import { count as invCount } from '../systems/inventory.js';
 import {
   canAfford,
@@ -32,6 +38,9 @@ import {
   quickPrice,
   canBuyQuickDelivery,
   buyQuickDelivery,
+  buyItem, // V2/G22: medicine/fertilizer (§C3.5/§C2.2)
+  buySeed, // V2/G22: seed packets (§C2.3)
+  buySkin, // V2/G22: fur skins (§C8.5)
 } from '../systems/economy.js';
 import {
   isOwned,
@@ -49,6 +58,11 @@ const FOOD_EMOJI = {
   watermelon: '🍉', 'donut-sprinkles': '🍩', cupcake: '🧁', salad: '🥗',
   'ice-cream': '🍦', sandwich: '🥪', 'hot-dog': '🌭', pancakes: '🥞',
   burger: '🍔', pizza: '🍕', cake: '🍰',
+  // V2/G22: G20's §C7 catalog additions (kept in sync with interactions.js)
+  radish: '🍠', tomato: '🍅', corn: '🌽', eggplant: '🍆', pumpkin: '🎃',
+  strawberry: '🍓', grapes: '🍇', croissant: '🥐', lollypop: '🍭',
+  cookie: '🍪', chocolate: '🍫', 'candy-bar': '🍬', muffin: '🥮',
+  fries: '🍟', 'corn-dog': '🍢', sundae: '🍨',
 };
 
 /** Furniture id → emoji (falls back to the slot emoji). */
@@ -68,6 +82,17 @@ const FURN_EMOJI = {
   bathroomCabinet: '🗄️', bathroomCabinetDrawer: '🗄️',
   bedSingle: '🛏️', bedDouble: '🛏️',
   bear: '🧸', 'proc:miniGooby': '🐰',
+  // V2/G22 (§C8.1/§C8.3): the +30 catalog additions
+  loungeChair: '🛋️', tableCoffee: '🪵', tableCoffeeGlass: '🫖',
+  cabinetTelevision: '🗄️', radio: '📻', speaker: '🔊', ceilingFan: '🌀',
+  'proc:artSkyline': '🌆', 'proc:artRainbow': '🌈',
+  kitchenMicrowave: '♨️', kitchenBar: '🍹', stoolBar: '🪑',
+  washer: '🧺', shower: '🚿',
+  sideTable: '🗄️', sideTableDrawers: '🗄️', cabinetBed: '🛏️', cabinetBedDrawer: '🛏️',
+  coatRackStanding: '🧥', pillow: '🪶', pillowBlue: '🪶', books: '📚', trashcan: '🗑️',
+  'proc:benchWood': '🪑', 'proc:benchPastel': '🎀', 'proc:gnome': '🧙', 'proc:gnomeGold': '✨',
+  'proc:birdbath': '⛲', flowerBedWild: '🌼', flowerBedRose: '🌹',
+  'proc:pathDirt': '🛤️', pathStones: '🪨', treeDefault: '🌳', treeBlossom: '🌸',
 };
 
 /** Decor slot id → emoji (decorate panel + furniture groups share these). */
@@ -75,6 +100,11 @@ export const SLOT_EMOJI = {
   sofa: '🛋️', tv: '📺', rug: '🧶', plant: '🪴', lamp: '💡', bookcase: '📚',
   wallArt: '🖼️', tableSet: '🍽️', fridge: '🧊', appliance: '☕', wallShelf: '🗄️',
   tub: '🛁', shelf: '🗄️', bed: '🛏️', nightstand: '💡', plushie: '🧸',
+  // V2/G22: new indoor slots (§C8.1) + the 6 garden decor slots (§C8.3)
+  ceilingFan: '🌀', sideboard: '📻', bar: '🍹', washer: '🧺',
+  sideTable: '🗄️', floorClutter: '📚',
+  gardenBench: '🪑', gardenGnome: '🧙', birdbath: '⛲', flowerBed: '🌼',
+  gardenPath: '🪨', gardenTree: '🌳',
 };
 
 /** @param {import('../data/furniture.js').FurnitureEntry} entry */
@@ -141,6 +171,13 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
   /** selected food + qty for the buy bar */
   let selFood = null;
   let qty = 1;
+  // V2/G22 state: food category filter (§C7), furniture room filter (§C8.3),
+  // skins-tab try-on + its lazily booted 3D stage (§C8.5)
+  let foodFilter = 'all';
+  let furnRoom = 'all';
+  let selSkin = null;
+  /** @type {{dispose: () => void, setSkin: (id: string|null) => void}|null} */
+  let skinStage = null;
 
   const atTrip = () => mode === 'trip';
   /** food is buyable at the shop, or from home once Quick Delivery is owned */
@@ -158,16 +195,42 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
   }
 
   // ------------------------------------------------------------------ food
+  /** V2/G22 (§C7): Alle/Gesund/Süßkram category filters on the food tab. */
+  const FOOD_FILTERS = [
+    ['all', 'shop.filter.all', () => true],
+    ['healthy', 'shop.filter.healthy', (f) => !f.junk],
+    ['treats', 'shop.filter.treats', (f) => f.junk],
+  ];
+
   function renderFood() {
+    // V2/G22: category filter chips (§C7 — Alle/Gesund/Süßkram)
+    const chips = document.createElement('div');
+    chips.className = 'room-chips';
+    for (const [id, key] of FOOD_FILTERS) {
+      const chip = document.createElement('button');
+      chip.className = `room-chip${foodFilter === id ? ' room-chip-on' : ''}`;
+      chip.textContent = t(key);
+      chip.addEventListener('click', () => {
+        audio.play('ui.tap');
+        foodFilter = id;
+        selFood = null;
+        renderBody();
+      });
+      chips.appendChild(chip);
+    }
+    bodyEl.appendChild(chips);
+
     const grid = document.createElement('div');
     grid.className = 'shop-grid';
     const inv = store.get('inventory') ?? {};
-    for (const food of FOODS) {
+    const matches = FOOD_FILTERS.find(([id]) => id === foodFilter)?.[2] ?? (() => true);
+    for (const food of FOODS.filter(matches)) {
       const card = document.createElement('button');
       card.className = `shop-card${selFood === food.id ? ' shop-card-sel' : ''}`;
       const owned = invCount(inv, food.id);
       card.innerHTML = `
         ${owned > 0 ? `<span class="shop-count">×${owned}</span>` : ''}
+        ${food.junk ? '<span class="g22-junk" aria-hidden="true">🍬</span>' : ''}
         <span class="shop-emoji">${FOOD_EMOJI[food.id] ?? '🍽️'}</span>
         <span class="shop-name">${t(food.nameKey)}</span>
         ${priceTag(foodUnit(food))}`;
@@ -267,14 +330,116 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
     }
 
     bodyEl.appendChild(grid);
+    renderCare(); // V2/G22: Care section under the food grid (§C7/§C3.5)
+  }
+
+  // ----------------------------------------------------------- care (V2/G22)
+  // §C7: medicine 40c + fertilizer 25c rendered distinctly (not eatable-
+  // looking) + seed packets (§C2.3, level-gated). All land in the `items`
+  // slice via economy.buyItem/buySeed; medicine is quick-delivery eligible
+  // (§C3.5) so the whole row follows the food-tab buyable gate.
+  function renderCare() {
+    const head = document.createElement('div');
+    head.className = 'shop-section';
+    head.textContent = t('shop.care.title');
+    bodyEl.appendChild(head);
+    const hint = document.createElement('div');
+    hint.className = 'shop-banner-body g22-care-hint';
+    hint.textContent = t('shop.care.hint');
+    bodyEl.appendChild(hint);
+
+    const row = document.createElement('div');
+    row.className = 'shop-grid';
+    const level = store.get('level') ?? 1;
+
+    const careCard = ({ emoji, name, price, count, locked, lockLevel, onBuy }) => {
+      const card = document.createElement('button');
+      card.className = `shop-card g22-care-card${locked ? ' g22-locked' : ''}`;
+      card.innerHTML = `
+        ${count > 0 ? `<span class="shop-count">×${count}</span>` : ''}
+        <span class="shop-emoji">${emoji}</span>
+        <span class="shop-name">${name}</span>
+        ${locked ? `<span class="shop-state">🔒 ${t('shop.lvl', { level: lockLevel })}</span>` : priceTag(price)}`;
+      card.addEventListener('click', () => {
+        audio.play('ui.tap');
+        if (locked) {
+          ui.toast('shop.qd.needLevel', { level: lockLevel });
+          return;
+        }
+        if (!foodBuyable()) {
+          ui.toast('shop.browseHint');
+          return;
+        }
+        const res = onBuy();
+        if (res.ok) {
+          audio.play('coin.spend');
+          ui.toast('toast.itemBought', { name });
+        } else if (res.reason === 'coins') {
+          ui.toast('toast.notEnoughCoins');
+        } else if (res.reason === 'level') {
+          ui.toast('shop.qd.needLevel', { level: lockLevel });
+        }
+        renderBody();
+      });
+      return card;
+    };
+
+    row.appendChild(careCard({
+      emoji: '💊',
+      name: t('shop.item.medicine'),
+      price: ITEM_PRICES.medicine,
+      count: store.get('items.medicine') ?? 0,
+      onBuy: () => buyItem(store, 'medicine', 1),
+    }));
+    row.appendChild(careCard({
+      emoji: '🌱',
+      name: t('shop.item.fertilizer'),
+      price: ITEM_PRICES.fertilizer,
+      count: store.get('items.fertilizer') ?? 0,
+      onBuy: () => buyItem(store, 'fertilizer', 1),
+    }));
+    for (const crop of CROPS) {
+      row.appendChild(careCard({
+        emoji: '🌾',
+        name: t('shop.seedName', { name: t(crop.nameKey) }),
+        price: crop.seedPrice,
+        count: store.get(`items.seed:${crop.id}`) ?? 0,
+        locked: level < crop.unlock,
+        lockLevel: crop.unlock,
+        onBuy: () => buySeed(store, crop.id, 1),
+      }));
+    }
+    bodyEl.appendChild(row);
   }
 
   // ------------------------------------------------------------- furniture
+  // V2/G22: room filter chips incl. the Garden section (§C8.3 — garden decor
+  // is purchasable here; G19's rooms/garden.js renders the placed anchors).
   function renderFurniture() {
-    for (const roomId of ROOMS.ORDER) {
+    const allRooms = [...ROOMS.ORDER, 'garden'];
+    const roomLabel = (roomId) =>
+      roomId === 'garden' ? t('shop.room.garden') : t(`room.${roomId}`);
+
+    const chips = document.createElement('div');
+    chips.className = 'room-chips';
+    for (const roomId of ['all', ...allRooms]) {
+      const chip = document.createElement('button');
+      chip.className = `room-chip${furnRoom === roomId ? ' room-chip-on' : ''}`;
+      chip.textContent = roomId === 'all' ? t('shop.filter.all') : roomLabel(roomId);
+      chip.addEventListener('click', () => {
+        audio.play('ui.tap');
+        furnRoom = roomId;
+        renderBody();
+      });
+      chips.appendChild(chip);
+    }
+    bodyEl.appendChild(chips);
+
+    const rooms = furnRoom === 'all' ? allRooms : [furnRoom];
+    for (const roomId of rooms) {
       const head = document.createElement('div');
       head.className = 'shop-section';
-      head.textContent = t(`room.${roomId}`);
+      head.textContent = roomLabel(roomId);
       bodyEl.appendChild(head);
       const grid = document.createElement('div');
       grid.className = 'shop-grid';
@@ -425,16 +590,207 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
     bodyEl.appendChild(card);
   }
 
+  // ------------------------------------------------------------ skins (V2/G22)
+  // §C8.5: palette swatch cards + a live 3D try-on stage. Equipping goes
+  // through skins.equipped (economy.buySkin equips on purchase); the applier
+  // in character/skins.js mutates the shared Gooby materials so the skin
+  // shows everywhere (home, cameos, photo mode). Tab unlocks at L5 (§B6).
+  /** @param {import('../data/skins.js').SkinDef} def */
+  function skinSwatchStyle(def) {
+    return (
+      `background: linear-gradient(135deg, ${def.colors.body} 0 55%, ` +
+      `${def.colors.belly} 55% 80%, ${def.colors.earInner} 80% 100%);`
+    );
+  }
+
+  function disposeSkinStage() {
+    skinStage?.dispose();
+    skinStage = null;
+  }
+
+  /** Boot the try-on renderer lazily — three.js must stay out of the
+   * node:test import chain (same rule as the decor boot above). */
+  async function mountSkinStage(stageEl, badgeEl) {
+    try {
+      const THREE = await import('three');
+      const { createGooby } = await import('../character/gooby.js');
+      const skinsMod = await import('../character/skins.js');
+      if (!bodyEl || !stageEl.isConnected) return; // tab switched meanwhile
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+      const scene = new THREE.Scene();
+      const hemi = new THREE.HemisphereLight('#fff5e8', '#b8a898', 1.05);
+      const dir = new THREE.DirectionalLight('#fff2dd', 1.4);
+      dir.position.set(1.6, 2.4, 2.2);
+      scene.add(hemi, dir);
+      const gooby = createGooby();
+      gooby.setEmotion('happy');
+      scene.add(gooby.group);
+      stageEl.insertBefore(renderer.domElement, badgeEl);
+      const camera = new THREE.PerspectiveCamera(34, 1, 0.05, 20);
+      camera.position.set(0, 0.74, 1.8);
+      camera.lookAt(0, 0.5, 0);
+      const resize = () => {
+        const w = stageEl.clientWidth || 320;
+        const h = stageEl.clientHeight || 200;
+        renderer.setSize(w, h);
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+      };
+      resize();
+      window.addEventListener('resize', resize);
+      let raf = 0;
+      let last = performance.now();
+      const tick = (now) => {
+        raf = requestAnimationFrame(tick);
+        const dt = Math.min((now - last) / 1000, 0.1);
+        last = now;
+        gooby.update(dt);
+        gooby.group.rotation.y = Math.sin(now / 2400) * 0.5;
+        renderer.render(scene, camera);
+      };
+      raf = requestAnimationFrame(tick);
+      skinStage = {
+        setSkin(id) {
+          if (id) {
+            skinsMod.previewSkin(gooby, getSkin(id));
+            badgeEl.style.display = '';
+            badgeEl.textContent = t('wardrobe.tryOn', { name: t(getSkin(id).nameKey) });
+          } else {
+            skinsMod.clearSkinPreview(gooby);
+            badgeEl.style.display = 'none';
+          }
+        },
+        dispose() {
+          cancelAnimationFrame(raf);
+          window.removeEventListener('resize', resize);
+          skinsMod.clearSkinPreview(gooby);
+          gooby.dispose();
+          renderer.dispose();
+        },
+      };
+      if (selSkin) skinStage.setSkin(selSkin);
+    } catch (err) {
+      console.warn('[shop] skin try-on stage unavailable:', err);
+    }
+  }
+
+  function renderSkins() {
+    const level = store.get('level') ?? 1;
+    const locked = level < UNLOCKS.SKINS;
+    const ownedSkins = store.get('skins.owned') ?? [DEFAULT_SKIN];
+    const equippedSkin = store.get('skins.equipped') ?? DEFAULT_SKIN;
+
+    if (locked) {
+      const banner = document.createElement('div');
+      banner.className = 'shop-banner';
+      banner.innerHTML = `
+        <span style="font-size:30px">🔒</span>
+        <span class="shop-banner-text">
+          <span class="shop-banner-title">${t('shop.tab.skins')}</span><br>
+          <span class="shop-banner-body">${t('shop.skins.needLevel', { level: UNLOCKS.SKINS })}</span>
+        </span>`;
+      bodyEl.appendChild(banner);
+    } else {
+      const pitch = document.createElement('div');
+      pitch.className = 'shop-banner-body g22-care-hint';
+      pitch.textContent = t('shop.skins.pitch');
+      bodyEl.appendChild(pitch);
+    }
+
+    // live 3D try-on stage (lazy renderer boot)
+    const stageEl = document.createElement('div');
+    stageEl.className = 'g22-skin-stage';
+    const badgeEl = document.createElement('div');
+    badgeEl.className = 'g22-skin-badge';
+    badgeEl.style.display = 'none';
+    stageEl.appendChild(badgeEl);
+    bodyEl.appendChild(stageEl);
+    mountSkinStage(stageEl, badgeEl);
+
+    const grid = document.createElement('div');
+    grid.className = 'shop-grid';
+    for (const def of SKINS) {
+      const owned = ownedSkins.includes(def.id);
+      const equipped = equippedSkin === def.id;
+      const card = document.createElement('button');
+      card.className =
+        `shop-card g22-skin-card${equipped ? ' shop-card-sel' : ''}` +
+        `${selSkin === def.id ? ' g22-skin-tryon' : ''}${locked ? ' g22-locked' : ''}`;
+      const state = equipped
+        ? `<span class="shop-state">✓ ${t('wardrobe.equipped')}</span>`
+        : owned
+          ? `<span class="shop-state">${t('shop.owned')} · ${t('shop.apply')}</span>`
+          : priceTag(def.price);
+      card.innerHTML = `
+        <span class="g22-skin-chip" style="${skinSwatchStyle(def)}"></span>
+        <span class="shop-name">${t(def.nameKey)}</span>
+        ${state}`;
+      card.addEventListener('click', () => {
+        audio.play('ui.tap');
+        if (locked) {
+          ui.toast('shop.skins.needLevel', { level: UNLOCKS.SKINS });
+          return;
+        }
+        if (owned) {
+          if (!equipped) {
+            selSkin = null;
+            store.update((state2) => {
+              state2.skins.equipped = def.id;
+            });
+            ui.toast('toast.appliedItem', { name: t(def.nameKey) });
+          }
+          skinStage?.setSkin(null);
+          renderBody();
+          return;
+        }
+        // not owned: live try-on; buying needs the shop trip (§C4)
+        selSkin = selSkin === def.id ? null : def.id;
+        skinStage?.setSkin(selSkin);
+        if (!atTrip() && selSkin) ui.toast('shop.browseHint');
+        for (const el of grid.children) {
+          el.classList.toggle('g22-skin-tryon', el === card && !!selSkin);
+        }
+      });
+      if (atTrip() && !locked && !owned) {
+        const buyBtn = document.createElement('span');
+        buyBtn.className = 'btn btn-teal g22-skin-buy';
+        buyBtn.textContent = t('shop.buy');
+        buyBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const res = buySkin(store, def.id);
+          if (res.ok) {
+            selSkin = null;
+            audio.play('coin.spend');
+            audio.play('jingle.outfit');
+            ui.toast('toast.itemBought', { name: t(def.nameKey) });
+            skinStage?.setSkin(null);
+          } else if (res.reason === 'coins') {
+            ui.toast('toast.notEnoughCoins');
+          } else if (res.reason === 'level') {
+            ui.toast('shop.skins.needLevel', { level: UNLOCKS.SKINS });
+          }
+          renderBody();
+        });
+        card.appendChild(buyBtn);
+      }
+      grid.appendChild(card);
+    }
+    bodyEl.appendChild(grid);
+  }
+
   // ------------------------------------------------------------ frame/tabs
   const TABS = [
     ['food', 'shop.tab.food', renderFood],
     ['furniture', 'shop.tab.furniture', renderFurniture],
     ['decor', 'shop.tab.decor', renderDecor],
     ['outfits', 'shop.tab.outfits', renderOutfits],
+    ['skins', 'shop.tab.skins', renderSkins], // V2/G22 (§C8.5, L5 gate §B6)
   ];
 
   function renderBody() {
     if (!bodyEl) return;
+    disposeSkinStage(); // V2/G22: the skins tab rebuilds its 3D stage per render
     bodyEl.textContent = '';
     TABS.find(([id]) => id === tab)?.[2]();
   }
@@ -449,6 +805,9 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
       tab = TABS.some(([id]) => id === params.tab) ? params.tab : 'food';
       selFood = null;
       qty = 1;
+      foodFilter = 'all'; // V2/G22
+      furnRoom = 'all';
+      selSkin = null;
 
       const wrap = document.createElement('div');
       wrap.className = 'shop-wrap';
@@ -508,6 +867,8 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
       for (const off of subs) off?.();
       subs = [];
       bodyEl = null;
+      disposeSkinStage(); // V2/G22: stop the skins-tab preview renderer
+      selSkin = null;
     },
   };
 }

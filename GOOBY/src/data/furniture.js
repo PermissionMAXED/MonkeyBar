@@ -6,6 +6,10 @@
 // entries (`procedural: true`) are built in code by home/decor.js: the 3
 // framed wall-art canvases and the mini-Gooby doll plushie.
 // Pure data: no three.js/DOM imports (§B) — importable by node:test.
+//
+// V2/G22 (PLAN2 §C8): +23 indoor buyables (incl. 2 new procedural canvases),
+// 11 garden decor items across the 6 §C8.3 slots (7 buyable → the §A3 "+30
+// new furniture buyables"), wallpapers 6→10 and floors 4→7 catalog rows.
 
 /**
  * @typedef {Object} FurnitureEntry
@@ -16,11 +20,23 @@
  *                                 (rugs are shared living/bedroom items — §C5.2)
  * @property {number} price        coins (0 for the free defaults)
  * @property {string} nameKey      strings.js key for the display name
- * @property {string} [glb]        asset key for core/assets.js ('furniture-kit/…')
+ * @property {string} [glb]        asset key for core/assets.js ('furniture-kit/…';
+ *                                 V2/G22 garden pieces resolve to other packs,
+ *                                 e.g. 'nature-kit/…' — PLAN2 §C8.3)
  * @property {readonly string[]} [pieces] GLB names of a multi-piece set (table set)
  *                                 — layouts live in the room defs' piecesByItem
  * @property {boolean} [default]   free default of its slot (pre-placed by G4)
  * @property {boolean} [procedural] built in code by home/decor.js (no GLB)
+ * @property {'ceiling'} [mount]   V2/G22: hang from the slot anchor instead of
+ *                                 grounding on it (ceiling fan — PLAN2 §C8.1)
+ * @property {readonly {glb: string, at: readonly number[], rotY?: number,
+ *   scale?: number}[]} [cluster]  V2/G22: multi-GLB scatter layout built by
+ *                                 decor.js (flower beds — PLAN2 §C8.3)
+ * @property {string} [tint]       V2/G22: hex tint decor.js applies to the GLB
+ * @property {'foliage'|'bloom'} [tintTarget] which materials get the tint:
+ *                                 'foliage' = green-dominant (blossom-tree
+ *                                 canopy), 'bloom' = everything non-green
+ *                                 (rose-bed petals)
  *
  * @typedef {Object} SurfaceEntry  wallpaper / floor colorway
  * @property {string} id           painter id (G4 roomManager setWallpaper/setFloor)
@@ -99,6 +115,79 @@ export const FURNITURE = F([
   furn({ id: 'bear', slot: 'plushie', rooms: ['bedroom'], price: 0, default: true }),
   // procedural mini-Gooby doll plushie, 600c (§C5.2)
   furn({ id: 'proc:miniGooby', slot: 'plushie', rooms: ['bedroom'], price: 600, procedural: true }),
+
+  // ======================= V2/G22 (PLAN2 §C8.1) =======================
+  // +23 indoor buyables (all GLBs were already in v1's furniture-kit
+  // whitelist). New slots: living ceilingFan + sideboard, kitchen bar,
+  // bathroom washer, bedroom sideTable + floorClutter — anchors live in the
+  // marked V2/G22 blocks of home/rooms/*.js.
+  // ---- living: 4th seat, side furniture, ceiling fan, 2 new canvases ----
+  furn({ id: 'loungeChair', slot: 'sofa', rooms: ['living'], price: 180 }),
+  furn({ id: 'tableCoffee', slot: 'sideboard', rooms: ['living'], price: 140 }),
+  furn({ id: 'tableCoffeeGlass', slot: 'sideboard', rooms: ['living'], price: 200 }),
+  furn({ id: 'cabinetTelevision', slot: 'sideboard', rooms: ['living'], price: 160 }),
+  furn({ id: 'radio', slot: 'sideboard', rooms: ['living'], price: 90 }),
+  furn({ id: 'speaker', slot: 'sideboard', rooms: ['living'], price: 110 }),
+  // hangs from the ceiling anchor instead of grounding on it
+  furn({ id: 'ceilingFan', slot: 'ceilingFan', rooms: ['living'], price: 150, mount: 'ceiling' }),
+  furn({ id: 'proc:artSkyline', slot: 'wallArt', rooms: ['living'], price: 140, procedural: true }),
+  furn({ id: 'proc:artRainbow', slot: 'wallArt', rooms: ['living'], price: 140, procedural: true }),
+  // ---- kitchen: 4th appliance + breakfast bar family ----
+  furn({ id: 'kitchenMicrowave', slot: 'appliance', rooms: ['kitchen'], price: 130 }),
+  furn({ id: 'kitchenBar', slot: 'bar', rooms: ['kitchen'], price: 240 }),
+  // pairs with the bar (§C8.1) — the room def lays out a 2-stool set
+  furn({ id: 'stoolBar', slot: 'bar', rooms: ['kitchen'], price: 80 }),
+  // ---- bathroom: washer + 3rd tub variant ----
+  furn({ id: 'washer', slot: 'washer', rooms: ['bathroom'], price: 260 }),
+  furn({ id: 'shower', slot: 'tub', rooms: ['bathroom'], price: 300 }),
+  // ---- bedroom: side furniture + floor clutter ----
+  furn({ id: 'sideTable', slot: 'sideTable', rooms: ['bedroom'], price: 90 }),
+  furn({ id: 'sideTableDrawers', slot: 'sideTable', rooms: ['bedroom'], price: 130 }),
+  furn({ id: 'cabinetBed', slot: 'sideTable', rooms: ['bedroom'], price: 170 }),
+  furn({ id: 'cabinetBedDrawer', slot: 'sideTable', rooms: ['bedroom'], price: 190 }),
+  furn({ id: 'coatRackStanding', slot: 'sideTable', rooms: ['bedroom'], price: 100 }),
+  furn({ id: 'pillow', slot: 'floorClutter', rooms: ['bedroom'], price: 45 }),
+  furn({ id: 'pillowBlue', slot: 'floorClutter', rooms: ['bedroom'], price: 45 }),
+  furn({ id: 'books', slot: 'floorClutter', rooms: ['bedroom'], price: 35 }),
+  furn({ id: 'trashcan', slot: 'floorClutter', rooms: ['bedroom'], price: 40 }),
+
+  // ======================= V2/G22 (PLAN2 §C8.3) =======================
+  // Garden decor: 6 slots (gardenBench / gardenGnome / birdbath / flowerBed /
+  // gardenPath / gardenTree), 11 items — 4 free defaults + 7 buyables (the
+  // §A3 "+30 new furniture buyables" = 23 indoor + these 7). G19 renders the
+  // slot anchors in rooms/garden.js; the catalog + decor application are ours.
+  // GLB entries here are pack-qualified ('nature-kit/…', 'city-kit-suburban/…')
+  // — test/assets.test.js text-scans this file and resolves every key.
+  furn({ id: 'proc:benchWood', slot: 'gardenBench', rooms: ['garden'], price: 0, default: true, procedural: true }),
+  furn({ id: 'proc:benchPastel', slot: 'gardenBench', rooms: ['garden'], price: 220, procedural: true }),
+  // gnome slot has no free default (§C8.3: "none default")
+  furn({ id: 'proc:gnome', slot: 'gardenGnome', rooms: ['garden'], price: 180, procedural: true }),
+  furn({ id: 'proc:gnomeGold', slot: 'gardenGnome', rooms: ['garden'], price: 900, procedural: true }), // endgame flex
+  furn({ id: 'proc:birdbath', slot: 'birdbath', rooms: ['garden'], price: 240, procedural: true }),
+  furn({
+    id: 'flowerBedWild', slot: 'flowerBed', rooms: ['garden'], price: 0, default: true,
+    glb: 'nature-kit/flower_yellowA',
+    cluster: F([
+      F({ glb: 'nature-kit/flower_yellowA', at: F([-0.16, 0, 0.05]), rotY: 10 }),
+      F({ glb: 'nature-kit/flower_purpleA', at: F([0.13, 0, -0.09]), rotY: 130 }),
+      F({ glb: 'nature-kit/flower_redA', at: F([0.04, 0, 0.15]), rotY: -70 }),
+    ]),
+  }),
+  furn({
+    id: 'flowerBedRose', slot: 'flowerBed', rooms: ['garden'], price: 160,
+    glb: 'nature-kit/flower_redA', tint: '#FF5C8A', tintTarget: 'bloom',
+    cluster: F([
+      F({ glb: 'nature-kit/flower_redA', at: F([-0.15, 0, 0.03]), rotY: 25 }),
+      F({ glb: 'nature-kit/flower_redA', at: F([0.12, 0, -0.1]), rotY: 160, scale: 0.9 }),
+      F({ glb: 'nature-kit/flower_redA', at: F([0.03, 0, 0.14]), rotY: -95, scale: 1.08 }),
+    ]),
+  }),
+  furn({ id: 'proc:pathDirt', slot: 'gardenPath', rooms: ['garden'], price: 0, default: true, procedural: true }),
+  furn({ id: 'pathStones', slot: 'gardenPath', rooms: ['garden'], price: 190, glb: 'city-kit-suburban/path-stones-short' }),
+  furn({ id: 'treeDefault', slot: 'gardenTree', rooms: ['garden'], price: 0, default: true, glb: 'nature-kit/tree_default' }),
+  // tinted tree_oak with a pink canopy (§C8.3 blossom tree)
+  furn({ id: 'treeBlossom', slot: 'gardenTree', rooms: ['garden'], price: 260, glb: 'nature-kit/tree_oak', tint: '#FFB7D5', tintTarget: 'foliage' }),
+  // ==================================================== end V2/G22 ====
 ]);
 
 /**
@@ -114,6 +203,12 @@ export const WALLPAPERS = F([
   F({ id: 'peach', kind: 'wallpaper', price: 120, nameKey: 'wp.peach', base: '#FFE7D4', motif: '#FFD6B8' }),
   F({ id: 'lavender', kind: 'wallpaper', price: 120, nameKey: 'wp.lavender', base: '#EAE1F6', motif: '#DACBEE' }),
   F({ id: 'stars', kind: 'wallpaper', price: 200, nameKey: 'wp.stars', base: '#3A4374', motif: '#FFE9A8' }),
+  // V2/G22 (PLAN2 §C8.2): +4 colorways — the CanvasTexture painters live in
+  // G19's roomManager block; these are the catalog rows referenced by id.
+  F({ id: 'sunset', kind: 'wallpaper', price: 150, nameKey: 'wp.sunset', base: '#FFC98A', motif: '#FF9E7B' }),
+  F({ id: 'meadow', kind: 'wallpaper', price: 150, nameKey: 'wp.meadow', base: '#E3F2D9', motif: '#A9D68A' }),
+  F({ id: 'candy', kind: 'wallpaper', price: 150, nameKey: 'wp.candy', base: '#FFE3F0', motif: '#FFB7D5' }),
+  F({ id: 'ocean', kind: 'wallpaper', price: 200, nameKey: 'wp.ocean', base: '#D3EEF7', motif: '#7FC9E8' }),
 ]);
 
 /**
@@ -125,6 +220,10 @@ export const FLOORS = F([
   F({ id: 'tile', kind: 'floor', price: 100, nameKey: 'floor.tile', base: '#F0EDE2', motif: '#DCD6C6' }),
   F({ id: 'carpet', kind: 'floor', price: 100, nameKey: 'floor.carpet', base: '#E9C9D4', motif: '#E0BCC9' }),
   F({ id: 'checker', kind: 'floor', price: 150, nameKey: 'floor.checker', base: '#F2E7D3', motif: '#A7D8CF' }),
+  // V2/G22 (PLAN2 §C8.2): +3 floors (painters are G19's, referenced by id)
+  F({ id: 'marble', kind: 'floor', price: 180, nameKey: 'floor.marble', base: '#F2F0EB', motif: '#D8D4CC' }),
+  F({ id: 'walnut', kind: 'floor', price: 160, nameKey: 'floor.walnut', base: '#8A5F3C', motif: '#6E4A2E' }),
+  F({ id: 'terracotta', kind: 'floor', price: 140, nameKey: 'floor.terracotta', base: '#D9825F', motif: '#C06E4C' }),
 ]);
 
 /** @type {Record<string, FurnitureEntry>} */

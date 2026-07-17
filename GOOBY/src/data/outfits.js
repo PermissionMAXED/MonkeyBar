@@ -1,4 +1,5 @@
-// Outfit catalog (§C5.3, binding prices) — 11 procedurally modeled items in
+// Outfit catalog (§C5.3, binding prices; V2/G22 grows it to 20 per PLAN2
+// §C8.4) — procedurally modeled items in
 // three slots (hat / glasses / neck), one item equippable per slot. The meshes
 // themselves are built by character/outfitAttach.js; this catalog is the pure
 // data source (id / slot / price / nameKey). No three.js/DOM imports (§B rule)
@@ -28,14 +29,26 @@ export const OUTFITS = Object.freeze(
     { id: 'cap', slot: 'hat', price: 150 },
     { id: 'topHat', slot: 'hat', price: 300 },
     { id: 'crown', slot: 'hat', price: 1200 }, // endgame flex
+    // --- V2/G22 hats (PLAN2 §C8.4: straw 160, chef 220, flower crown 180, wizard 350) ---
+    { id: 'strawHat', slot: 'hat', price: 160 },
+    { id: 'chefHat', slot: 'hat', price: 220 },
+    { id: 'flowerCrown', slot: 'hat', price: 180 },
+    { id: 'wizardHat', slot: 'hat', price: 350 },
     // --- glasses (round 150, sunglasses 200, star glasses 250) ---
     { id: 'roundGlasses', slot: 'glasses', price: 150 },
     { id: 'sunglasses', slot: 'glasses', price: 200 },
     { id: 'starGlasses', slot: 'glasses', price: 250 },
+    // --- V2/G22 glasses (§C8.4: heart rims 220, monocle 400) ---
+    { id: 'heartGlasses', slot: 'glasses', price: 220 },
+    { id: 'monocle', slot: 'glasses', price: 400 },
     // --- neck (red scarf 120, bowtie 140, striped scarf 180) ---
     { id: 'scarfRed', slot: 'neck', price: 120 },
     { id: 'bowtie', slot: 'neck', price: 140 },
     { id: 'scarfStriped', slot: 'neck', price: 180 },
+    // --- V2/G22 neck (§C8.4: bandana 130, bell collar 160, cape 500) ---
+    { id: 'bandana', slot: 'neck', price: 130 },
+    { id: 'bellCollar', slot: 'neck', price: 160 }, // bell SFX on hop
+    { id: 'cape', slot: 'neck', price: 500 }, // rigid swoosh + hop flutter
   ].map((o) => Object.freeze({ ...o, nameKey: `outfit.${o.id}` }))
 );
 

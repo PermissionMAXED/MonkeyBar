@@ -9,13 +9,22 @@
 // Entry points: HUD wardrobe button, bedroom wardrobe closet tap
 // (roomManager 'tap:wardrobe' — wired here via the same polled module-accessor
 // pattern as the G6/G7 hooks), harness ?open=wardrobe, shop Outfits tab (buy).
+//
+// V2/G22 (PLAN2 §C8.5): a 4th „Fell"/"Fur" category lists the fur-color
+// skins — owned skins equip instantly (skins.equipped + applySkin live on
+// the preview AND globally via the shared materials); un-owned skins try on
+// locally (previewSkin — never leaks into the home scene) and can be bought
+// in buy mode via economy.buySkin.
 
 import * as THREE from 'three';
 import { OUTFIT_SLOTS, OUTFITS, OUTFITS_BY_ID, outfitsForSlot } from '../data/outfits.js';
+import { SKINS, DEFAULT_SKIN, getSkin } from '../data/skins.js'; // V2/G22 (§C8.5)
 import { t } from '../data/strings.js';
 import { icon } from './icons.js';
 import { createGooby } from '../character/gooby.js';
 import { applyOutfits, buildOutfitItem } from '../character/outfitAttach.js';
+import { applySkin, previewSkin, clearSkinPreview } from '../character/skins.js'; // V2/G22
+import { buySkin } from '../systems/economy.js'; // V2/G22 (§C8.5)
 
 const PREVIEW_H = 280;
 const THUMB_SIZE = 108;
@@ -116,11 +125,16 @@ export function registerWardrobe({ store, ui, audio }) {
   /** Live-mount state (screen is a singleton — one mount at a time, §E6). */
   let live = null;
 
+  // V2/G22: the Fur category sits after the 3 outfit slots (§C8.5)
+  const WR_TABS = [...OUTFIT_SLOTS, 'fur'];
+
   function mount(el, params = {}) {
     const buyMode = params.mode === 'buy';
-    let tab = OUTFIT_SLOTS.includes(params.slot) ? params.slot : 'hat';
+    let tab = WR_TABS.includes(params.slot) ? params.slot : 'hat';
     /** @type {{slot: string, id: string}|null} try-on of a NOT-owned item */
     let tryOn = null;
+    /** @type {string|null} V2/G22: fur-skin try-on of a NOT-owned skin */
+    let furTryOn = null;
 
     // ---------- header ----------
     const head = document.createElement('div');
@@ -221,6 +235,9 @@ export function registerWardrobe({ store, ui, audio }) {
 
     const equipped = () => store.get('outfits.equipped') ?? {};
     const owned = () => store.get('outfits.owned') ?? [];
+    // V2/G22 skin slices (§B2 — defaults cream/cream)
+    const ownedSkins = () => store.get('skins.owned') ?? [DEFAULT_SKIN];
+    const equippedSkin = () => store.get('skins.equipped') ?? DEFAULT_SKIN;
 
     /** The preview wears equipped + any active try-on override. */
     function refreshPreview() {
@@ -228,9 +245,13 @@ export function registerWardrobe({ store, ui, audio }) {
       const wear = { ...equipped() };
       if (tryOn) wear[tryOn.slot] = tryOn.id;
       applyOutfits(live.gooby, wear);
-      if (tryOn) {
+      // V2/G22: fur try-on tints ONLY this preview rig (never the home rig)
+      if (furTryOn) previewSkin(live.gooby, getSkin(furTryOn));
+      else clearSkinPreview(live.gooby);
+      if (tryOn || furTryOn) {
+        const nameKey = tryOn ? OUTFITS_BY_ID[tryOn.id].nameKey : getSkin(furTryOn).nameKey;
         tryOnBadge.style.display = '';
-        tryOnBadge.textContent = t('wardrobe.tryOn', { name: t(OUTFITS_BY_ID[tryOn.id].nameKey) });
+        tryOnBadge.textContent = t('wardrobe.tryOn', { name: t(nameKey) });
       } else {
         tryOnBadge.style.display = 'none';
       }
@@ -238,7 +259,7 @@ export function registerWardrobe({ store, ui, audio }) {
 
     function renderTabs() {
       tabs.innerHTML = '';
-      for (const slot of OUTFIT_SLOTS) {
+      for (const slot of WR_TABS) {
         const b = document.createElement('button');
         b.className = `g12-wr-tab${slot === tab ? ' g12-on' : ''}`;
         b.textContent = t(`wardrobe.slot.${slot}`);
@@ -246,6 +267,7 @@ export function registerWardrobe({ store, ui, audio }) {
           audio.play('ui.tap');
           tab = slot;
           tryOn = null;
+          furTryOn = null;
           renderTabs();
           renderGrid();
           refreshPreview();
@@ -293,8 +315,84 @@ export function registerWardrobe({ store, ui, audio }) {
       renderAll();
     }
 
+    // ---------- V2/G22: Fur category (§C8.5) ----------
+    /** @param {import('../data/skins.js').SkinDef} def */
+    function onSkinTap(def) {
+      audio.play('ui.tap');
+      if (ownedSkins().includes(def.id)) {
+        furTryOn = null;
+        if (equippedSkin() !== def.id) {
+          store.update((state) => {
+            state.skins.equipped = def.id;
+          });
+          // shared materials update globally; re-tint THIS rig's body clone
+          applySkin(live?.gooby ?? null, def);
+          ui.toast('toast.appliedItem', { name: t(def.nameKey) });
+        }
+        renderAll();
+        return;
+      }
+      // not owned: local try-on; buying needs the shop trip (§C4)
+      furTryOn = furTryOn === def.id ? null : def.id;
+      if (!buyMode && furTryOn) ui.toast('wardrobe.shopOnly');
+      renderAll();
+    }
+
+    /** @param {import('../data/skins.js').SkinDef} def */
+    function buySkinCard(def) {
+      const res = buySkin(store, def.id); // gates coins AND the L5 unlock
+      if (!res.ok) {
+        audio.play('ui.error');
+        if (res.reason === 'level') ui.toast('shop.skins.needLevel', { level: 5 });
+        else ui.toast('toast.notEnoughCoins');
+        return;
+      }
+      furTryOn = null;
+      applySkin(live?.gooby ?? null, def); // buySkin equips — tint this rig too
+      audio.play('coin.spend');
+      audio.play('jingle.outfit');
+      ui.toast('toast.itemBought', { name: t(def.nameKey) });
+      renderAll();
+    }
+
+    function renderFurGrid() {
+      for (const def of SKINS) {
+        const isOwned = ownedSkins().includes(def.id);
+        const isEquipped = equippedSkin() === def.id;
+        const card = document.createElement('button');
+        card.className = 'g12-wr-item';
+        if (isEquipped) card.classList.add('g12-equipped');
+        else if (furTryOn === def.id) card.classList.add('g12-tryon');
+        const sub = isEquipped
+          ? `<span class="g12-wr-item-sub g12-sub-equipped">${t('wardrobe.equipped')}</span>`
+          : isOwned
+            ? `<span class="g12-wr-item-sub g12-sub-owned">${t('wardrobe.owned')}</span>`
+            : `<span class="g12-wr-item-sub">${icon('coin', 13)}${def.price}</span>`;
+        card.innerHTML = `
+          <span class="g22-skin-chip" style="background:linear-gradient(135deg,${def.colors.body} 0 55%,${def.colors.belly} 55% 80%,${def.colors.earInner} 80% 100%);"></span>
+          <span class="g12-wr-item-name">${t(def.nameKey)}</span>
+          ${sub}`;
+        card.addEventListener('click', () => onSkinTap(def));
+        if (buyMode && !isOwned) {
+          const buyBtn = document.createElement('span');
+          buyBtn.className = 'btn btn-teal g12-wr-buy';
+          buyBtn.textContent = t('wardrobe.buy');
+          buyBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            buySkinCard(def);
+          });
+          card.appendChild(buyBtn);
+        }
+        grid.appendChild(card);
+      }
+    }
+
     function renderGrid() {
       grid.innerHTML = '';
+      if (tab === 'fur') {
+        renderFurGrid(); // V2/G22 (§C8.5)
+        return;
+      }
       for (const def of outfitsForSlot(tab)) {
         const isOwned = owned().includes(def.id);
         const isEquipped = equipped()[def.slot] === def.id;
@@ -350,6 +448,7 @@ export function registerWardrobe({ store, ui, audio }) {
     if (live.resize) window.removeEventListener('resize', live.resize);
     if (live.gooby) {
       applyOutfits(live.gooby, {}); // dispose attached outfit geometries
+      clearSkinPreview(live.gooby); // V2/G22: drop local fur try-on clones
       live.gooby.dispose();
     }
     live.renderer?.dispose();

@@ -2,6 +2,8 @@
 // catalog integrity against the binding §C5.2 table and G4's room defs,
 // GLB assets on disk, canPlace slot/item/room compat, place/unplace with
 // ownership + persistence, wallpaper/floor buy+apply.
+// V2/G22 extends: §C8.1/§C8.2/§C8.3 catalog counts + binding prices, the new
+// indoor slots, garden decor + the pre-G19 catalog placement fallback.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -20,6 +22,7 @@ import {
   roomSlots,
   ownKey,
 } from '../src/data/furniture.js';
+import { EN, DE } from '../src/data/strings.js';
 import {
   canPlace,
   place,
@@ -72,7 +75,15 @@ test('every entry has slot/rooms/price/nameKey and glb XOR procedural', () => {
       assert.equal(e.glb, undefined, e.id);
       assert.match(e.id, /^proc:/, e.id);
     } else {
-      assert.equal(e.glb, `furniture-kit/${e.id}`, e.id);
+      // V2/G22: every glb is a pack-qualified asset key; garden pieces may
+      // resolve to other packs (§C8.3) while furniture-kit keys stay id-derived
+      assert.match(e.glb, /^[a-z0-9-]+\/[\w-]+$/, e.id);
+      if (e.glb.startsWith('furniture-kit/')) {
+        assert.equal(e.glb, `furniture-kit/${e.id}`, e.id);
+      }
+      for (const piece of e.cluster ?? []) {
+        assert.match(piece.glb, /^[a-z0-9-]+\/[\w-]+$/, `${e.id} cluster piece`);
+      }
     }
   }
 });
@@ -119,11 +130,16 @@ test('§C5.2 binding spot prices', () => {
   assert.equal(getFloor('checker').price, 150);
 });
 
+// slots that start empty: v1's wallArt + the V2/G22 §C8.1 additions
+const EMPTY_DEFAULT_SLOTS = new Set([
+  'wallArt', 'ceilingFan', 'sideboard', 'bar', 'washer', 'sideTable', 'floorClutter',
+]);
+
 test('every slot has a free default marked price:0/default:true (§C5.2 rule)', () => {
   for (const def of ROOM_DEFS) {
     for (const [slotId, slot] of Object.entries(def.slots)) {
       if (slot.default == null) {
-        assert.equal(slotId, 'wallArt'); // the one slot that starts empty
+        assert.ok(EMPTY_DEFAULT_SLOTS.has(slotId), `${def.id}:${slotId} starts empty`);
         continue;
       }
       const entry = getEntry(slot.default);
@@ -157,17 +173,24 @@ test('catalog matches the room defs exactly (both directions)', () => {
   // reverse: every catalog entry is reachable in each room it claims
   for (const e of FURNITURE) {
     for (const roomId of e.rooms) {
+      // V2/G22: the garden's RoomDef is G19's rooms/garden.js — its slot
+      // compat is covered by the catalog-fallback tests below instead
+      if (roomId === 'garden') continue;
       const def = ROOM_DEFS.find((d) => d.id === roomId);
       assert.ok(def?.slots[e.slot]?.items.includes(e.id), `${e.id} listed by ${roomId}:${e.slot}`);
     }
   }
 });
 
-test('every non-procedural entry (incl. set pieces) has its GLB on disk', () => {
+test('every non-procedural entry (incl. set + cluster pieces) has its GLB on disk', () => {
   const files = new Set();
   for (const e of FURNITURE) {
     if (e.procedural) continue;
-    for (const name of e.pieces ?? [e.id]) files.add(`furniture-kit/${name}.glb`);
+    // V2/G22: glb keys are pack-qualified (garden pieces live outside
+    // furniture-kit); multi-piece sets stay furniture-kit names
+    if (e.pieces) for (const name of e.pieces) files.add(`furniture-kit/${name}.glb`);
+    else files.add(`${e.glb}.glb`);
+    for (const piece of e.cluster ?? []) files.add(`${piece.glb}.glb`);
   }
   for (const rel of files) {
     assert.ok(existsSync(join(ASSET_DIR, rel)), `missing GLB: ${rel}`);
@@ -305,6 +328,7 @@ test('slotOptions reports owned/placed per variant for the decorate picker', () 
       ['loungeSofa', true, false],
       ['loungeDesignSofa', false, false],
       ['loungeSofaCorner', true, true],
+      ['loungeChair', false, false], // V2/G22 §C8.1 4th seat
     ]
   );
 });
@@ -357,4 +381,137 @@ test('floor buy+apply mirrors wallpaper and stays atomic on low coins', () => {
   assert.equal(appliedSurface(store, 'floor', 'bathroom'), 'tile');
   assert.equal(store.get('decor.floor.bathroom'), 'tile');
   assert.equal(store.get('coins'), 0);
+});
+
+// ==================== V2/G22 (PLAN2 §C8) — catalog 2.0 ======================
+
+test('§A3 catalog counts: +30 new furniture buyables, wallpapers 10, floors 7', () => {
+  // 40 v1 entries + 23 §C8.1 indoor + 11 §C8.3 garden items
+  assert.equal(FURNITURE.length, 74);
+  // §A3 "+30 new buyables": v1 ships 23 non-default furniture buyables;
+  // 2.0 adds 23 indoor + 7 buyable garden pieces = 53 total
+  const buyables = FURNITURE.filter((e) => !e.default && e.price > 0);
+  assert.equal(buyables.length, 53);
+  assert.equal(WALLPAPERS.length, 10); // §C8.2: 6 → 10
+  assert.equal(FLOORS.length, 7); // §C8.2: 4 → 7
+  // every default is free and every non-default costs coins
+  for (const e of FURNITURE) {
+    assert.equal(e.price === 0, !!e.default, e.id);
+  }
+});
+
+test('§C8.1 indoor additions: binding prices, slots and rooms', () => {
+  /** id → [slot, room, price] (§C8.1 verbatim). */
+  const SPEC = {
+    loungeChair: ['sofa', 'living', 180],
+    tableCoffee: ['sideboard', 'living', 140],
+    tableCoffeeGlass: ['sideboard', 'living', 200],
+    cabinetTelevision: ['sideboard', 'living', 160],
+    radio: ['sideboard', 'living', 90],
+    speaker: ['sideboard', 'living', 110],
+    ceilingFan: ['ceilingFan', 'living', 150],
+    'proc:artSkyline': ['wallArt', 'living', 140],
+    'proc:artRainbow': ['wallArt', 'living', 140],
+    kitchenMicrowave: ['appliance', 'kitchen', 130],
+    kitchenBar: ['bar', 'kitchen', 240],
+    stoolBar: ['bar', 'kitchen', 80],
+    washer: ['washer', 'bathroom', 260],
+    shower: ['tub', 'bathroom', 300],
+    sideTable: ['sideTable', 'bedroom', 90],
+    sideTableDrawers: ['sideTable', 'bedroom', 130],
+    cabinetBed: ['sideTable', 'bedroom', 170],
+    cabinetBedDrawer: ['sideTable', 'bedroom', 190],
+    coatRackStanding: ['sideTable', 'bedroom', 100],
+    pillow: ['floorClutter', 'bedroom', 45],
+    pillowBlue: ['floorClutter', 'bedroom', 45],
+    books: ['floorClutter', 'bedroom', 35],
+    trashcan: ['floorClutter', 'bedroom', 40],
+  };
+  assert.equal(Object.keys(SPEC).length, 23);
+  for (const [id, [slot, room, price]] of Object.entries(SPEC)) {
+    const e = FURNITURE_BY_ID[id];
+    assert.ok(e, `catalog missing ${id}`);
+    assert.equal(e.slot, slot, `${id} slot`);
+    assert.ok(e.rooms.includes(room), `${id} rooms`);
+    assert.equal(e.price, price, `${id} price (§C8.1 binding)`);
+    assert.equal(e.default, undefined, `${id} is a buyable`);
+  }
+  // the fan hangs from the ceiling anchor (decor.js mount handling)
+  assert.equal(FURNITURE_BY_ID.ceilingFan.mount, 'ceiling');
+});
+
+test('§C8.3 garden decor: 6 slots, 11 items, verbatim prices + defaults', () => {
+  assert.deepEqual(roomSlots('garden'), [
+    'gardenBench', 'gardenGnome', 'birdbath', 'flowerBed', 'gardenPath', 'gardenTree',
+  ]);
+  const garden = FURNITURE.filter((e) => e.rooms.includes('garden'));
+  assert.equal(garden.length, 11);
+  assert.deepEqual(
+    garden.filter((e) => e.default).map((e) => e.id),
+    ['proc:benchWood', 'flowerBedWild', 'proc:pathDirt', 'treeDefault']
+  );
+  const price = (id) => FURNITURE_BY_ID[id].price;
+  assert.equal(price('proc:benchPastel'), 220);
+  assert.equal(price('proc:gnome'), 180);
+  assert.equal(price('proc:gnomeGold'), 900); // endgame flex
+  assert.equal(price('proc:birdbath'), 240);
+  assert.equal(price('flowerBedRose'), 160);
+  assert.equal(price('pathStones'), 190);
+  assert.equal(price('treeBlossom'), 260);
+  // §C8.3 models: suburban stone path, tinted oak blossom tree, rose tint
+  assert.equal(FURNITURE_BY_ID.pathStones.glb, 'city-kit-suburban/path-stones-short');
+  assert.equal(FURNITURE_BY_ID.treeBlossom.glb, 'nature-kit/tree_oak');
+  assert.equal(FURNITURE_BY_ID.treeBlossom.tintTarget, 'foliage');
+  assert.equal(FURNITURE_BY_ID.flowerBedRose.tintTarget, 'bloom');
+  // flower beds are nature-kit clusters (§C8.3 "flower cluster")
+  assert.ok(FURNITURE_BY_ID.flowerBedWild.cluster.length >= 3);
+  assert.ok(FURNITURE_BY_ID.flowerBedRose.cluster.length >= 3);
+});
+
+test('§C8.2 wallpaper/floor additions: verbatim ids + prices', () => {
+  assert.equal(getWallpaper('sunset').price, 150);
+  assert.equal(getWallpaper('meadow').price, 150);
+  assert.equal(getWallpaper('candy').price, 150);
+  assert.equal(getWallpaper('ocean').price, 200);
+  assert.equal(getFloor('marble').price, 180);
+  assert.equal(getFloor('walnut').price, 160);
+  assert.equal(getFloor('terracotta').price, 140);
+});
+
+test('garden placement works pre-G19 via the catalog slot fallback', () => {
+  // slot defs derive from the catalog when the room def is not in
+  // furniturePlacement's ROOMS_BY_ID (rooms/garden.js is G19's)
+  assert.ok(canPlace('proc:gnomeGold', 'garden', 'gardenGnome'));
+  assert.ok(canPlace('pathStones', 'garden', 'gardenPath'));
+  assert.ok(!canPlace('proc:gnomeGold', 'garden', 'gardenPath')); // wrong slot
+  assert.ok(!canPlace('loungeChair', 'garden', 'gardenBench')); // indoor item
+  assert.equal(slotDefault('garden', 'gardenPath'), 'proc:pathDirt');
+  assert.equal(slotDefault('garden', 'gardenGnome'), null); // "none default" (§C8.3)
+
+  const store = makeStore();
+  store.set('coins', 2000);
+  assert.deepEqual(buyFurniture(store, 'proc:gnomeGold'), { ok: true });
+  assert.deepEqual(place(store, 'proc:gnomeGold', 'garden', 'gardenGnome'), { ok: true });
+  assert.deepEqual(buyFurniture(store, 'pathStones'), { ok: true });
+  assert.deepEqual(place(store, 'pathStones', 'garden', 'gardenPath'), { ok: true });
+  assert.equal(store.get('furniture.placed')['garden:gardenGnome'], 'proc:gnomeGold');
+  assert.equal(placedItem(store, 'garden', 'gardenPath'), 'pathStones');
+  assert.equal(store.get('coins'), 2000 - 900 - 190);
+  // free garden defaults are owned out of the box
+  assert.ok(isFurnitureOwned(store, 'proc:benchWood'));
+  assert.ok(isFurnitureOwned(store, 'treeDefault'));
+  // decorate-picker options work for garden slots too
+  assert.deepEqual(
+    slotOptions(store, 'garden', 'gardenGnome').map((o) => [o.entry.id, o.owned, o.placed]),
+    [['proc:gnome', false, false], ['proc:gnomeGold', true, true]]
+  );
+  unplace(store, 'garden', 'gardenPath'); // back to the free dirt path
+  assert.equal(placedItem(store, 'garden', 'gardenPath'), 'proc:pathDirt');
+});
+
+test('every catalog nameKey (incl. V2/G22 additions) exists in EN AND DE', () => {
+  for (const e of [...FURNITURE, ...WALLPAPERS, ...FLOORS]) {
+    assert.equal(typeof EN[e.nameKey], 'string', `EN missing ${e.nameKey}`);
+    assert.equal(typeof DE[e.nameKey], 'string', `DE missing ${e.nameKey}`);
+  }
 });

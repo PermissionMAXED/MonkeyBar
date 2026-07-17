@@ -1,4 +1,5 @@
-// Outfit attach (§C5.3 / §D2.3) — 11 procedural outfit items built from
+// Outfit attach (§C5.3 / §D2.3; V2/G22 adds the 9 §C8.4 items → 20 total) —
+// procedural outfit items built from
 // three.js primitives and attached to Gooby's anchors (hat / glasses / neck).
 // All positions/sizes are in Gooby "recipe space" (§D2.2 — the anchors live
 // inside the rig, which is uniformly scaled to the 1.05-unit target height),
@@ -71,6 +72,16 @@ function outfitMat(color, opts = {}) {
 
 /** Gold with a metallic sheen (crown). */
 const gold = () => outfitMat(C.GOLD, { roughness: 0.32, metalness: 0.55 });
+
+// V2/G22 (§C8.4): extra palette entries for the 9 new items.
+const C2 = Object.freeze({
+  STRAW: '#E8C97A',
+  STRAW_DARK: '#C9A85C',
+  WHITE: '#FFFFFF',
+  LEAF: '#5FA85E',
+  PURPLE: '#6C55A3',
+  PURPLE_DARK: '#55428A',
+});
 
 // ---------------------------------------------------------------------------
 // Builder helpers
@@ -350,7 +361,309 @@ function buildScarfStriped() {
   return g;
 }
 
-/** @type {Record<string, () => THREE.Group>} id → builder (all 11 §C5.3 items). */
+// ---------------------------------------------------------------------------
+// V2/G22: the 9 new §C8.4 item builders (all procedural, existing anchors)
+// ---------------------------------------------------------------------------
+
+/**
+ * Solid 5-point star (no hole) — wizardHat decals.
+ * @param {number} outerR @param {number} innerR @param {number} depth
+ */
+function starSolidGeometry(outerR, innerR, depth) {
+  const shape = new THREE.Shape();
+  for (let i = 0; i < 10; i += 1) {
+    const r = i % 2 === 0 ? outerR : innerR;
+    const a = (i / 10) * Math.PI * 2 + Math.PI / 2;
+    if (i === 0) shape.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+    else shape.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+  }
+  shape.closePath();
+  return new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false, curveSegments: 4 });
+}
+
+/** Straw hat 160 — wide garden brim + shallow dome + red band. */
+function buildStrawHat() {
+  const g = new THREE.Group();
+  const straw = outfitMat(C2.STRAW, { roughness: 0.9 });
+  const brim = add(g, new THREE.CylinderGeometry(0.19, 0.2, 0.015, 26), straw, [0, 0.008, 0]);
+  brim.scale.set(1, 1, 0.92); // slight oval so the brim clears the ears
+  const dome = add(
+    g,
+    new THREE.SphereGeometry(0.104, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    straw,
+    [0, 0.012, 0]
+  );
+  dome.scale.set(1, 0.8, 1);
+  add(g, new THREE.CylinderGeometry(0.106, 0.103, 0.032, 20), outfitMat(C.RED, { roughness: 0.7 }), [0, 0.036, 0]);
+  // stitch ring on the brim edge (darker straw)
+  const stitch = add(g, new THREE.TorusGeometry(0.192, 0.006, 6, 26), outfitMat(C2.STRAW_DARK, { roughness: 0.9 }), [0, 0.014, 0]);
+  stitch.rotation.x = Math.PI / 2;
+  stitch.scale.set(1, 0.92, 1);
+  g.position.set(0, -0.012, 0.07);
+  g.rotation.x = 0.22;
+  return g;
+}
+
+/** Chef hat 220 — white cylinder base + puffy sphere-cluster top. */
+function buildChefHat() {
+  const g = new THREE.Group();
+  const white = outfitMat(C2.WHITE, { roughness: 0.85 });
+  add(g, new THREE.CylinderGeometry(0.095, 0.088, 0.1, 20), white, [0, 0.05, 0]);
+  // the puff: a ring of 5 small spheres + a fat center one
+  const puffGeo = new THREE.SphereGeometry(0.052, 12, 10);
+  for (let i = 0; i < 5; i += 1) {
+    const a = (i / 5) * Math.PI * 2;
+    add(g, puffGeo, white, [Math.cos(a) * 0.062, 0.118, Math.sin(a) * 0.062]);
+  }
+  add(g, new THREE.SphereGeometry(0.075, 14, 12), white, [0, 0.142, 0]);
+  add(g, new THREE.CylinderGeometry(0.0965, 0.0965, 0.02, 20), outfitMat(C.CREAM, { roughness: 0.8 }), [0, 0.012, 0]);
+  g.position.set(0, -0.015, 0.07);
+  g.rotation.x = 0.2;
+  return g;
+}
+
+/** Flower crown 180 — leafy torus ring + 6 flower blobs (§C8.4). */
+function buildFlowerCrown() {
+  const g = new THREE.Group();
+  const ring = add(g, new THREE.TorusGeometry(0.102, 0.02, 8, 24), outfitMat(C2.LEAF, { roughness: 0.8 }), [0, 0.02, 0]);
+  ring.rotation.x = Math.PI / 2;
+  const petal = new THREE.SphereGeometry(0.03, 10, 8);
+  const heart = new THREE.SphereGeometry(0.016, 8, 6);
+  const cols = [C.PINK, C.CREAM, C.YELLOW];
+  for (let i = 0; i < 6; i += 1) {
+    const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
+    const x = Math.cos(a) * 0.104;
+    const z = Math.sin(a) * 0.104;
+    const blob = add(g, petal, outfitMat(cols[i % 3], { roughness: 0.75 }), [x, 0.028, z]);
+    blob.scale.set(1, 0.8, 1);
+    add(g, heart, outfitMat(cols[(i + 1) % 3], { roughness: 0.6 }), [x, 0.054, z]);
+  }
+  g.position.set(0, -0.01, 0.07);
+  g.rotation.x = 0.18;
+  return g;
+}
+
+/** Wizard hat 350 — bent cone + brim + gold stars (§C8.4). */
+function buildWizardHat() {
+  const g = new THREE.Group();
+  const purple = outfitMat(C2.PURPLE, { roughness: 0.6 });
+  add(g, new THREE.CylinderGeometry(0.148, 0.155, 0.016, 24), outfitMat(C2.PURPLE_DARK, { roughness: 0.6 }), [0, 0.008, 0]);
+  add(g, new THREE.ConeGeometry(0.098, 0.17, 18), purple, [0, 0.1, 0]);
+  // the bent tip: a smaller cone leaning to the side off the main cone's top
+  const tip = add(g, new THREE.ConeGeometry(0.041, 0.12, 12), purple, [0.028, 0.212, 0]);
+  tip.rotation.z = -0.55;
+  const bobble = add(g, new THREE.SphereGeometry(0.02, 8, 8), gold(), [0.062, 0.252, 0]);
+  bobble.scale.setScalar(1); // tip bobble
+  // 3 gold stars stuck on the cone face
+  const starGeo = starSolidGeometry(0.026, 0.012, 0.008);
+  const starSpots = [
+    [0, 0.1, 0.088, 0],
+    [-0.062, 0.05, 0.055, 0.5],
+    [0.06, 0.06, 0.05, -0.6],
+  ];
+  for (const [x, y, z, lean] of starSpots) {
+    const star = add(g, starGeo, gold(), [x, y, z]);
+    star.rotation.y = Math.atan2(x, z); // face outward
+    star.rotation.z = lean;
+  }
+  g.position.set(0, -0.012, 0.068);
+  g.rotation.x = 0.2;
+  return g;
+}
+
+/** Heart-shaped extrusion outline (rim) or fill for the heartGlasses. */
+function heartShape(scale) {
+  const s = new THREE.Shape();
+  s.moveTo(0, 0.32 * scale);
+  s.bezierCurveTo(0.02 * scale, 0.52 * scale, 0.42 * scale, 0.5 * scale, 0.42 * scale, 0.22 * scale);
+  s.bezierCurveTo(0.42 * scale, -0.04 * scale, 0.12 * scale, -0.18 * scale, 0, -0.38 * scale);
+  s.bezierCurveTo(-0.12 * scale, -0.18 * scale, -0.42 * scale, -0.04 * scale, -0.42 * scale, 0.22 * scale);
+  s.bezierCurveTo(-0.42 * scale, 0.5 * scale, -0.02 * scale, 0.52 * scale, 0, 0.32 * scale);
+  return s;
+}
+
+/** Heart glasses 220 — heart-shaped rims + pink-tinted fills (§C8.4). */
+function buildHeartGlasses() {
+  const g = new THREE.Group();
+  const frame = outfitMat(C.PINK, { roughness: 0.4 });
+  const rimShape = heartShape(0.2);
+  rimShape.holes.push(heartShape(0.148));
+  const rimGeo = new THREE.ExtrudeGeometry(rimShape, { depth: 0.014, bevelEnabled: false, curveSegments: 10 });
+  const fillGeo = new THREE.ShapeGeometry(heartShape(0.15), 10);
+  for (const sx of [-1, 1]) {
+    add(g, rimGeo, frame, [sx * 0.112, 0.014, 0.006]);
+    add(g, fillGeo, outfitMat(C.LENS_PINK, { roughness: 0.15, opacity: 0.4 }), [sx * 0.112, 0.014, 0.009]);
+  }
+  addGlassesFrame(g, frame, 0.112);
+  return g;
+}
+
+/** Monocle 400 — a single gold rim on the right eye + hanging chain (§C8.4). */
+function buildMonocle() {
+  const g = new THREE.Group();
+  const rim = add(g, new THREE.TorusGeometry(0.064, 0.011, 10, 22), gold(), [0.112, 0, 0.012]);
+  rim.scale.setScalar(1);
+  add(g, new THREE.CircleGeometry(0.06, 18), outfitMat(C.LENS_TINT, { roughness: 0.12, opacity: 0.28 }), [0.112, 0, 0.008]);
+  // single temple arm on the monocle side
+  const arm = add(g, new THREE.BoxGeometry(0.011, 0.011, 0.17), gold(), [0.205, 0.02, -0.065]);
+  arm.rotation.y = -0.38;
+  // chain: a short arc of tiny gold links draping down toward the cheek
+  const linkGeo = new THREE.SphereGeometry(0.0075, 6, 6);
+  const LINKS = 7;
+  for (let i = 1; i <= LINKS; i += 1) {
+    const p = i / LINKS;
+    add(g, linkGeo, gold(), [
+      0.112 + p * 0.075 + Math.sin(p * Math.PI) * 0.012,
+      -0.064 - p * 0.11 + Math.sin(p * Math.PI) * -0.01,
+      0.012 - p * 0.004,
+    ]);
+  }
+  return g;
+}
+
+/** Bandana 130 — sky-blue neck band + triangle fold on the chest (§C8.4). */
+function buildBandana() {
+  const g = new THREE.Group();
+  const cloth = outfitMat(C.SKY, { roughness: 0.85 });
+  const band = add(g, new THREE.TorusGeometry(0.325, 0.032, 8, 26), cloth, [0, 0.01, -0.05]);
+  band.rotation.x = Math.PI / 2;
+  band.scale.set(1, 1, 0.75);
+  // the folded triangle: a flat extruded prism draping down the belly slope
+  const tri = new THREE.Shape();
+  tri.moveTo(-0.155, 0);
+  tri.lineTo(0.155, 0);
+  tri.lineTo(0.02, -0.27);
+  tri.closePath();
+  const triMesh = add(
+    g,
+    new THREE.ExtrudeGeometry(tri, { depth: 0.02, bevelEnabled: false }),
+    cloth,
+    [0, 0.005, 0.315]
+  );
+  triMesh.rotation.x = -0.34; // follow the belly slope
+  // knot + polka dots on the fold
+  add(g, new THREE.BoxGeometry(0.07, 0.05, 0.05), outfitMat(C.TEAL_DARK, { roughness: 0.8 }), [0, 0.01, 0.32]);
+  const dotGeo = new THREE.CircleGeometry(0.016, 8);
+  for (const [dx, dy] of [[-0.06, -0.07], [0.05, -0.09], [-0.01, -0.16]]) {
+    const dot = add(g, dotGeo, outfitMat(C.CREAM, { roughness: 0.8 }), [dx, 0.005 + dy * Math.cos(0.34), 0.338 - dy * Math.sin(-0.34)]);
+    dot.rotation.x = -0.34;
+  }
+  g.position.y = -0.01;
+  return g;
+}
+
+// -- bell-collar / cape animation plumbing (browser-only; onBeforeRender
+//    never fires in headless tests, so the audio import stays lazy) --------
+
+/** @type {{play: Function}|null} lazily imported audio module (bell jingles) */
+let bellAudio = null;
+let bellAudioLoading = false;
+function jingleBell() {
+  if (bellAudio) {
+    // V2/G29 upgrades: reuses the existing 'hop.gate' glass ding as the bell
+    // jingle — G29's audio-polish pass may swap in a dedicated bell recipe.
+    bellAudio.play('hop.gate');
+    return;
+  }
+  if (!bellAudioLoading) {
+    bellAudioLoading = true;
+    import('../audio/audio.js')
+      .then((m) => {
+        bellAudio = m;
+      })
+      .catch(() => {});
+  }
+}
+
+/**
+ * Watch a mesh's world-Y velocity each rendered frame and call `onHop` when a
+ * hop launch is detected (upward velocity spike after rest). Drives the
+ * bellCollar jingle and the cape flutter (§C8.4) without touching the anim
+ * system — outfits are guests on the rig, so they self-observe.
+ * @param {THREE.Mesh} mesh @param {(vy: number) => void} onFrame
+ */
+function watchVerticalMotion(mesh, onFrame) {
+  const pos = new THREE.Vector3();
+  let lastY = null;
+  let lastT = 0;
+  mesh.onBeforeRender = () => {
+    const now = performance.now();
+    pos.setFromMatrixPosition(mesh.matrixWorld);
+    if (lastY != null && now > lastT) {
+      const dt = Math.min((now - lastT) / 1000, 0.1);
+      onFrame((pos.y - lastY) / Math.max(dt, 1e-4));
+    }
+    lastY = pos.y;
+    lastT = now;
+  };
+}
+
+/** Bell collar 160 — strap + gold bell that jingles on hops (§C8.4). */
+function buildBellCollar() {
+  const g = new THREE.Group();
+  const strap = add(g, new THREE.TorusGeometry(0.325, 0.026, 8, 26), outfitMat(C.RED_DARK, { roughness: 0.75 }), [0, 0.01, -0.05]);
+  strap.rotation.x = Math.PI / 2;
+  strap.scale.set(1, 1, 0.8);
+  const bell = add(g, new THREE.SphereGeometry(0.055, 14, 12), gold(), [0, -0.04, 0.33]);
+  // bell slit + clapper
+  const slit = add(g, new THREE.BoxGeometry(0.006, 0.045, 0.02), outfitMat(C.CHARCOAL, { roughness: 0.5 }), [0, -0.066, 0.362]);
+  slit.rotation.x = 0.35;
+  add(g, new THREE.SphereGeometry(0.014, 8, 6), outfitMat(C.CHARCOAL, { roughness: 0.5 }), [0, -0.092, 0.345]);
+  // hop detection: upward world-velocity spike after rest → one jingle
+  let prevVy = 0;
+  let readyAt = 0;
+  watchVerticalMotion(bell, (vy) => {
+    const now = performance.now();
+    if (vy > 0.45 && prevVy <= 0.12 && now >= readyAt) {
+      readyAt = now + 380; // debounce (a hop is ~0.5 s)
+      jingleBell();
+    }
+    prevVy = vy;
+  });
+  g.position.y = -0.01;
+  return g;
+}
+
+/** Cape 500 — rigid swoosh that flutters out on hops (§C8.4, cloth-sim-free). */
+function buildCape() {
+  const g = new THREE.Group();
+  // clasp band + gold buttons at the throat
+  const band = add(g, new THREE.TorusGeometry(0.325, 0.022, 8, 26), outfitMat(C.RED_DARK, { roughness: 0.8 }), [0, 0.015, -0.05]);
+  band.rotation.x = Math.PI / 2;
+  band.scale.set(1, 1, 0.8);
+  for (const sx of [-1, 1]) {
+    add(g, new THREE.SphereGeometry(0.02, 8, 8), gold(), [sx * 0.09, 0.02, 0.3]);
+  }
+  // the cape sheet: an open cone segment wrapped around the back half,
+  // pivoted at the shoulders so flutter can swing the hem outward
+  const pivot = new THREE.Group();
+  pivot.position.set(0, 0.02, -0.06);
+  g.add(pivot);
+  const sheetGeo = new THREE.CylinderGeometry(0.34, 0.54, 0.62, 18, 1, true, Math.PI * 0.52, Math.PI * 0.96);
+  const sheet = new THREE.Mesh(sheetGeo, outfitMat(C.RED, { roughness: 0.75 }));
+  sheet.position.y = -0.31; // top edge at the pivot
+  pivot.add(sheet);
+  // hem trim
+  const hem = new THREE.Mesh(
+    new THREE.TorusGeometry(0.54, 0.014, 6, 22, Math.PI * 0.96),
+    outfitMat(C.GOLD, { roughness: 0.5, metalness: 0.3 })
+  );
+  hem.position.y = -0.62;
+  hem.rotation.x = Math.PI / 2;
+  hem.rotation.z = Math.PI * 0.52 + Math.PI / 2; // align the arc with the sheet
+  pivot.add(hem);
+  // hop flutter: swing the sheet away from the back on vertical motion
+  let flutter = 0;
+  watchVerticalMotion(sheet, (vy) => {
+    const target = Math.min(Math.max(Math.abs(vy) * 0.4, 0), 0.55);
+    flutter += (target - flutter) * 0.18; // eased, rigid swoosh
+    pivot.rotation.x = -flutter;
+  });
+  g.position.y = -0.01;
+  return g;
+}
+
+/** @type {Record<string, () => THREE.Group>} id → builder (11 §C5.3 + 9 §C8.4 items). */
 const BUILDERS = Object.freeze({
   partyHat: buildPartyHat,
   beanie: buildBeanie,
@@ -363,6 +676,16 @@ const BUILDERS = Object.freeze({
   scarfRed: buildScarfRed,
   bowtie: buildBowtie,
   scarfStriped: buildScarfStriped,
+  // V2/G22 (§C8.4)
+  strawHat: buildStrawHat,
+  chefHat: buildChefHat,
+  flowerCrown: buildFlowerCrown,
+  wizardHat: buildWizardHat,
+  heartGlasses: buildHeartGlasses,
+  monocle: buildMonocle,
+  bandana: buildBandana,
+  bellCollar: buildBellCollar,
+  cape: buildCape,
 });
 
 /**

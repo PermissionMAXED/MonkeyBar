@@ -10,10 +10,13 @@ export const ROOM = Object.freeze({
   id: 'bathroom',
 
   slots: Object.freeze({
-    tub: Object.freeze({ default: 'bathtub', items: Object.freeze(['bathtub', 'showerRound']) }),
+    // V2/G22 (§C8.1): + shower 3rd tub variant
+    tub: Object.freeze({ default: 'bathtub', items: Object.freeze(['bathtub', 'showerRound', 'shower']) }),
     rug: Object.freeze({ default: 'rugDoormat', items: Object.freeze(['rugDoormat', 'rugSquare']) }),
     plant: Object.freeze({ default: 'plantSmall2', items: Object.freeze(['plantSmall2']) }),
     shelf: Object.freeze({ default: 'bathroomCabinet', items: Object.freeze(['bathroomCabinet', 'bathroomCabinetDrawer']) }),
+    // V2/G22 (§C8.1) new slot: washing machine corner, empty until bought
+    washer: Object.freeze({ default: null, items: Object.freeze(['washer']) }),
   }),
 
   furniture: Object.freeze([
@@ -56,6 +59,9 @@ export const ROOM = Object.freeze({
     }),
     // little plant on the sink top (plant decor slot)
     Object.freeze({ slot: 'plant', item: 'plantSmall2', at: Object.freeze([0.58, 0.88, -1.2]), rotY: 0 }),
+    // ---- V2/G22 (§C8.1): washer slot anchor on the right wall, in front of
+    // the toilet (toilet z −1.02, hit depth 0.9 → clear from z ≈ −0.4) ----
+    Object.freeze({ slot: 'washer', at: Object.freeze([1.38, 0, 0.1]), rotY: -90 }),
   ]),
 
   anchors: Object.freeze({
