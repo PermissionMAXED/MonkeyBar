@@ -3,6 +3,8 @@
 // coverage contract — every audio.play('<id>') literal in src/ must be mapped
 // in sfxMap.js (zero unmapped ids), and every mapped Kenney sample key must
 // resolve to a real ogg on disk.
+// V2/G30 (PLAN2 §A3 checklist 12): + the 2.0 teaser step extension and the
+// one-time "What's new" panel predicate (migrated-vs-fresh semantics).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -15,20 +17,22 @@ import {
   snapshotProgress,
   stepSatisfied,
 } from '../src/ui/onboarding.js';
+import { shouldShowWhatsNew, WHATSNEW_BULLETS } from '../src/ui/whatsNew.js'; // V2/G30
 import { ONBOARDING } from '../src/data/constants.js';
 import { SFX_MAP, getSfxDef, allSfxIds, allSampleKeys } from '../src/audio/sfxMap.js';
 import { VOICE_RECIPES } from '../src/audio/goobyVoice.js';
-import { defaultState } from '../src/core/save.js';
+import { defaultState, migrations } from '../src/core/save.js'; // V2/G30: + migrations
 import { EN, DE } from '../src/data/strings.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // ----------------------------------------------------------------- machine
 
-test('machine: 8 steps in the §C8.1 order', () => {
-  assert.equal(ONBOARDING_STEPS.length, 8);
+test('machine: the 8 §C8.1 steps + the additive V2/G30 teaser, in order', () => {
+  assert.equal(ONBOARDING_STEPS.length, 9);
   assert.deepEqual([...ONBOARDING_STEPS], [
     'welcome', 'pet', 'feed', 'roomHint', 'wash', 'hudTour', 'minigame', 'shopHint',
+    'teaser', // V2/G30 (PLAN2 §E): appended so v1 step indices keep meaning
   ]);
 });
 
@@ -47,7 +51,7 @@ test('machine: fresh save starts at step 1 and advances through all steps', () =
   assert.equal(m.isDone(), true);
   assert.equal(m.current(), null);
   assert.equal(m.advance(), null); // advancing past done stays done
-  assert.deepEqual(m.serialize(), { step: 8, done: true });
+  assert.deepEqual(m.serialize(), { step: 9, done: true }); // V2/G30: 9 steps
 });
 
 test('machine: resumes from the saved step (§C8.1 resumable)', () => {
@@ -57,6 +61,18 @@ test('machine: resumes from the saved step (§C8.1 resumable)', () => {
   m.advance();
   assert.equal(m.current(), 'hudTour');
   assert.deepEqual(m.serialize(), { step: 5, done: false });
+});
+
+// V2/G30: the teaser step is resumable like every other step, and a player
+// who quit right after shopHint resumes AT the teaser (not done).
+test('machine: teaser step resumes and finishes the machine (V2/G30)', () => {
+  const m = createOnboardingMachine({ step: 8, done: false });
+  assert.equal(m.current(), 'teaser');
+  assert.equal(m.isDone(), false);
+  assert.equal(m.skippable(), true); // §E: the teaser is skippable
+  assert.equal(m.advance(), null);
+  assert.equal(m.isDone(), true);
+  assert.deepEqual(m.serialize(), { step: 9, done: true });
 });
 
 test('machine: done flag short-circuits returning users', () => {
@@ -132,7 +148,7 @@ test('stepSatisfied: roomHint completes on reaching the bathroom', () => {
 test('stepSatisfied: button-driven steps never auto-complete', () => {
   const base = snapshotProgress(defaultState(), 'bathroom');
   const busy = { strokes: 9, feeds: 9, washes: 9, catchPlays: 9, room: 'bathroom' };
-  for (const id of ['welcome', 'hudTour', 'shopHint']) {
+  for (const id of ['welcome', 'hudTour', 'shopHint', 'teaser']) { // V2/G30: + teaser
     assert.equal(stepSatisfied(id, base, busy), false, `${id} must be button-driven`);
   }
 });
@@ -145,6 +161,7 @@ test('onboarding strings exist in EN and DE (§A)', () => {
     'ob.hud.title', 'ob.hud.p1', 'ob.hud.p2', 'ob.hud.p3',
     'ob.game.title', 'ob.game.body', 'ob.game.play',
     'ob.shop.title', 'ob.shop.body', 'ob.done',
+    'ob.teaser.title', 'ob.teaser.quests', 'ob.teaser.garden', // V2/G30
     'settings.sfx', 'settings.music', 'settings.haptics',
   ];
   for (const key of needed) {
@@ -152,6 +169,55 @@ test('onboarding strings exist in EN and DE (§A)', () => {
     assert.equal(typeof DE[key], 'string', `DE missing '${key}'`);
   }
   assert.equal(DE['ob.welcome.title'], 'Das ist Gooby!'); // §C8.1 verbatim
+});
+
+// ------------------------------------------- V2/G30: "What's new" panel logic
+
+test('whatsNew: fresh saves never qualify (flag defaults true — §E0.1-6)', () => {
+  const fresh = defaultState();
+  assert.equal(fresh.onboarding.whatsNew2Seen, true);
+  assert.equal(shouldShowWhatsNew(fresh), false);
+  // …even once their onboarding is done
+  fresh.onboarding.done = true;
+  fresh.onboarding.step = 9;
+  assert.equal(shouldShowWhatsNew(fresh), false);
+  // resilient to missing slices
+  assert.equal(shouldShowWhatsNew({}), false);
+  assert.equal(shouldShowWhatsNew(null), false);
+});
+
+test('whatsNew: migrated v1 veterans qualify exactly once', () => {
+  // A real committed v1 fixture through the real migration (§B2).
+  const raw = fs.readFileSync(path.join(ROOT, 'test', 'fixtures', 'v1-midgame.json'), 'utf8');
+  const migrated = migrations[1](JSON.parse(raw));
+  assert.equal(migrated.v, 2);
+  assert.equal(migrated.onboarding.whatsNew2Seen, false);
+  assert.equal(migrated.onboarding.done, true); // this fixture finished the tutorial
+  assert.equal(shouldShowWhatsNew(migrated), true);
+  // panel mount persists the flag → never shows again
+  migrated.onboarding.whatsNew2Seen = true;
+  assert.equal(shouldShowWhatsNew(migrated), false);
+});
+
+test('whatsNew: waits for the tutorial on migrated mid-onboarding saves', () => {
+  const state = migrations[1]({ v: 1, onboarding: { done: false, step: 4 } });
+  assert.equal(state.onboarding.whatsNew2Seen, false);
+  assert.equal(shouldShowWhatsNew(state), false); // tutorial first (§C8.1 order)
+  state.onboarding.done = true;
+  assert.equal(shouldShowWhatsNew(state), true); // …then the panel
+});
+
+test('whatsNew: 6 bullets tour the §A pillars with EN+DE copy', () => {
+  assert.equal(WHATSNEW_BULLETS.length, 6);
+  for (const bullet of WHATSNEW_BULLETS) {
+    assert.equal(typeof bullet.icon, 'string');
+    assert.equal(typeof EN[bullet.key], 'string', `EN missing '${bullet.key}'`);
+    assert.equal(typeof DE[bullet.key], 'string', `DE missing '${bullet.key}'`);
+  }
+  for (const key of ['whatsnew.title', 'whatsnew.sub', 'whatsnew.cta']) {
+    assert.equal(typeof EN[key], 'string', `EN missing '${key}'`);
+    assert.equal(typeof DE[key], 'string', `DE missing '${key}'`);
+  }
 });
 
 // ------------------------------------------------- §D6 sfx coverage contract

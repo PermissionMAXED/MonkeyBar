@@ -5,7 +5,9 @@
 //     Steps (§C8.1): welcome card „Das ist Gooby!" → forced pet → forced feed
 //     (carrot from the tray) → room-swipe hint to the bathroom → quick wash →
 //     HUD tour tooltips → tutorial carrotCatch (30 s, ≥10 coins guaranteed) →
-//     shop-door hint → done (the §C8.2 daily popup then auto-shows).
+//     shop-door hint → 2.0 teaser (V2/G30, PLAN2 §E: quest board L2 + garden
+//     dot L3 — two light pages, skippable) → done (the §C8.2 daily popup then
+//     auto-shows).
 //     Progress persists in save `onboarding.step` (resumable §E3), `done`
 //     short-circuits returning users, and a skip button appears after step
 //     ONBOARDING.SKIPPABLE_AFTER_STEP (§C8.1: forced pet/feed can't be skipped).
@@ -20,13 +22,17 @@
 // dailyBonusPopup.js) so the §C8.1 order holds: tutorial → done → daily popup.
 
 import { t } from '../data/strings.js';
-import { ONBOARDING } from '../data/constants.js';
+import { ONBOARDING, UNLOCKS } from '../data/constants.js'; // V2/G30: + UNLOCKS (teaser levels §B6)
 
 // ---------------------------------------------------------------------------
 // Pure logic (§C8.1 step machine — covered by test/onboarding.test.js)
 // ---------------------------------------------------------------------------
 
-/** The 8 steps (§C8.1), in order. */
+/**
+ * The steps in order: the sacred v1 §C8.1 eight, plus the additive 2.0
+ * teaser (V2/G30, PLAN2 §E — quest board L2 + garden dot L3). Appending
+ * keeps every persisted v1 `onboarding.step` index meaning the same thing.
+ */
 export const ONBOARDING_STEPS = Object.freeze([
   'welcome', // 1: Gooby hops in + waves + name card
   'pet', // 2: forced pet → hearts
@@ -35,7 +41,8 @@ export const ONBOARDING_STEPS = Object.freeze([
   'wash', // 5: quick wash
   'hudTour', // 6: HUD tour tooltips (bars/coins/XP)
   'minigame', // 7: tutorial carrotCatch (30 s variant, ≥10 coins)
-  'shopHint', // 8: shop-door hint → done → daily popup
+  'shopHint', // 8: shop-door hint
+  'teaser', // 9: V2/G30 — 2.0 teaser (quests L2 / garden L3) → done → daily popup
 ]);
 
 /**
@@ -57,7 +64,7 @@ export function snapshotProgress(state, room = null) {
 
 /**
  * Has the player performed the step's required action? Steps not listed here
- * (welcome/hudTour/shopHint) advance via their card buttons instead.
+ * (welcome/hudTour/shopHint/teaser) advance via their card buttons instead.
  * @param {string} stepId
  * @param {ReturnType<typeof snapshotProgress>} baseline snapshot at step entry
  * @param {ReturnType<typeof snapshotProgress>} now current snapshot
@@ -150,6 +157,7 @@ const STEP_CARDS = {
   hudTour: { titleKey: 'ob.hud.title' },
   minigame: { titleKey: 'ob.game.title', bodyKey: 'ob.game.body', btnKey: 'ob.game.play' },
   shopHint: { titleKey: 'ob.shop.title', bodyKey: 'ob.shop.body', btnKey: 'ob.continue' },
+  teaser: { titleKey: 'ob.teaser.title' }, // V2/G30: page-driven like hudTour
 };
 
 /** The three HUD-tour pages: body key + spotlight CSS selector (§C8.1 #5). */
@@ -158,6 +166,21 @@ const HUD_PAGES = [
   { bodyKey: 'ob.hud.p2', selector: '.g5-coins' },
   { bodyKey: 'ob.hud.p3', selector: '.g5-ring' },
 ];
+
+// V2/G30: the 2.0 teaser pages (PLAN2 §E — light touch, never blocking):
+// spotlight the quest-board HUD button (unlocks L2 §B6) then the padlocked
+// garden nav dot (L3). Same page mechanics as the HUD tour above.
+const TEASER_PAGES = [
+  { bodyKey: 'ob.teaser.quests', selector: '.g5-hud [data-hud="quests"]', vars: { level: UNLOCKS.QUESTS } },
+  { bodyKey: 'ob.teaser.garden', selector: '.rn-dots .rn-dot:last-child', vars: { level: UNLOCKS.GARDEN } },
+];
+
+/** V2/G30: page list for page-driven steps (hudTour/teaser), else null. */
+function pagesFor(stepId) {
+  if (stepId === 'hudTour') return HUD_PAGES;
+  if (stepId === 'teaser') return TEASER_PAGES;
+  return null;
+}
 
 /**
  * Start the first-run tutorial (no-op for returning users — §C8.1 "never
@@ -275,8 +298,8 @@ export function initOnboarding({ store, ui, audio, sceneManager, framework }) {
     // feed step: the food-tray sheet owns the bottom of the screen
     card.className = `g14-ob-card${stepId === 'feed' ? ' g14-top' : ''}`;
     const stepNo = machine.index() + 1;
-    const isHudTour = stepId === 'hudTour';
-    const body = isHudTour ? t(HUD_PAGES[hudPage].bodyKey) : spec.bodyKey ? t(spec.bodyKey, {
+    const pages = pagesFor(stepId); // V2/G30: hudTour + teaser share the page mechanics
+    const body = pages ? t(pages[hudPage].bodyKey, pages[hudPage].vars) : spec.bodyKey ? t(spec.bodyKey, {
       sec: ONBOARDING.TUTORIAL_DURATION_SEC,
       coins: ONBOARDING.TUTORIAL_MIN_COINS,
     }) : '';
@@ -286,15 +309,15 @@ export function initOnboarding({ store, ui, audio, sceneManager, framework }) {
       ${body ? `<div class="g14-ob-body">${body}</div>` : ''}
       <div class="g14-ob-btns"></div>`;
     const btns = card.querySelector('.g14-ob-btns');
-    if (isHudTour) {
-      spotlight(HUD_PAGES[hudPage].selector);
+    if (pages) {
+      spotlight(pages[hudPage].selector);
       const next = document.createElement('button');
       next.className = 'btn btn-teal g14-ob-btn';
       next.textContent = t('ob.next');
       next.addEventListener('click', () => {
         audio.play('ui.tap');
         hudPage += 1;
-        if (hudPage >= HUD_PAGES.length) completeStep();
+        if (hudPage >= pages.length) completeStep();
         else renderCard();
       });
       btns.appendChild(next);

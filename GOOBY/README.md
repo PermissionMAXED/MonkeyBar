@@ -1,41 +1,77 @@
-# GOOBY 🐰
+# GOOBY 🐰 — 2.0 „Vollversion"
 
-Gooby is a fat, lovable rabbit who lives in a cozy 3D apartment. Feed him, wash him,
-tickle him, put him to bed, decorate his rooms, dress him up — and when the fridge is
-empty, hop in the car and drive through a sunny low-poly city to the shop. Twelve
+Gooby is a fat, lovable rabbit who lives in a cozy 3D apartment with his own
+backyard garden. Feed him, wash him, tickle him, put him to bed, grow his
+veggies, keep his tummy out of trouble, decorate his rooms, dress him up (fur
+color included) — and when the fridge is empty or the doctor calls, hop in the
+car and drive through a low-poly city to the shop or the vet. Twenty-one
 arcade minigames earn the coins that fuel it all.
 
 A Pou / Talking-Tom-style virtual-pet game: mobile-first three.js web app, wrapped
 with Capacitor for iOS. Fully offline, single-player, no server, no monetization.
 Bilingual EN + DE (auto-detected, switchable in settings).
 
+Returning from 1.0? Your save migrates losslessly, your home stays exactly as
+you left it, and a one-time "What's new in 2.0" panel tours the additions.
+
 ## How to play
 
 - **First run:** a short scripted tutorial („Das ist Gooby!") walks you through
   petting, feeding a carrot, a quick bath, the HUD, a 30-second Carrot Catch
-  round (≥10 coins guaranteed) and the shop door. It resumes where you left off
-  and is skippable after step 3.
+  round (≥10 coins guaranteed), the shop door and a quick teaser of the quest
+  board + garden. It resumes where you left off and is skippable after step 3.
 - **Care (4 stats):** hunger, energy, hygiene, fun. Drag food from the fridge
   tray to Gooby's mouth, scrub him in the bathtub, tap the toilet, toss the
   ball, stroke him to pet, rub his belly to tickle, poke him (5 quick pokes =
   dizzy!). Stats drain in real time — even while the app is closed — and local
   notifications (opt-in) remind you when he needs you.
+- **Tummy & health (2.0):** junk food (donuts, cake, ice cream…) and neglect
+  make Gooby queasy, then properly sick — green cheeks, sneezes, thermometer.
+  Feed him healthy, give medicine (40c, shop Care row), or drive him to the
+  vet: full cure 120c, checkup 30c. Sick Gooby refuses minigames until cured;
+  nothing is ever fatal.
+- **Weight (2.0, cosmetic only):** junk food rounds him out, active minigames
+  and ball fetches slim him down — four silhouette tiers from Sleek to Maximum
+  Floof. Zero gameplay penalty; both extremes earn achievements.
+- **Garden (2.0, level 3):** the 5th room dot leads outside. Buy seeds, plant
+  up to 6 plots (plots 5/6 purchasable), water with the can — crops grow in
+  REAL time, even while the app is closed, and rain waters them for you.
+  Harvest to the fridge, eat or sell at the compost bin, fertilize for a 25%
+  boost. 8 crops from radish (10 min) to watermelon (8 h).
 - **Sleep:** tap the bedroom lamp or bed when his energy is low. Gooby snores
   through a 3-hour nap (shortcut: early wake after 30 min) and wakes with a yawn.
-- **Rooms:** swipe between kitchen, living room, bathroom and bedroom. Buy
-  furniture, wallpapers and floors in the shop's Decorate tab.
-- **Shop trips:** when supplies run out, tap the cart button or front door and
+- **Rooms:** swipe between kitchen, living room, bathroom, bedroom and garden.
+  Buy furniture, wallpapers and floors in the shop's Decorate tab — 58
+  furniture buyables, 10 wallpapers, 7 floors, plus 6 garden decor slots.
+- **City trips:** when supplies run out, tap the cart button or front door and
   DRIVE there — the trip is a minigame; crash too often and the tow truck ends
-  it. Buy food, furniture and outfits at the shop, then drive home.
-- **Arcade — 12 minigames** (unlock by level): Shopping Cruise, Carrot Catch,
-  Bunny Hop, Carrot Guard, Memory Match, Basket Bounce, Pancake Tower, Gooby
-  Runner, Bubble Pop, Fishing Pond, Dance Party, Trampoline Tricks. First play
-  of each game every day pays ×2 coins.
+  it. Once you discover the vet clinic, a destination picker offers both stops.
+  Six named landmarks around town award stickers when you drive past.
+- **Arcade — 21 minigames** (unlock by level): Shopping Cruise, Carrot Catch,
+  Bunny Hop, Carrot Guard, Gooby Says, Memory Match, Basket Bounce, Garden
+  Rush, Pancake Tower, Burger Build, Gooby Runner, Veggie Chop, Bubble Pop,
+  Delivery Rush, Fishing Pond, Dance Party, Mini Golf, Trampoline Tricks,
+  Goalie Gooby, Star Hopper and Pipe Flow. First play of each game every day
+  pays ×2 coins.
+- **Daily quests (2.0, level 2):** the HUD clipboard shows 3 quests each day
+  (rolled from a 28-entry pool), each paying coins + XP; one free reroll per
+  day, fresh quests at midnight.
+- **Sticker album (2.0):** 4 collection sets × 32 stickers — fish species,
+  garden veggies, city landmarks, sweet treats — earned through play; each
+  completed page pays coins and a unique furniture reward.
 - **Progression:** everything grants XP; each level pays a coin bonus and
-  unlocks games/items up to level 30. 16 achievements pay coin rewards. A daily
+  unlocks games/items up to level 40. 33 achievements pay coin rewards. A daily
   bonus streak (20…100 coins + food from day 7) claims on the first open per day.
-- **Wardrobe:** hats, glasses and neck items — Gooby wears them everywhere,
-  including his minigame cameos.
+- **Wardrobe & skins:** 20 hats/glasses/neck items — Gooby wears them
+  everywhere, including his minigame cameos — plus 7 fur-color skins (from
+  level 5, shop Skins tab / wardrobe Fur tab), from Snow to Golden.
+- **Day/night & weather (2.0):** the real device clock drives dawn/day/dusk/
+  night lighting at home, in the garden and in the city; deterministic weather
+  (clear/cloudy/rain) shows in the windows and the garden — rain waters your
+  plots, and everyone gets the same weather on the same day.
+- **Stats & photo mode (2.0):** the profile screen shows vitals, lifetime
+  totals and per-game bests for all 21 games; the HUD camera opens photo mode —
+  pose, emotion, frame, snap — and saves/shares a UI-less PNG.
 - **Audio:** everything is WebAudio — Kenney sfx + synth jingles, a lo-fi home
   music loop, a 100 BPM dance track, and Gooby's fully synthesized voice
   (squeaks, giggles, snores, yawns). SFX / music / haptics toggle in settings,
@@ -65,13 +101,18 @@ the save and see it again.
 
 ## Dev harness
 
-URL params (dev builds): `?scene=home|gooby`, `?room=…`, `?minigame=<id>`,
-`?open=shop|wardrobe|achievements|arcade|settings`, `?coins=N`, `?level=N`,
-`?energy=N`, `?hunger=N`, `?hygiene=N`, `?fun=N`, `?fast=N` (clock multiplier),
-`?now=<epochMs>`, `?reset=1`, `?lang=de|en`, `?sleep=1` (start a nap),
-`?autoplay=1` (bot-plays the launched minigame), `?onboarding=0` (suppress the
-tutorial). Harness routes (`scene`/`minigame`/`open`) also suppress onboarding
-so test surfaces stay clean. See PLAN.md §E9; `window.__gooby` exposes
+URL params (dev builds): `?scene=home|gooby`, `?room=…` (incl. `garden`),
+`?minigame=<id>`, `?open=shop|wardrobe|achievements|arcade|settings|questBoard|album|profile`,
+`?coins=N`, `?level=N`, `?energy=N`, `?hunger=N`, `?hygiene=N`, `?fun=N`,
+`?fast=N` (clock multiplier), `?now=<epochMs>`, `?reset=1`, `?lang=de|en`,
+`?sleep=1` (start a nap), `?autoplay=1` (bot-plays the launched minigame),
+`?onboarding=0` (suppress the tutorial). Harness routes (`scene`/`minigame`/
+`open`) also suppress onboarding so test surfaces stay clean. Feature demos:
+`?skin=<id>` (own + equip a fur skin), `?outfits=<id,id>` (own + equip
+outfits), `?dailydemo=N` (daily-bonus popup as streak day N), `?achdemo=1`
+(seeded achievements screen), `?whatsnew=1` (force the What's-new panel),
+`?autopilot=1` (bot-drives the shop trip), `?care=tray|wash|feed:<foodId>`
+(care-loop demos). See PLAN.md §E9; `window.__gooby` exposes
 store/ui/sceneManager/framework for console poking.
 
 Try the framework smoke game: `http://localhost:5174/?minigame=_smoke`
@@ -79,14 +120,18 @@ Try the framework smoke game: `http://localhost:5174/?minigame=_smoke`
 ## Project layout
 
 `src/` splits by system: `core/` (store, save, clock, scenes, input, assets,
-notifications), `character/` (procedural Gooby rig + outfits), `home/` (rooms,
-care interactions, decor), `city/` + `systems/shopTrip.js` (drive + shop flow),
-`minigames/` (framework + 12 games, each with a pure `.logic.js`), `systems/`
-(stats, economy, leveling, achievements, daily bonus), `audio/` (WebAudio
-manager, sfx map, Gooby voice), `ui/` (HUD, screens, onboarding), `data/`
-(constants = ALL design numbers, strings EN+DE, catalogs). Tests in `test/`
-run headlessly against the pure modules. `PLAN.md` is the binding architecture
-contract (§E) — read it before restructuring anything.
+notifications), `character/` (procedural Gooby rig + outfits + fur skins),
+`home/` (rooms incl. the garden, care interactions, decor), `city/` +
+`systems/shopTrip.js` (drive + shop/vet flow), `minigames/` (framework + 21
+games, each with a pure `.logic.js`), `systems/` (stats, economy, leveling,
+achievements, daily bonus, plus the 2.0 engines: garden, quests, collections,
+health, weight, dayNight, weather, profileStats), `audio/` (WebAudio manager,
+sfx map, Gooby voice), `gfx/` (tweens, particles, sky, weather FX), `ui/`
+(HUD, screens, onboarding, What's-new), `data/` (constants = ALL design
+numbers, strings EN+DE + `strings/v2-*.js` feature modules, catalogs). Tests
+in `test/` run headlessly against the pure modules. `PLAN.md` is the binding
+v1 architecture contract (§E) and `PLAN2.md` the binding 2.0 spec — read them
+before restructuring anything.
 
 <!-- ============ BEGIN G13 SECTION: Build & Sideload (owned by agent G13) ============ -->
 
@@ -139,6 +184,8 @@ splash (committed under `ios/App/App/Assets.xcassets/`) with `npm run icons`.
 
 ## Changelog (build waves)
 
+### 1.0
+
 - **Wave 1 — foundations:** Vite + three.js shell, store/save/clock/scene
   plumbing, asset pipeline (Kenney CC0 packs), UI overlay system, dev harness.
 - **Wave 2 — Gooby & home:** procedural rabbit rig (squash-and-stretch clips,
@@ -154,6 +201,27 @@ splash (committed under `ios/App/App/Assets.xcassets/`) with `npm run icons`.
   WebAudio manager + full sfx map + Gooby voice synth + procedural music,
   haptics, settings audio toggles, results confetti + coin-fly + polish pass,
   first-run onboarding, docs.
+
+### 2.0 „Vollversion"
+
+- **Wave 1 — foundations:** 2.0 Kenney assets (suburban/minigolf/space kits),
+  save schema v2 + lossless v1 migration, all catalogs (32 foods, 8 crops, 28
+  quests, 4 sticker sets, 7 skins, 33 achievements, level cap 40), economy v2
+  APIs, pure engines: garden, quests, collections, profile stats, day/night,
+  weather, health (sickness), weight.
+- **Wave 2 — spaces & systems:** the garden as a 5th navigable outdoor room
+  (plots, seed/sell panels, sky dome, forecast), pet-sim wiring (health/weight/
+  garden ticks, offline catch-up, harvest + sick notifications), city 2.0 (vet
+  clinic destination, 6 sticker landmarks, vet panel), content & shop 2.0
+  (+30 furniture, +4 wallpapers, +3 floors, 9 outfits, fur-skin try-on),
+  progression UI (quest board, sticker album, profile screen, photo mode).
+- **Wave 3 — minigames I + ambience:** Gooby Says, Garden Rush, Burger Build,
+  Star Hopper, Pipe Flow; day/night + weather visuals everywhere (garden rain,
+  window skies, dusk lamps, city night headlights).
+- **Wave 4 — minigames II + ship polish:** Veggie Chop, Goalie Gooby, Delivery
+  Rush, Mini Golf; audio & reactions 2.0 (bespoke synth recipes, new idles);
+  onboarding teaser step, one-time "What's new" panel for 1.0 veterans, docs
+  + integration sweep.
 
 ## Credits
 

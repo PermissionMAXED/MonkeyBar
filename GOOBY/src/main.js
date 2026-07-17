@@ -31,6 +31,8 @@ import { initDailyBonus } from './ui/dailyBonusPopup.js';
 // end G12 imports
 // V2/G22: fur-skin applier — import for the marked block below (PLAN2 §C8.5)
 import { initSkinSync } from './character/skins.js';
+// V2/G30: one-time "What's new in 2.0" panel — import for the marked block below (§A3-12)
+import { initWhatsNew } from './ui/whatsNew.js';
 // V2/G23: progression UI — imports for the marked block below (PLAN2 §C5/C6/C12)
 import { registerQuestBoard } from './ui/questBoard.js';
 import { registerAlbumScreen } from './ui/albumScreen.js';
@@ -178,6 +180,13 @@ async function boot() {
   initOutfitSync({ store });
   initDailyBonus({ store, ui, audio, sceneManager });
   // ---- end G12 block ----
+
+  // ---- V2/G30: one-time "What's new in 2.0" panel (PLAN2 §A3 checklist 12) ----
+  // Shows ONCE for migrated v1 veterans (onboarding.whatsNew2Seen === false,
+  // set by migrations[1] — §E0.1-6); fresh saves default the flag to true and
+  // never see it. Waits for a quiet home scene like the daily popup above.
+  initWhatsNew({ store, ui, audio, sceneManager });
+  // ---- end V2/G30 block ----
 
   // ---- V2/G23: progression UI wiring (PLAN2 §C5/§C6/§C12) ----
   // Quest board / sticker album / profile screens + photo mode. The engines
