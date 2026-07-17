@@ -1,10 +1,17 @@
-// Room navigation UI (§C2): edge arrow buttons + a 4-dot indicator at the
+// Room navigation UI (§C2): edge arrow buttons + a dot indicator at the
 // bottom of the home view. Swipe navigation itself lives in homeScene.js
 // (canvas gestures); this module is the DOM part. Styles are scoped in an
 // injected <style> tag (ui/styles.css is owned by other agents).
+//
+// V2/G19 (PLAN2 §C2.1/§B6): 5 dots — the 5th (garden) shows a padlock below
+// UNLOCKS.GARDEN (L3) and unlocks live on level-up. Navigation to a locked
+// garden still calls onNavigate; roomManager.goTo gates it and emits the
+// 'gardenLocked' teaser (§B6 — locked surfaces keep the v1 "level N" pattern).
 
 import { t } from '../data/strings.js';
-import { ROOMS } from '../data/constants.js';
+import { ROOMS, UNLOCKS } from '../data/constants.js'; // V2/G19: + UNLOCKS
+import { NAV_ORDER } from '../home/roomManager.js'; // V2/G19: 5-room order (§B3)
+import { getStore } from '../core/store.js'; // V2/G19: live level for the padlock
 
 const NAV_CSS = `
 .room-nav{position:absolute;inset:0;pointer-events:none;font-family:system-ui,sans-serif;}
@@ -32,6 +39,11 @@ const NAV_CSS = `
 .rn-dot::before{content:'';position:absolute;inset:0;border-radius:50%;background:#E3D3C2;
   transition:background .2s,transform .2s;}
 .rn-dot.on::before{background:#FF7BA9;transform:scale(1.25);}
+/* V2/G19 (§B6): padlocked garden dot — lock glyph riding the dot, greyed */
+.rn-dot.rn-locked::before{background:#D5CBBE;}
+.rn-lock{position:absolute;left:50%;top:50%;transform:translate(-50%,-54%);
+  font-size:11px;line-height:1;pointer-events:none;filter:grayscale(1);opacity:.85;}
+.rn-dot:not(.rn-locked) .rn-lock{display:none;}
 `;
 
 /**
@@ -56,18 +68,34 @@ export function createRoomNav({ onNavigate }) {
   /** @type {Map<string, HTMLButtonElement>} */
   const dots = new Map();
   let active = ROOMS.DEFAULT;
+  /** @type {(() => void)|null} V2/G19: xpChanged unsub (padlock refresh) */
+  let unsubLevel = null;
+
+  // V2/G19: live §B6 garden gate — guarded so the module stays importable in
+  // tests/before boot (getStore throws until createStore ran).
+  function gardenLocked() {
+    try {
+      return (getStore().get('level') ?? 1) < UNLOCKS.GARDEN;
+    } catch {
+      return false;
+    }
+  }
 
   function refresh() {
-    const idx = ROOMS.ORDER.indexOf(active);
+    const idx = NAV_ORDER.indexOf(active); // V2/G19: 5-room order
     if (leftBtn) leftBtn.disabled = idx <= 0;
-    if (rightBtn) rightBtn.disabled = idx >= ROOMS.ORDER.length - 1;
-    for (const [roomId, dot] of dots) dot.classList.toggle('on', roomId === active);
+    if (rightBtn) rightBtn.disabled = idx >= NAV_ORDER.length - 1;
+    const locked = gardenLocked(); // V2/G19
+    for (const [roomId, dot] of dots) {
+      dot.classList.toggle('on', roomId === active);
+      if (roomId === 'garden') dot.classList.toggle('rn-locked', locked);
+    }
   }
 
   function step(delta) {
-    const idx = ROOMS.ORDER.indexOf(active) + delta;
-    if (idx < 0 || idx >= ROOMS.ORDER.length) return;
-    onNavigate(ROOMS.ORDER[idx]);
+    const idx = NAV_ORDER.indexOf(active) + delta;
+    if (idx < 0 || idx >= NAV_ORDER.length) return;
+    onNavigate(NAV_ORDER[idx]);
   }
 
   return {
@@ -96,17 +124,30 @@ export function createRoomNav({ onNavigate }) {
 
       const dotsEl = document.createElement('div');
       dotsEl.className = 'rn-dots';
-      for (const roomId of ROOMS.ORDER) {
+      for (const roomId of NAV_ORDER) {
         const dot = document.createElement('button');
         dot.className = 'rn-dot';
         dot.setAttribute('aria-label', t(`room.${roomId}`));
         dot.addEventListener('click', () => onNavigate(roomId));
+        // V2/G19 (§B6): padlock glyph on the garden dot (hidden once unlocked)
+        if (roomId === 'garden') {
+          const lock = document.createElement('span');
+          lock.className = 'rn-lock';
+          lock.textContent = '🔒';
+          dot.appendChild(lock);
+        }
         dotsEl.appendChild(dot);
         dots.set(roomId, dot);
       }
       rootEl.appendChild(dotsEl);
 
       parentEl.appendChild(rootEl);
+
+      // V2/G19: unlock the padlock live on level-up
+      try {
+        unsubLevel = getStore().on('xpChanged', refresh);
+      } catch { /* store not created (tests) — padlock stays static */ }
+
       refresh();
     },
 
@@ -124,6 +165,8 @@ export function createRoomNav({ onNavigate }) {
       leftBtn = null;
       rightBtn = null;
       dots.clear();
+      unsubLevel?.(); // V2/G19
+      unsubLevel = null;
     },
   };
 }

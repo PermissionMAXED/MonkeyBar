@@ -1417,6 +1417,7 @@
 .g19-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap; /* 320px DE: long button labels drop to a 2nd line (§F3) */
   gap: 8px;
   background: var(--bg-cream);
   border-radius: 14px;
@@ -1485,6 +1486,7 @@
   position: absolute;
   top: calc(104px + var(--safe-top));
   right: calc(12px + var(--safe-right));
+  pointer-events: auto; /* #ui root is pointer-events: none */
   display: inline-flex;
   align-items: center;
   gap: 4px;
