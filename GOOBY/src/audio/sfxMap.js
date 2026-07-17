@@ -211,6 +211,15 @@ export const SFX_MAP = Object.freeze({
   'says.pad4': sample([`${UI}/glass_005`], { volume: 0.7, haptic: 'light' }),
   // --- end V2/G24 ---
 
+  // --- V2/G24: goobySays pads (§C1.2 #1 — four distinct pitches). Existing
+  // synth recipes take no pitch param, so per §E0.2 rule 5 these reuse 4
+  // distinct interface oggs; G29 upgrades to pitched synth pads. ---
+  'says.pad1': sample([`${UI}/pluck_001`], { volume: 0.7, haptic: 'light' }),
+  'says.pad2': sample([`${UI}/pluck_002`], { volume: 0.7, haptic: 'light' }),
+  'says.pad3': sample([`${UI}/glass_002`], { volume: 0.7, haptic: 'light' }),
+  'says.pad4': sample([`${UI}/glass_005`], { volume: 0.7, haptic: 'light' }),
+  // --- end V2/G24 ---
+
   // --- V2/G25: starHopper + pipeFlow (§C1.2 #8/#9 — existing oggs/recipes
   // per §E0.2 rule 5; G29 upgrades to bespoke sounds) ---
   'hopper.lane': synth('whoosh', { volume: 0.45 }),
