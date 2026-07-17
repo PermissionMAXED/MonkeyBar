@@ -62,12 +62,19 @@ export const PACKS = [
   {
     slug: 'food-kit',
     modelDir: 'Models/GLB format',
-    files: split(`carrot apple banana bread cheese watermelon donut
-      donut-sprinkles cupcake salad ice-cream sandwich hot-dog pancakes burger
-      pizza cake cookie croissant muffin pear strawberry corn broccoli
-      egg-cooked waffle taco pie popsicle soda fish fish-bones
-      soda-can-crushed bowl-cereal plate-dinner cutting-board frying-pan
-      pot-stew mug whipped-cream`),
+    files: [
+      ...split(`carrot apple banana bread cheese watermelon donut
+        donut-sprinkles cupcake salad ice-cream sandwich hot-dog pancakes burger
+        pizza cake cookie croissant muffin pear strawberry corn broccoli
+        egg-cooked waffle taco pie popsicle soda fish fish-bones
+        soda-can-crushed bowl-cereal plate-dinner cutting-board frying-pan
+        pot-stew mug whipped-cream`),
+      // V2/G15: 2.0 foods (§C7), burgerBuild layers, veggieChop pairs (PLAN2 §D2)
+      ...split(`tomato tomato-slice radish eggplant pumpkin grapes fries
+        corn-dog candy-bar lollypop chocolate sundae meat-patty cheese-cut
+        lemon lemon-half onion onion-half mushroom mushroom-half paprika
+        paprika-slice coconut coconut-half apple-half pear-half`),
+    ],
   },
   {
     slug: 'city-kit-roads',
@@ -95,11 +102,38 @@ export const PACKS = [
   {
     slug: 'nature-kit',
     modelDir: 'Models/GLTF format',
-    files: split(`tree_default tree_oak tree_fat tree_detailed tree_pineRoundA
-      tree_pineTallA plant_bush plant_bushLarge flower_purpleA flower_redA
-      flower_yellowA grass_large rock_smallA rock_largeA fence_simple
-      fence_gate crop_carrot crops_dirtSingle stump_round mushroom_red log
-      bridge_wood`),
+    files: [
+      ...split(`tree_default tree_oak tree_fat tree_detailed tree_pineRoundA
+        tree_pineTallA plant_bush plant_bushLarge flower_purpleA flower_redA
+        flower_yellowA grass_large rock_smallA rock_largeA fence_simple
+        fence_gate crop_carrot crops_dirtSingle stump_round mushroom_red log
+        bridge_wood`),
+      // V2/G15: crop growth stages (§C2.3), gardenRush pots, raised bed (PLAN2 §D2)
+      ...split(`crops_leafsStageA crops_leafsStageB crops_cornStageA
+        crops_cornStageB crops_cornStageC crops_cornStageD crop_melon
+        crop_pumpkin crop_turnip pot_large pot_small bed`),
+    ],
+  },
+  // V2/G15: 2.0 packs (PLAN2 §D3) — garden/vet fencing+paths, miniGolf course
+  // tiles + windmillCafe landmark, starHopper craft/meteors.
+  {
+    slug: 'city-kit-suburban',
+    modelDir: 'Models/GLB format',
+    files: split(`fence-1x4 fence-low fence-2x2 planter path-stones-short
+      path-stones-long driveway-short tree-small tree-large`),
+  },
+  {
+    slug: 'minigolf-kit',
+    modelDir: 'Models/GLB format',
+    files: split(`start straight end corner hole-round hole-open ramp-low
+      ramp-medium bump obstacle-block obstacle-triangle windmill tunnel-wide
+      wall-left wall-right flag-red flag-blue castle`),
+  },
+  {
+    slug: 'space-kit',
+    modelDir: 'Models/GLTF format',
+    files: split(`craft_speederA craft_speederB meteor meteor_detailed
+      meteor_half`),
   },
   { slug: 'interface-sounds', dir: 'Audio', glob: '*.ogg', max: 120 },
   { slug: 'impact-sounds', dir: 'Audio', glob: '*.ogg', max: 100 },

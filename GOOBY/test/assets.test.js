@@ -62,6 +62,12 @@ test('every pack directory has a License.txt', () => {
 
 test('total committed asset size is under the 80 MB budget', () => {
   const total = walk(KENNEY).reduce((n, f) => n + fs.statSync(f).size, 0);
+  // V2/G15 (PLAN2 §D5): report the actual committed size — expected ≈ 11 MB,
+  // target ≤ 25 MB (§A2.4), hard budget 80 MB.
+  console.log(
+    `committed kenney assets: ${(total / 1048576).toFixed(2)} MB ` +
+      `(target ≤ 25 MB, hard budget ${(BUDGET_BYTES / 1048576).toFixed(0)} MB)`
+  );
   assert.ok(
     total < BUDGET_BYTES,
     `${(total / 1048576).toFixed(2)} MB >= budget ${(BUDGET_BYTES / 1048576).toFixed(2)} MB`
@@ -167,6 +173,96 @@ test('every asset key referenced in data/minigames.js resolves to a file', async
       fs.existsSync(assetKeyToFile(key)),
       `minigames.js key '${key}' unresolved`
     );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// V2/G15 (PLAN2 §D2/§D3/§D5): 2.0 asset inventory. Frozen copies of the §D2
+// whitelist additions + §D3 new-pack whitelists — a manifest regression
+// (dropped entry) fails HERE even though the manifest-driven tests above
+// would silently shrink along with it.
+// ---------------------------------------------------------------------------
+
+const splitNames = (s) => s.trim().split(/\s+/);
+
+const V2_FILES = {
+  // §D2 additions to existing packs
+  'food-kit': splitNames(`tomato tomato-slice radish eggplant pumpkin grapes
+    fries corn-dog candy-bar lollypop chocolate sundae meat-patty cheese-cut
+    lemon lemon-half onion onion-half mushroom mushroom-half paprika
+    paprika-slice coconut coconut-half apple-half pear-half`),
+  'nature-kit': splitNames(`crops_leafsStageA crops_leafsStageB
+    crops_cornStageA crops_cornStageB crops_cornStageC crops_cornStageD
+    crop_melon crop_pumpkin crop_turnip pot_large pot_small bed`),
+  // §D3 new packs
+  'city-kit-suburban': splitNames(`fence-1x4 fence-low fence-2x2 planter
+    path-stones-short path-stones-long driveway-short tree-small tree-large`),
+  'minigolf-kit': splitNames(`start straight end corner hole-round hole-open
+    ramp-low ramp-medium bump obstacle-block obstacle-triangle windmill
+    tunnel-wide wall-left wall-right flag-red flag-blue castle`),
+  'space-kit': splitNames(`craft_speederA craft_speederB meteor
+    meteor_detailed meteor_half`),
+};
+
+const V2_NEW_PACKS = ['city-kit-suburban', 'minigolf-kit', 'space-kit'];
+
+test('V2 §D2/§D3: every 2.0 file is in the manifest and committed with glTF magic', () => {
+  for (const [slug, names] of Object.entries(V2_FILES)) {
+    const pack = PACKS.find((p) => p.slug === slug);
+    assert.ok(pack, `manifest missing pack '${slug}'`);
+    const keys = new Set(pack.files.map((e) => modelEntry(e).key));
+    for (const name of names) {
+      assert.ok(keys.has(name), `manifest ${slug} whitelist missing '${name}'`);
+      const file = path.join(KENNEY, slug, `${name}.glb`);
+      assert.ok(fs.existsSync(file), `missing ${slug}/${name}.glb`);
+      const buf = fs.readFileSync(file);
+      assert.ok(buf.length > 20, `${file}: too small to be a GLB`);
+      assert.equal(
+        buf.toString('ascii', 0, 4),
+        'glTF',
+        `${file}: bad magic bytes`
+      );
+    }
+  }
+});
+
+test('V2 §D3: the 3 new packs ship a non-empty License.txt', () => {
+  for (const slug of V2_NEW_PACKS) {
+    const file = path.join(KENNEY, slug, 'License.txt');
+    assert.ok(fs.existsSync(file), `missing ${slug}/License.txt`);
+    assert.ok(fs.statSync(file).size > 0, `${slug}/License.txt is empty`);
+  }
+});
+
+// V2/G15 (PLAN2 §D5): dynamic catalog-reference check. Each catalog file is
+// scanned AS TEXT for '<pack>/<file>' asset-key string literals — NOT
+// imported, because some of these modules are owned by in-flight wave-1/2
+// agents (G16/G19/G21) and may import three.js/DOM. Files that don't exist
+// yet are skipped per-file, so this test auto-strengthens as they land.
+const V2_CATALOG_FILES = [
+  'src/data/crops.js',
+  'src/data/foods.js',
+  'src/data/furniture.js',
+  'src/data/minigames.js',
+  'src/city/vetClinic.js',
+];
+
+test('V2 §D5: every asset-key literal in the data/city catalogs resolves to a committed file', () => {
+  const slugs = PACKS.map((p) => p.slug).join('|');
+  const keyRx = new RegExp(
+    `['"\`]((?:${slugs})/[A-Za-z0-9._ -]+)['"\`]`,
+    'g'
+  );
+  for (const rel of V2_CATALOG_FILES) {
+    const abs = path.join(ROOT, ...rel.split('/'));
+    if (!fs.existsSync(abs)) continue; // not landed yet (see note above)
+    const src = fs.readFileSync(abs, 'utf8');
+    for (const m of src.matchAll(keyRx)) {
+      assert.ok(
+        fs.existsSync(assetKeyToFile(m[1])),
+        `${rel}: asset key '${m[1]}' does not resolve to a committed file`
+      );
+    }
   }
 });
 
