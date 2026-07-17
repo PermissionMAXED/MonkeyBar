@@ -17,6 +17,21 @@ export const EN = {
   // --- pipeFlow (§C1.2 #9) — V2/G25 ---
   'mg.pipe.solved': 'Connected! Water flows!',
   'mg.pipe.puzzle': 'Puzzle {n}',
+
+  // --- deliveryRush (§C1.2 #5) — V2/G28 ---
+  'mg.delivery.ticket': '📦 {n}/{max}',
+  'mg.delivery.delivered': 'Delivered! Next stop!',
+  'mg.delivery.timeBonus': 'All delivered! Time bonus +{n}!',
+  'mg.delivery.allDone': 'All parcels delivered!',
+
+  // --- miniGolf (§C1.2 #6) — V2/G28 ---
+  'mg.golf.hole': '⛳ Hole {n}/{max} · Par {par}',
+  'mg.golf.strokes': 'Strokes: {n}',
+  'mg.golf.ace': 'HOLE-IN-ONE! +30',
+  'mg.golf.great': 'Great putt! +{n}',
+  'mg.golf.okay': 'Nice one! +{n}',
+  'mg.golf.done': 'In the cup! +{n}',
+  'mg.golf.capped': 'Phew! Next hole… +{n}',
 };
 
 /** @type {Record<string, string>} */
@@ -29,4 +44,19 @@ export const DE = {
   // --- pipeFlow (§C1.2 #9) — V2/G25 ---
   'mg.pipe.solved': 'Verbunden! Wasser marsch!',
   'mg.pipe.puzzle': 'Rätsel {n}',
+
+  // --- deliveryRush (§C1.2 #5) — V2/G28 ---
+  'mg.delivery.ticket': '📦 {n}/{max}',
+  'mg.delivery.delivered': 'Zugestellt! Nächster Halt!',
+  'mg.delivery.timeBonus': 'Alles zugestellt! Zeitbonus +{n}!',
+  'mg.delivery.allDone': 'Alle Pakete zugestellt!',
+
+  // --- miniGolf (§C1.2 #6) — V2/G28 ---
+  'mg.golf.hole': '⛳ Bahn {n}/{max} · Par {par}',
+  'mg.golf.strokes': 'Schläge: {n}',
+  'mg.golf.ace': 'HOLE-IN-ONE! +30',
+  'mg.golf.great': 'Super Putt! +{n}',
+  'mg.golf.okay': 'Gut gemacht! +{n}',
+  'mg.golf.done': 'Eingelocht! +{n}',
+  'mg.golf.capped': 'Puh! Nächste Bahn… +{n}',
 };

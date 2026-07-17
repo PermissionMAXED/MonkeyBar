@@ -965,3 +965,5 @@ export default {
     this.knockables = null;
   },
 };
+
+export { CITY_BANDS, buildCity, buildRouteGuides, hideNearbyArrows }; // V2/G28: deliveryRush consumes the shared dusk band table + instanced city assembly + arrow/route-line guides instead of duplicating them (§C1.2 #5, §C1.3, §C9.4)

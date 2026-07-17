@@ -45,7 +45,35 @@ import {
   tapEfficiencyBonus,
   pipeScore,
 } from '../src/minigames/games/pipeFlow.logic.js';
-import { COIN_TABLE } from '../src/data/constants.js';
+// --- V2/G28 (wave 4): deliveryRush + miniGolf logic siblings -----------------
+import {
+  DELIVERY,
+  pickDeliveries,
+  applyDrop,
+  applyCrash,
+  timeBonus,
+  roundScore,
+  dropPoint,
+  nearestRoadTile,
+  roadPathBetween,
+} from '../src/minigames/games/deliveryRush.logic.js';
+import {
+  GOLF,
+  holeScore,
+  frictionFactor,
+  rollDistance,
+  rollTimeToDistance,
+  powerForDistance,
+  reflect,
+  windmillBlocked,
+  isCaptured,
+  generateCourse,
+  canBeAt,
+  isStopped,
+  stepBall,
+} from '../src/minigames/games/miniGolf.logic.js';
+import { generateCityLayout, worldToTile, layoutColliders, LANDMARK_TRIGGER_M } from '../src/city/cityBuilder.js';
+import { COIN_TABLE, DRIVE_TUNING } from '../src/data/constants.js';
 import { computeCoins, MINIGAMES_BY_ID } from '../src/data/minigames.js';
 
 /** Deterministic rng (mulberry32) for seeded distribution checks. */
@@ -474,4 +502,285 @@ test('pipeFlow: score = 25·solved + bonus; typical 3 puzzles ≈ 75 (§C1.1)', 
   assert.equal(computeCoins(COIN_TABLE.pipeFlow, 75, false), 15); // §C1.1 typical row
   assert.equal(computeCoins(COIN_TABLE.pipeFlow, 0, false), 4);
   assert.equal(computeCoins(COIN_TABLE.pipeFlow, 9999, false), 25);
+});
+
+// ===========================================================================
+// V2/G28 (wave 4): deliveryRush + miniGolf (§C1.2 #5/#6, §C1.5)
+// ===========================================================================
+
+test('G28 .logic.js modules import no three.js/DOM', () => {
+  for (const id of ['deliveryRush', 'miniGolf']) {
+    const src = readFileSync(
+      fileURLToPath(new URL(`../src/minigames/games/${id}.logic.js`, import.meta.url)),
+      'utf8'
+    );
+    assert.ok(!/from\s+['"]three['"]/.test(src), `${id}.logic.js imports three`);
+    assert.ok(!/document\.|window\./.test(src), `${id}.logic.js touches the DOM`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #5 deliveryRush: destination pick — 3 distinct from 6, seeded (§C1.5)
+// ---------------------------------------------------------------------------
+
+test('deliveryRush: pick is 3 DISTINCT landmarks out of the 6-id pool', () => {
+  const ids = ['shop', 'vetClinic', 'fountain', 'playground', 'billboard', 'gasStation'];
+  assert.equal(DELIVERY.PARCELS, 3);
+  assert.equal(DELIVERY.LANDMARK_POOL, ids.length);
+  for (let seed = 1; seed <= 300; seed += 1) {
+    const picks = pickDeliveries(rngFrom(seed), ids);
+    assert.equal(picks.length, DELIVERY.PARCELS, `seed ${seed}: 3 destinations`);
+    assert.equal(new Set(picks).size, DELIVERY.PARCELS, `seed ${seed}: distinct`);
+    for (const id of picks) assert.ok(ids.includes(id), `seed ${seed}: ${id} in pool`);
+    // the run starts parked AT the shop — never deliver parcel #1 to the start
+    assert.notEqual(picks[0], 'shop', `seed ${seed}: first stop is the spawn`);
+  }
+});
+
+test('deliveryRush: pick is seeded-deterministic and covers the pool', () => {
+  const ids = ['shop', 'vetClinic', 'fountain', 'playground', 'billboard', 'gasStation'];
+  assert.deepEqual(pickDeliveries(rngFrom(77), ids), pickDeliveries(rngFrom(77), ids));
+  assert.notDeepEqual(pickDeliveries(rngFrom(77), ids), pickDeliveries(rngFrom(78), ids));
+  const seen = new Set();
+  for (let seed = 1; seed <= 200; seed += 1) {
+    for (const id of pickDeliveries(rngFrom(seed), ids)) seen.add(id);
+  }
+  assert.equal(seen.size, ids.length, 'every landmark can be drawn');
+});
+
+// ---------------------------------------------------------------------------
+// #5 deliveryRush: score + time-bonus math (§C1.5)
+// ---------------------------------------------------------------------------
+
+test('deliveryRush: +50 per drop, −5 per crash floored at 0 (§C1.2 #5)', () => {
+  assert.equal(applyDrop(0), 50);
+  assert.equal(applyDrop(100), 150);
+  assert.equal(applyCrash(50), 45);
+  assert.equal(applyCrash(3), 0); // floor — crashes never go negative
+  assert.equal(applyCrash(0), 0);
+});
+
+test('deliveryRush: time bonus = max(0, 120 − elapsedSec) after drop 3', () => {
+  assert.equal(timeBonus(0), 120);
+  assert.equal(timeBonus(45), 75);
+  assert.equal(timeBonus(119.4), 0); // 0.6 s left floors to 0 whole points
+  assert.equal(timeBonus(120), 0);
+  assert.equal(timeBonus(500), 0); // never negative
+});
+
+test('deliveryRush: roundScore composes drops, crashes and the bonus', () => {
+  assert.equal(roundScore(3, 0, 45), 150 + 75); // clean typical run
+  assert.equal(roundScore(3, 2, 45), 150 - 10 + 75);
+  assert.equal(roundScore(2, 1, 45), 100 - 5); // no bonus before the 3rd drop
+  assert.equal(roundScore(0, 4, 10), 0); // floor holds
+});
+
+test('deliveryRush: coin row §C1.1 — 8/5/32 energy 6, typical ≈ 180 → 22c', () => {
+  assert.deepEqual(COIN_TABLE.deliveryRush, { divisor: 8, min: 5, max: 32 });
+  assert.equal(MINIGAMES_BY_ID.deliveryRush.energyCost, 6); // car game (§C1)
+  assert.equal(computeCoins(COIN_TABLE.deliveryRush, 180, false), 22);
+  assert.equal(computeCoins(COIN_TABLE.deliveryRush, 0, false), 5); // min clamp
+  assert.equal(computeCoins(COIN_TABLE.deliveryRush, 9999, false), 32); // max clamp
+  assert.equal(computeCoins(COIN_TABLE.deliveryRush, 180, true), 44); // daily ×2
+});
+
+// ---------------------------------------------------------------------------
+// #5 deliveryRush: BFS road legs over the real seeded city (§C9.4)
+// ---------------------------------------------------------------------------
+
+test('deliveryRush: every landmark is road-reachable from every other', () => {
+  const layout = generateCityLayout(DRIVE_TUNING.CITY_SEED);
+  assert.equal(layout.landmarks.length, DELIVERY.LANDMARK_POOL, '6 landmarks');
+  const roadTiles = layout.landmarks.map((l) => {
+    const { r, c } = worldToTile(l.x, l.z);
+    const road = nearestRoadTile(layout.grid, r, c);
+    assert.ok(road, `${l.id}: nearest road tile exists`);
+    assert.equal(layout.grid[road.r][road.c].kind, 'road');
+    return { id: l.id, road };
+  });
+  for (const a of roadTiles) {
+    for (const b of roadTiles) {
+      if (a === b) continue;
+      const path = roadPathBetween(layout.grid, a.road, b.road);
+      assert.ok(path, `${a.id} → ${b.id}: connected`);
+      assert.deepEqual(path[0], a.road);
+      assert.deepEqual(path[path.length - 1], b.road);
+      for (let i = 1; i < path.length; i += 1) {
+        const dr = Math.abs(path[i].r - path[i - 1].r);
+        const dc = Math.abs(path[i].c - path[i - 1].c);
+        assert.equal(dr + dc, 1, `${a.id} → ${b.id}: 4-neighbor steps`);
+        assert.equal(layout.grid[path[i].r][path[i].c].kind, 'road');
+      }
+    }
+  }
+});
+
+test('deliveryRush: drop points sit outside colliders, near their anchors', () => {
+  const layout = generateCityLayout(DRIVE_TUNING.CITY_SEED);
+  const colliders = layoutColliders(layout);
+  for (const l of layout.landmarks) {
+    const p = dropPoint({ x: l.x, z: l.z }, colliders);
+    for (const b of colliders) {
+      const inside = p.x > b.minX && p.x < b.maxX && p.z > b.minZ && p.z < b.maxZ;
+      assert.ok(!inside, `${l.id}: drop point clear of colliders`);
+    }
+    // the ring stays within the sticker trigger radius of the true anchor
+    const d = Math.hypot(p.x - l.x, p.z - l.z);
+    assert.ok(d <= LANDMARK_TRIGGER_M - DELIVERY.DROP_RADIUS_M, `${l.id}: ring inside trigger (${d.toFixed(1)} m)`);
+  }
+  // skyTower's raw anchor IS inside its tower footprint — the push must move it
+  const tower = layout.landmarks.find((l) => l.id === 'skyTower');
+  const moved = dropPoint({ x: tower.x, z: tower.z }, colliders);
+  assert.ok(Math.hypot(moved.x - tower.x, moved.z - tower.z) > 1, 'skyTower anchor pushed out');
+  // a clear anchor passes through untouched
+  assert.deepEqual(dropPoint({ x: -46, z: 20 }, []), { x: -46, z: 20 });
+});
+
+test('deliveryRush: roadPathBetween rejects non-road endpoints', () => {
+  const grid = [
+    [{ kind: 'road' }, { kind: 'road' }],
+    [{ kind: 'block' }, { kind: 'road' }],
+  ];
+  assert.equal(roadPathBetween(grid, { r: 1, c: 0 }, { r: 0, c: 0 }), null);
+  const path = roadPathBetween(grid, { r: 0, c: 0 }, { r: 1, c: 1 });
+  assert.deepEqual(path, [{ r: 0, c: 0 }, { r: 0, c: 1 }, { r: 1, c: 1 }]);
+  assert.deepEqual(nearestRoadTile(grid, 1, 0), { r: 0, c: 0 });
+});
+
+// ---------------------------------------------------------------------------
+// #6 miniGolf: friction integration — the ball STOPS below 0.01 m/s (§C1.5)
+// ---------------------------------------------------------------------------
+
+test('miniGolf: friction is ×0.985 per 60 fps frame (§C1.2 #6)', () => {
+  assert.equal(GOLF.FRICTION_PER_FRAME, 0.985);
+  assert.ok(Math.abs(frictionFactor(1 / 60) - 0.985) < 1e-12, 'one frame');
+  assert.ok(Math.abs(frictionFactor(1) - 0.985 ** 60) < 1e-9, '60 frames');
+});
+
+test('miniGolf: an integrated roll always settles below 0.01 m/s', () => {
+  assert.equal(GOLF.STOP_SPEED, 0.01);
+  const [course] = [generateCourse(rngFrom(5))];
+  const straight = course[0]; // hole #1: plain lane, no obstacles
+  for (const v0 of [0.5, 1.5, 3, GOLF.MAX_POWER]) {
+    const ball = { x: straight.start.x, z: straight.start.z, vx: 0, vz: v0, done: false };
+    let t2 = 0;
+    while (!isStopped(straight, ball) && !ball.done && t2 < 60) {
+      stepBall(straight, ball, 1 / 60, 0);
+      t2 += 1 / 60;
+    }
+    assert.ok(t2 < 60, `v0=${v0}: settles within 60 s`);
+    if (!ball.done) {
+      assert.ok(Math.hypot(ball.vx, ball.vz) < GOLF.STOP_SPEED, `v0=${v0}: at rest`);
+    }
+  }
+});
+
+test('miniGolf: rollDistance/powerForDistance/rollTime are consistent', () => {
+  for (const d of [0.8, 1.6, 3.2]) {
+    const v = powerForDistance(d);
+    assert.ok(Math.abs(rollDistance(v) - d) < 0.05, `power table hits ${d} m`);
+    assert.ok(Number.isFinite(rollTimeToDistance(v, d * 0.9)), 'reaches 90% of it');
+  }
+  assert.equal(rollTimeToDistance(0.2, 50), Infinity, 'stops short → Infinity');
+  assert.ok(rollDistance(GOLF.MAX_POWER) < 100, 'max putt stays on the course scale');
+});
+
+// ---------------------------------------------------------------------------
+// #6 miniGolf: bank reflection (§C1.5)
+// ---------------------------------------------------------------------------
+
+test('miniGolf: reflect flips the normal component with restitution', () => {
+  const r = reflect({ vx: 2, vz: 1 }, -1, 0); // wall to the +x side
+  assert.ok(Math.abs(r.vx - -2 * GOLF.WALL_RESTITUTION) < 1e-12, 'normal flipped+damped');
+  assert.equal(r.vz, 1, 'tangential untouched');
+  const r2 = reflect({ vx: 0, vz: -3 }, 0, 1); // wall to the −z side
+  assert.ok(Math.abs(r2.vz - 3 * GOLF.WALL_RESTITUTION) < 1e-12);
+  assert.equal(r2.vx, 0);
+});
+
+test('miniGolf: stepBall banks off a closed rail and keeps the ball in bounds', () => {
+  const course = generateCourse(rngFrom(9));
+  const straight = course[0];
+  // fire the ball hard at the +x rail of the tee cell
+  const ball = { x: 0, z: 0.5, vx: 3, vz: 0, done: false };
+  const events = [];
+  for (let i = 0; i < 240; i += 1) {
+    events.push(...stepBall(straight, ball, 1 / 60, 0));
+    assert.ok(canBeAt(straight, ball.x, ball.z), `frame ${i}: in bounds`);
+    if (isStopped(straight, ball)) break;
+  }
+  assert.ok(events.includes('bank'), 'rail bank fired');
+  assert.ok(!events.includes('holed'), 'a sideways putt never scores');
+});
+
+// ---------------------------------------------------------------------------
+// #6 miniGolf: par scoring (§C1.5) + course + windmill + coin row
+// ---------------------------------------------------------------------------
+
+test('miniGolf: per-hole scoring 30/20/12/6 (§C1.2 #6)', () => {
+  assert.equal(holeScore(1, 2), GOLF.SCORE_ACE); // hole-in-one +30
+  assert.equal(holeScore(1, 3), 30);
+  assert.equal(holeScore(2, 2), GOLF.SCORE_PAR); // ≤ par +20
+  assert.equal(holeScore(2, 3), 20);
+  assert.equal(holeScore(3, 3), 20);
+  assert.equal(holeScore(3, 2), GOLF.SCORE_BOGEY); // par+1 +12
+  assert.equal(holeScore(4, 3), 12);
+  assert.equal(holeScore(5, 3), GOLF.SCORE_OTHER); // else +6
+  assert.equal(holeScore(GOLF.MAX_STROKES, 2), 6); // 10-stroke cap consolation
+  assert.equal(GOLF.MAX_STROKES, 10);
+});
+
+test('miniGolf: 6 seeded holes — fixed archetype order, seeded variation', () => {
+  const a = generateCourse(rngFrom(3));
+  const b = generateCourse(rngFrom(3));
+  assert.equal(a.length, GOLF.HOLE_COUNT);
+  assert.deepEqual(
+    a.map((h) => h.id),
+    ['straight', 'corner', 'ramp', 'bump', 'windmill', 'tunnel']
+  );
+  for (const h of a) {
+    assert.ok(h.par >= 2 && h.par <= 3, `${h.id}: par 2–3`);
+    assert.ok(h.cells.length >= 4, `${h.id}: playable length`);
+    assert.ok(canBeAt(h, h.start.x, h.start.z), `${h.id}: tee in bounds`);
+    assert.ok(canBeAt(h, h.hole.x, h.hole.z), `${h.id}: cup in bounds`);
+  }
+  assert.deepEqual(a, b, 'same rng stream → identical course');
+  // seeds vary at least one of: corner direction, bump z, windmill phase
+  const many = new Set();
+  for (let seed = 1; seed <= 40; seed += 1) {
+    const c = generateCourse(rngFrom(seed));
+    many.add(`${c[1].cells[3][0]}|${c[3].bump.z}|${c[4].windmill.phase.toFixed(3)}`);
+  }
+  assert.ok(many.size > 10, `seeded variation (${many.size} distinct)`);
+});
+
+test('miniGolf: windmill gate blocks rhythmically, open windows exist', () => {
+  const period = Math.PI / 2; // 4 blades
+  assert.equal(windmillBlocked(0), true, 'blade across the slot at θ=0');
+  assert.equal(windmillBlocked(period / 2), false, 'mid-quarter is open');
+  // duty cycle ≈ WINDMILL_BLOCK_FRAC and periodic in π/2
+  let blocked = 0;
+  const N = 4000;
+  for (let i = 0; i < N; i += 1) {
+    const theta = (i / N) * Math.PI * 4;
+    if (windmillBlocked(theta)) blocked += 1;
+    assert.equal(windmillBlocked(theta), windmillBlocked(theta + period));
+  }
+  assert.ok(Math.abs(blocked / N - GOLF.WINDMILL_BLOCK_FRAC) < 0.02, 'duty cycle');
+});
+
+test('miniGolf: cup capture needs slow AND close (§C1.2 #6 skip rule)', () => {
+  assert.equal(isCaptured(GOLF.HOLE_R - 0.01, GOLF.CAPTURE_SPEED - 0.1), true);
+  assert.equal(isCaptured(GOLF.HOLE_R - 0.01, GOLF.CAPTURE_SPEED + 0.1), false); // too fast: skips
+  assert.equal(isCaptured(GOLF.HOLE_R + 0.01, 0.1), false); // too far
+});
+
+test('miniGolf: coin row §C1.1 — 5/4/28 energy 8, typical ≈ 80 → 16c', () => {
+  assert.deepEqual(COIN_TABLE.miniGolf, { divisor: 5, min: 4, max: 28 });
+  assert.equal(MINIGAMES_BY_ID.miniGolf.energyCost, 8);
+  assert.equal(computeCoins(COIN_TABLE.miniGolf, 80, false), 16);
+  assert.equal(computeCoins(COIN_TABLE.miniGolf, 0, false), 4); // min clamp
+  assert.equal(computeCoins(COIN_TABLE.miniGolf, 9999, false), 28); // max clamp
+  // perfect round (6 aces) still clamps inside the row
+  assert.equal(computeCoins(COIN_TABLE.miniGolf, 6 * GOLF.SCORE_ACE, false), 28);
 });
