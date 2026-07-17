@@ -560,9 +560,9 @@ let bellAudio = null;
 let bellAudioLoading = false;
 function jingleBell() {
   if (bellAudio) {
-    // V2/G29 upgrades: reuses the existing 'hop.gate' glass ding as the bell
-    // jingle — G29's audio-polish pass may swap in a dedicated bell recipe.
-    bellAudio.play('hop.gate');
+    // V2/G29 upgrades: the dedicated bell recipe landed — 'hop.bell' maps to
+    // the bespoke 'bellJingle' synth (two inharmonic partials, two shakes).
+    bellAudio.play('hop.bell');
     return;
   }
   if (!bellAudioLoading) {

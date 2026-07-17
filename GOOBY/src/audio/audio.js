@@ -7,7 +7,9 @@
 //                         volume, ±3% humanized rate), synth recipe, or Gooby
 //                         voice recipe. Loop ids (gooby.snore, and V2/G26's
 //                         ambience.rain/ambience.birdsong synth loops) run
-//                         until stop().
+//                         until stop(). V2/G29: synth recipes are pitch-aware
+//                         (def.pitch × opts.pitch frequency multiplier) so one
+//                         recipe serves a pitched family (goobySays pads).
 //   music(id|null)      — procedural sequencers: 'home' lo-fi pentatonic pluck
 //                         loop (~72 BPM, quiet) and 'dance' 100 BPM upbeat
 //                         track honoring the DANCE constants contract (§D6:
@@ -80,8 +82,12 @@ function applySettings(settings) {
   // F3: park running loops while sfx is off; bring them back on re-enable
   // (e.g. mute during a nap must not permanently silence the snore).
   if (!enabled.sfx) {
-    for (const id of loops.keys()) pendingLoops.add(id);
+    // V2/G29: park AFTER stopping — stop(id) clears pendingLoops entries, so
+    // the old add-then-stop order silently dropped the parked ids and a mute
+    // cycle never resumed the loops (§D6 toggle contract).
+    const running = [...loops.keys()];
     stopAllLoops();
+    for (const id of running) pendingLoops.add(id);
   } else {
     resumePendingLoops();
   }
@@ -244,15 +250,19 @@ function tone(dest, { type = 'sine', f0 = 440, f1 = f0, dur = 0.15, vol = 0.5, a
 
 /** Shared 1 s noise buffer (separate from the voice's — different module). */
 let noiseBuf = null;
-function noise(dest, { type = 'bandpass', f0 = 1000, f1 = f0, q = 1, dur = 0.2, vol = 0.4, at = 0 }) {
+/** V2/G29: extracted so the polished rain loop's patter layer can share it. */
+function whiteNoiseBuffer() {
   if (!noiseBuf) {
     noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
     const d = noiseBuf.getChannelData(0);
     for (let i = 0; i < d.length; i += 1) d[i] = Math.random() * 2 - 1;
   }
+  return noiseBuf;
+}
+function noise(dest, { type = 'bandpass', f0 = 1000, f1 = f0, q = 1, dur = 0.2, vol = 0.4, at = 0 }) {
   const t = ctx.currentTime + at;
   const src = ctx.createBufferSource();
-  src.buffer = noiseBuf;
+  src.buffer = whiteNoiseBuffer();
   src.loop = true;
   const f = ctx.createBiquadFilter();
   f.type = type;
@@ -268,7 +278,14 @@ function noise(dest, { type = 'bandpass', f0 = 1000, f1 = f0, q = 1, dur = 0.2, 
   src.stop(t + dur + 0.02);
 }
 
-/** @type {Record<string, (dest: AudioNode, vol: number) => void>} */
+/**
+ * V2/G29: recipes now take an optional third options bag — `o.pitch` is a
+ * frequency multiplier (1 = recipe base), so ONE recipe can serve a pitched
+ * family (goobySays' four rising pentatonic pads). sfxMap synth defs carry a
+ * `pitch` field; audio.play(id, {pitch}) can multiply on top. v1 recipes
+ * ignore the bag (unchanged signatures are still valid).
+ * @type {Record<string, (dest: AudioNode, vol: number, o?: {pitch?: number}) => void>}
+ */
 const SYNTH_RECIPES = {
   coin(dest, vol) {
     tone(dest, { type: 'square', f0: 987, dur: 0.07, vol: vol * 0.5 });
@@ -340,6 +357,230 @@ const SYNTH_RECIPES = {
     noise(dest, { f0: 1500, f1: 250, q: 2.2, dur: 1.1, vol: vol * 0.6 });
     noise(dest, { type: 'lowpass', f0: 700, f1: 180, dur: 1.2, vol: vol * 0.35 });
   },
+
+  // ==========================================================================
+  // V2/G29: 2.0 bespoke recipes (§E wave 4 — garden/health/vet/progression/
+  // photo/new-game sounds; §D1 audio row: synth-only, NO new sample packs).
+  // All take the optional pitch bag (o.pitch multiplies every frequency).
+  // ==========================================================================
+
+  /** goobySays pad squeak (§C1.2 #1): warm pluck + soft sub — the 4 pads map
+   *  this at pitches 1 / 1.125 / 1.25 / 1.5 (rising C-D-E-G pentatonic). */
+  saysPad(dest, vol, o = {}) {
+    const p = o.pitch ?? 1;
+    tone(dest, { type: 'triangle', f0: 523.25 * p, f1: 530 * p, dur: 0.3, vol: vol * 0.55, attack: 0.008 });
+    tone(dest, { type: 'sine', f0: 261.63 * p, dur: 0.26, vol: vol * 0.3, attack: 0.01 });
+    noise(dest, { type: 'highpass', f0: 3600, dur: 0.02, vol: vol * 0.12 }); // pad "touch" tick
+  },
+
+  /** Doorbell ding-dong (§C9.2 vet arrival / §C1.2 #5 delivery drop). */
+  doorbell(dest, vol, o = {}) {
+    const p = o.pitch ?? 1;
+    for (const [f, at, d] of [[659.25, 0, 0.4], [523.25, 0.28, 0.62]]) {
+      tone(dest, { type: 'sine', f0: f * p, dur: d, vol: vol * 0.5, at, attack: 0.008 });
+      tone(dest, { type: 'sine', f0: f * 2 * p, dur: d * 0.6, vol: vol * 0.14, at, attack: 0.008 });
+    }
+  },
+
+  /** Camera shutter (§C12.2): click-CLACK + tiny motor wind. */
+  shutter(dest, vol) {
+    noise(dest, { type: 'highpass', f0: 3000, dur: 0.025, vol: vol * 0.7 });
+    tone(dest, { f0: 2400, f1: 1400, dur: 0.03, vol: vol * 0.2 });
+    noise(dest, { type: 'bandpass', f0: 1500, q: 1.2, dur: 0.035, vol: vol * 0.6, at: 0.075 });
+    tone(dest, { type: 'square', f0: 95, f1: 70, dur: 0.06, vol: vol * 0.1, at: 0.075 }); // motor
+  },
+
+  /** Bell-collar jingle (§C8.4): two inharmonic bell partials, two shakes. */
+  bellJingle(dest, vol, o = {}) {
+    const p = o.pitch ?? 1;
+    for (let shake = 0; shake < 2; shake += 1) {
+      const at = shake * 0.085;
+      const jp = p * (0.97 + Math.random() * 0.06);
+      tone(dest, { type: 'sine', f0: 2093 * jp, dur: 0.16, vol: vol * (0.4 - shake * 0.12), at, attack: 0.004 });
+      tone(dest, { type: 'sine', f0: 2093 * 2.76 * jp, dur: 0.09, vol: vol * 0.16, at, attack: 0.004 });
+    }
+  },
+
+  /** miniGolf putt (§C1.2 #6): soft putter tock. */
+  golfPutt(dest, vol) {
+    noise(dest, { type: 'lowpass', f0: 1600, f1: 500, dur: 0.035, vol: vol * 0.55 });
+    tone(dest, { type: 'sine', f0: 190, f1: 135, dur: 0.09, vol: vol * 0.6 });
+  },
+
+  /** miniGolf sink (§C1.2 #6): ball-in-cup rattle + happy blip. */
+  golfSink(dest, vol) {
+    [520, 430, 350].forEach((f, i) => {
+      tone(dest, { type: 'sine', f0: f, f1: f * 0.85, dur: 0.06, vol: vol * 0.4, at: i * 0.085 });
+      noise(dest, { type: 'lowpass', f0: 1400, dur: 0.025, vol: vol * 0.25, at: i * 0.085 });
+    });
+    tone(dest, { type: 'triangle', f0: 784, f1: 1046, dur: 0.16, vol: vol * 0.4, at: 0.3 });
+  },
+
+  /** veggieChop chop (§C1.2 #4): knife slice + board thunk. */
+  chop(dest, vol) {
+    noise(dest, { type: 'highpass', f0: 2200, dur: 0.045, vol: vol * 0.65 });
+    tone(dest, { f0: 230, f1: 90, dur: 0.09, vol: vol * 0.55, at: 0.02 });
+    noise(dest, { type: 'lowpass', f0: 900, f1: 300, dur: 0.06, vol: vol * 0.3, at: 0.02 });
+  },
+
+  /** veggieChop junk splat (§C1.2 #4): wet burst + sagging blob. */
+  splat(dest, vol) {
+    noise(dest, { type: 'lowpass', f0: 2200, f1: 320, q: 0.7, dur: 0.2, vol: vol * 0.6 });
+    tone(dest, { f0: 260, f1: 75, dur: 0.18, vol: vol * 0.5 });
+    noise(dest, { type: 'highpass', f0: 2800, dur: 0.05, vol: vol * 0.18, at: 0.02 }); // juice speckle
+  },
+
+  /** goalieGooby save-dive (§C1.2 #7): whoosh sweep + soft grass landing. */
+  diveWhoosh(dest, vol) {
+    noise(dest, { f0: 420, f1: 2600, q: 1.4, dur: 0.16, vol: vol * 0.5 });
+    noise(dest, { f0: 2600, f1: 500, q: 1.4, dur: 0.14, vol: vol * 0.45, at: 0.14 });
+    noise(dest, { type: 'lowpass', f0: 700, f1: 250, dur: 0.09, vol: vol * 0.4, at: 0.26 });
+  },
+
+  /** deliveryRush drop confetti (§C1.2 #5): pop + rising sparkle fizz. */
+  confettiPop(dest, vol) {
+    tone(dest, { f0: 880, f1: 380, dur: 0.08, vol: vol * 0.55 });
+    noise(dest, { type: 'highpass', f0: 2400, f1: 5200, dur: 0.3, vol: vol * 0.2 });
+    [1318.5, 1568, 2093, 2637].forEach((f, i) =>
+      tone(dest, { type: 'triangle', f0: f, dur: 0.12, vol: vol * 0.26, at: 0.06 + i * 0.045 }));
+  },
+
+  /** Vet cure (§C3.5/§C9.2): healing shimmer — warm pad + rising arp + dust. */
+  vetSparkle(dest, vol) {
+    tone(dest, { type: 'sine', f0: 392, dur: 0.55, vol: vol * 0.22, attack: 0.06 });
+    [784, 987.75, 1318.5].forEach((f, i) =>
+      tone(dest, { type: 'triangle', f0: f, dur: 0.2, vol: vol * 0.35, at: 0.08 + i * 0.1 }));
+    [2093, 2637].forEach((f, i) =>
+      tone(dest, { f0: f, dur: 0.12, vol: vol * 0.16, at: 0.4 + i * 0.06 }));
+  },
+
+  /** Vet checkup (§C3.5): clipboard tick + affirmative two-note "all good". */
+  checkupChime(dest, vol) {
+    noise(dest, { type: 'highpass', f0: 2600, dur: 0.02, vol: vol * 0.3 });
+    tone(dest, { type: 'triangle', f0: 659.25, dur: 0.1, vol: vol * 0.45, at: 0.07 });
+    tone(dest, { type: 'triangle', f0: 880, dur: 0.2, vol: vol * 0.5, at: 0.2 });
+  },
+
+  /** Landmark discovered (§C9.3): bright fourth-up motif + camera-flash fizz. */
+  discovery(dest, vol) {
+    tone(dest, { type: 'triangle', f0: 587.33, dur: 0.12, vol: vol * 0.45 });
+    tone(dest, { type: 'triangle', f0: 783.99, dur: 0.24, vol: vol * 0.5, at: 0.11 });
+    noise(dest, { type: 'highpass', f0: 3200, dur: 0.1, vol: vol * 0.18, at: 0.11 });
+    tone(dest, { f0: 2093, dur: 0.1, vol: vol * 0.16, at: 0.3 });
+  },
+
+  /** Quest claim (§C5): compact 3-note triumph + octave stab. */
+  questJingle(dest, vol) {
+    [523.25, 659.25, 783.99].forEach((f, i) =>
+      tone(dest, { type: 'square', f0: f, dur: 0.09, vol: vol * 0.3, at: i * 0.08 }));
+    tone(dest, { type: 'triangle', f0: 1046.5, dur: 0.3, vol: vol * 0.45, at: 0.24 });
+    tone(dest, { f0: 2093, dur: 0.14, vol: vol * 0.14, at: 0.28 });
+  },
+
+  /** Sticker earned (§C6): peel + up-pop + bright ping. */
+  stickerPop(dest, vol) {
+    noise(dest, { type: 'bandpass', f0: 900, f1: 2400, q: 1.4, dur: 0.07, vol: vol * 0.3 }); // peel
+    tone(dest, { f0: 700, f1: 1350, dur: 0.08, vol: vol * 0.55, at: 0.05 });
+    tone(dest, { type: 'sine', f0: 1760, dur: 0.18, vol: vol * 0.3, at: 0.13 });
+  },
+
+  /** Sticker SET complete (§C6): the big one — 4-note fanfare into a chord. */
+  setFanfare(dest, vol) {
+    [523.25, 659.25, 783.99, 1046.5].forEach((f, i) =>
+      tone(dest, { type: 'triangle', f0: f, dur: 0.13, vol: vol * 0.4, at: i * 0.1 }));
+    [1046.5, 1318.5, 1568].forEach((f, i) =>
+      tone(dest, { type: 'triangle', f0: f, dur: 0.45, vol: vol * 0.3, at: 0.42 + i * 0.015 }));
+    noise(dest, { type: 'highpass', f0: 3000, f1: 6000, dur: 0.35, vol: vol * 0.14, at: 0.42 });
+  },
+
+  /** Garden harvest (§C2.2): crisp pluck-pop + Gooby's delighted gasp —
+   *  "harvest joy" (the voice recipe rides inside this synth recipe so the
+   *  single 'garden.harvest' id delivers both). */
+  harvestJoy(dest, vol) {
+    tone(dest, { f0: 620, f1: 1400, dur: 0.09, vol: vol * 0.6 });
+    noise(dest, { type: 'highpass', f0: 2600, dur: 0.03, vol: vol * 0.25 });
+    VOICE_RECIPES.delightedGasp(ctx, dest, { volume: vol * 0.9 });
+  },
+
+  /** Crop turned ready (§C2.2): gentle two-note glisten (quiet, ambient). */
+  readyChime(dest, vol) {
+    tone(dest, { type: 'sine', f0: 1174.66, dur: 0.14, vol: vol * 0.4 });
+    tone(dest, { type: 'sine', f0: 1568, dur: 0.26, vol: vol * 0.42, at: 0.12 });
+  },
+
+  /** Watering-can trickle (§C2.2): overlapping burbles + two high droplets. */
+  trickle(dest, vol, o = {}) {
+    const p = o.pitch ?? 1;
+    [1500, 1150, 900].forEach((f, i) =>
+      noise(dest, { type: 'bandpass', f0: f * p, f1: f * 0.7 * p, q: 2.4, dur: 0.28, vol: vol * 0.35, at: i * 0.14 }));
+    for (let i = 0; i < 2; i += 1) {
+      const f = (2200 + Math.random() * 900) * p;
+      tone(dest, { f0: f, f1: f * 1.35, dur: 0.05, vol: vol * 0.18, at: 0.12 + i * 0.19 });
+    }
+  },
+
+  /** Fertilizer (§C2.2): two dust-bag puffs + a growth sparkle tail. */
+  fertilizerPuff(dest, vol) {
+    noise(dest, { type: 'lowpass', f0: 600, f1: 260, dur: 0.09, vol: vol * 0.5 });
+    noise(dest, { type: 'lowpass', f0: 520, f1: 240, dur: 0.1, vol: vol * 0.4, at: 0.13 });
+    [1568, 2093].forEach((f, i) =>
+      tone(dest, { f0: f, dur: 0.11, vol: vol * 0.2, at: 0.26 + i * 0.06 }));
+  },
+
+  /** Compost-bin sale (§C2.2): cash-register cha-ching — tick, bell dyad, drawer. */
+  chaChing(dest, vol) {
+    noise(dest, { type: 'highpass', f0: 3400, dur: 0.02, vol: vol * 0.4 });
+    tone(dest, { type: 'sine', f0: 1318.5, dur: 0.24, vol: vol * 0.4, at: 0.05, attack: 0.005 });
+    tone(dest, { type: 'sine', f0: 1760, dur: 0.28, vol: vol * 0.34, at: 0.06, attack: 0.005 });
+    tone(dest, { type: 'sine', f0: 150, f1: 105, dur: 0.09, vol: vol * 0.4, at: 0.2 });
+    noise(dest, { type: 'lowpass', f0: 900, f1: 350, dur: 0.06, vol: vol * 0.25, at: 0.2 });
+  },
+
+  /** Seed planted (§C2.2): soil plop + two soft paw pats. */
+  seedPlant(dest, vol) {
+    tone(dest, { f0: 300, f1: 92, dur: 0.12, vol: vol * 0.6 });
+    noise(dest, { type: 'lowpass', f0: 620, f1: 300, dur: 0.05, vol: vol * 0.35, at: 0.14 });
+    noise(dest, { type: 'lowpass', f0: 560, f1: 280, dur: 0.05, vol: vol * 0.3, at: 0.26 });
+  },
+
+  /** starHopper star pickup (§C1.2 #8): bright ping + shimmer partial. */
+  starPing(dest, vol, o = {}) {
+    const p = o.pitch ?? 1;
+    tone(dest, { type: 'sine', f0: 1568 * p, f1: 1975.5 * p, dur: 0.11, vol: vol * 0.5, attack: 0.005 });
+    tone(dest, { type: 'sine', f0: 3136 * p, dur: 0.14, vol: vol * 0.16, at: 0.03 });
+    noise(dest, { type: 'highpass', f0: 5000, dur: 0.06, vol: vol * 0.1, at: 0.02 });
+  },
+
+  /** starHopper golden carrot (§C1.2 #8): coin dyad + sparkle triplet. */
+  goldenPing(dest, vol) {
+    tone(dest, { type: 'square', f0: 987, dur: 0.06, vol: vol * 0.35 });
+    tone(dest, { type: 'square', f0: 1318.5, dur: 0.14, vol: vol * 0.35, at: 0.06 });
+    [2093, 2637, 3136].forEach((f, i) =>
+      tone(dest, { f0: f, dur: 0.1, vol: vol * 0.18, at: 0.12 + i * 0.05 }));
+  },
+
+  /** pipeFlow path connect (§C1.2 #9): click + rising double-bloop + gurgle. */
+  pipeConnect(dest, vol) {
+    noise(dest, { type: 'highpass', f0: 2600, dur: 0.02, vol: vol * 0.35 });
+    tone(dest, { f0: 440, f1: 560, dur: 0.09, vol: vol * 0.45, at: 0.04 });
+    tone(dest, { f0: 587, f1: 760, dur: 0.11, vol: vol * 0.5, at: 0.15 });
+    noise(dest, { type: 'bandpass', f0: 1300, f1: 750, q: 2.2, dur: 0.22, vol: vol * 0.3, at: 0.24 });
+  },
+
+  /** goalieGooby crowd (§C1.2 #7): bunny-crowd cheer — a soft roar swell with
+   *  a handful of overlapping happy squeaks poking out of it. */
+  bunnyCheer(dest, vol) {
+    noise(dest, { type: 'bandpass', f0: 900, f1: 1500, q: 0.7, dur: 0.75, vol: vol * 0.3 });
+    for (let i = 0; i < 4; i += 1) {
+      const f = 700 + Math.random() * 500;
+      tone(dest, {
+        type: 'triangle', f0: f, f1: f * 1.35, dur: 0.1 + Math.random() * 0.05,
+        vol: vol * 0.22, at: 0.06 + i * 0.11 + Math.random() * 0.04,
+      });
+    }
+    tone(dest, { type: 'triangle', f0: 1046.5, dur: 0.18, vol: vol * 0.2, at: 0.42 });
+  },
+  // ============================================================ end V2/G29 ==
 };
 
 // ---------------------------------------------------------------------------
@@ -371,47 +612,115 @@ function brownNoiseBuffer() {
 
 /** @type {Record<string, (dest: AudioNode, vol: number) => {stop: () => void}>} */
 const LOOP_RECIPES = {
-  /** Rain-on-leaves (§C11.2): brown noise → LP 800 Hz, −18 dB, ~1 s fades. */
+  /**
+   * Rain-on-leaves (§C11.2): brown noise → LP 800 Hz, −18 dB, ~1 s fades.
+   * V2/G29 polish (id contract + level + SFX-toggle behavior unchanged):
+   * a slow LP-frequency drift makes gust swells, and a quiet high "patter"
+   * layer with a gentle tremolo reads as drops hitting the leaves.
+   */
   rainLoop(dest, vol) {
     const t = ctx.currentTime;
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0.0001, t);
+    master.gain.exponentialRampToValueAtTime(Math.max(0.0001, RAIN_LOOP_GAIN * vol), t + 1);
+    master.connect(dest);
+    // body: brown noise → LP 800 Hz (the §C11.2 recipe)
     const src = ctx.createBufferSource();
     src.buffer = brownNoiseBuffer();
     src.loop = true;
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass';
     lp.frequency.value = 800;
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, RAIN_LOOP_GAIN * vol), t + 1);
-    src.connect(lp).connect(g).connect(dest);
+    const bodyG = ctx.createGain();
+    bodyG.gain.value = 0.92;
+    src.connect(lp).connect(bodyG).connect(master);
     src.start(t);
+    // V2/G29: gust swell — LP center drifts 800 ± 130 Hz over ~14 s
+    const drift = ctx.createOscillator();
+    drift.frequency.value = 0.07;
+    const driftGain = ctx.createGain();
+    driftGain.gain.value = 130;
+    drift.connect(driftGain).connect(lp.frequency);
+    drift.start(t);
+    // V2/G29: leaf patter — bandpassed white noise, slow tremolo, quiet
+    const pat = ctx.createBufferSource();
+    pat.buffer = whiteNoiseBuffer();
+    pat.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 2600;
+    bp.Q.value = 0.8;
+    const patG = ctx.createGain();
+    patG.gain.value = 0.2;
+    const trem = ctx.createOscillator();
+    trem.frequency.value = 0.5;
+    const tremGain = ctx.createGain();
+    tremGain.gain.value = 0.08;
+    trem.connect(tremGain).connect(patG.gain);
+    pat.connect(bp).connect(patG).connect(master);
+    pat.start(t);
+    trem.start(t);
     return {
       stop() {
         const at = ctx.currentTime;
-        g.gain.setTargetAtTime(0.0001, at, 0.25);
-        src.stop(at + 1.2);
+        master.gain.setTargetAtTime(0.0001, at, 0.25);
+        for (const n of [src, pat, drift, trem]) n.stop(at + 1.2);
       },
     };
   },
 
-  /** Dawn birdsong (§C10.2): sparse seeded chirp bursts on a timer. */
+  /**
+   * Dawn birdsong (§C10.2): sparse chirp bursts on a timer.
+   * V2/G29 polish (contract unchanged): each bird now sings one of THREE
+   * motifs — rising chirps (the original), a fast two-note trill, or a
+   * falling slur pair — and ~40% of bursts get a quieter "answer bird" at a
+   * lower pitch, so the dawn garden sounds like a conversation.
+   */
   birdsong(dest, vol) {
     const g = ctx.createGain();
     g.gain.value = vol;
     g.connect(dest);
     /** @type {ReturnType<typeof setTimeout>|null} */
     let timer = null;
-    const burst = () => {
-      // one bird: 2–4 rising chirps around a random base pitch
-      const f0 = 2100 + Math.random() * 1700;
-      const n = 2 + Math.floor(Math.random() * 3);
-      for (let i = 0; i < n; i += 1) {
-        tone(g, {
-          type: 'sine', f0, f1: f0 * (1.12 + Math.random() * 0.22),
-          dur: 0.08 + Math.random() * 0.04, vol: 0.14 + Math.random() * 0.08,
-          at: i * 0.13, attack: 0.015,
-        });
+    /** one bird: a random motif around `base` Hz, `loud` 0..1, `at` offset s */
+    const motif = (base, loud, at) => {
+      const kind = Math.random();
+      if (kind < 0.45) {
+        // rising chirps (the G26 classic)
+        const n = 2 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < n; i += 1) {
+          tone(g, {
+            type: 'sine', f0: base, f1: base * (1.12 + Math.random() * 0.22),
+            dur: 0.08 + Math.random() * 0.04, vol: loud * (0.14 + Math.random() * 0.08),
+            at: at + i * 0.13, attack: 0.015,
+          });
+        }
+      } else if (kind < 0.75) {
+        // V2/G29: fast two-note trill
+        const n = 5 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < n; i += 1) {
+          const f = i % 2 === 0 ? base : base * 1.26;
+          tone(g, {
+            type: 'sine', f0: f, f1: f * 1.05, dur: 0.05,
+            vol: loud * (0.1 + Math.random() * 0.06), at: at + i * 0.07, attack: 0.01,
+          });
+        }
+      } else {
+        // V2/G29: falling slur pair
+        for (let i = 0; i < 2; i += 1) {
+          tone(g, {
+            type: 'sine', f0: base * 1.3, f1: base * (0.82 + Math.random() * 0.08),
+            dur: 0.12 + Math.random() * 0.05, vol: loud * (0.12 + Math.random() * 0.06),
+            at: at + i * 0.2, attack: 0.02,
+          });
+        }
       }
+    };
+    const burst = () => {
+      const f0 = 2100 + Math.random() * 1700;
+      motif(f0, 1, 0);
+      // V2/G29: occasional answer bird, lower and further away
+      if (Math.random() < 0.4) motif(f0 * 0.8, 0.55, 0.5 + Math.random() * 0.3);
       timer = setTimeout(burst, 900 + Math.random() * 2600);
     };
     timer = setTimeout(burst, 250);
@@ -436,8 +745,9 @@ const LOOP_RECIPES = {
 /**
  * Play a one-shot sfx by semantic id (§D6). Unknown ids warn in dev builds
  * (the coverage test in test/onboarding.test.js keeps the map complete).
+ * V2/G29: opts.pitch multiplies the def's pitch for pitch-aware synth recipes.
  * @param {string} id
- * @param {{volume?: number}} [opts]
+ * @param {{volume?: number, pitch?: number}} [opts]
  */
 export function play(id, opts = {}) {
   const def = getSfxDef(id);
@@ -469,7 +779,9 @@ export function play(id, opts = {}) {
       } else if (DEV) console.warn(`[audio] unknown loop recipe '${def.name}'`);
     } else if (def.kind === 'synth') {
       const recipe = SYNTH_RECIPES[def.name];
-      if (recipe) recipe(bus.sfx, vol);
+      // V2/G29: pitched recipe families — def.pitch (sfxMap) × opts.pitch
+      // (call site) multiply every frequency in pitch-aware recipes.
+      if (recipe) recipe(bus.sfx, vol, { pitch: (def.pitch ?? 1) * (opts.pitch ?? 1) });
       else if (DEV) console.warn(`[audio] unknown synth recipe '${def.name}'`);
     } else if (def.kind === 'voice') {
       const recipe = VOICE_RECIPES[def.name];

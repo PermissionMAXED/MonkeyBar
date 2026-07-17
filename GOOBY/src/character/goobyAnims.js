@@ -1,4 +1,5 @@
-// Programmatic animation clips (§D2.4) — all 14, as pure pose-channel writers
+// Programmatic animation clips (§D2.4) — all 14 v1 clips plus the V2/G29
+// idle-variety micro-clips, as pure pose-channel writers
 // (no three.js import; gooby.js maps pose channels onto pivots each frame).
 // Clips ADD offsets onto the emotion base pose, so e.g. a grumpy Gooby still
 // breathes with idle. `createClipPlayer()` runs clips, resolves play()
@@ -334,10 +335,147 @@ export const CLIPS = {
       pose.headPitch += k * 0.04;
     },
   },
+
+  // ==========================================================================
+  // V2/G29: idle-variety micro-clips (§E wave 4, pillar ③ richer idle life).
+  // One-shot, non-overlay flavor moments the gooby.js idle scheduler sprinkles
+  // onto the auto-idle rotation (emotions.js IDLE_VARIETY picks which). Same
+  // pose-channel rules as the v1 clips; auto-idle resumes when they finish.
+  // ==========================================================================
+
+  // luxurious slow stretch: crouch → arms way up, back arch → settle shake
+  stretch: {
+    duration: 1.6,
+    loop: false,
+    apply(pose, t) {
+      if (t < 0.4) {
+        const k = ss(t / 0.4); // gather down
+        pose.scaleY *= 1 - k * 0.07;
+        pose.headPitch += k * 0.14;
+        pose.armL -= k * 0.3;
+        pose.armR -= k * 0.3;
+      } else if (t < 1.1) {
+        const k = ss((t - 0.4) / 0.7); // the big reach
+        pose.scaleY *= 0.93 + k * 0.17; // through 1.0 up to 1.10 stretch
+        pose.scaleX *= 1 - k * 0.04;
+        pose.armL += k * 2.3;
+        pose.armR += k * 2.3;
+        pose.armLRoll += k * 0.55;
+        pose.armRRoll += k * 0.55;
+        pose.headPitch += 0.14 - k * 0.38; // …head tips back
+        pose.earL += k * 0.3; // ears trail back
+        pose.earR += k * 0.3;
+        pose.mouthOpen = Math.max(pose.mouthOpen, k * 0.5);
+        pose.lids = Math.max(pose.lids ?? 0, k * 0.6); // effortful squint
+      } else {
+        const k = ss((t - 1.1) / 0.5); // settle + contented shake
+        const un = 1 - k;
+        pose.scaleY *= 1 + un * 0.1;
+        pose.armL += un * 2.3;
+        pose.armR += un * 2.3;
+        pose.armLRoll += un * 0.55;
+        pose.armRRoll += un * 0.55;
+        pose.headPitch += un * -0.24;
+        pose.earL += un * 0.3;
+        pose.earR += un * 0.3;
+        pose.rotZ += Math.sin(k * Math.PI * 4) * 0.03 * un; // little shake-off
+        pose.mouth = 'smile';
+      }
+    },
+  },
+
+  // hind-leg-style ear scratch: head tilts in, ear folds, paw wiggles at it
+  earScratch: {
+    duration: 1.4,
+    loop: false,
+    apply(pose, t) {
+      const env = ss(Math.min(1, t / 0.25)) * ss((1.4 - t) / 0.25); // in/out
+      pose.headRoll += env * 0.3; // lean into the scratch (left side)
+      pose.earL += env * 0.85; // ear folds down to meet the paw
+      pose.earLRoll += env * 0.25;
+      pose.armL += env * 2.5; // paw up to the ear
+      pose.armLRoll += env * 0.7;
+      if (t > 0.35 && t < 1.05) {
+        const wig = Math.sin((t - 0.35) * TAU * 5); // 5 Hz scratch wiggle
+        pose.armLRoll += wig * 0.16 * env;
+        pose.earL += wig * 0.08 * env;
+        pose.headRoll += wig * 0.02 * env;
+      }
+      pose.cheek *= 1 + env * 0.06; // blissful squish
+      pose.lids = Math.max(pose.lids ?? 0, env * 0.45);
+      pose.mouth = 'smile';
+    },
+  },
+
+  // curious look-around: yaw sweep left → hold → right, ears perk in turn
+  lookAround: {
+    duration: 2.4,
+    loop: false,
+    apply(pose, t) {
+      const env = ss(Math.min(1, t / 0.2)) * ss((2.4 - t) / 0.25);
+      // -1 → hold → +1 sweep (smoothstepped plateau at each side)
+      const phase = t / 2.4;
+      const sweep = phase < 0.4 ? -ss(phase / 0.28)
+        : phase < 0.55 ? -1 + ss((phase - 0.4) / 0.15)
+          : ss(Math.min(1, (phase - 0.55) / 0.28));
+      pose.headYaw += sweep * 0.4 * env;
+      pose.rotY += sweep * 0.08 * env;
+      pose.earL += (sweep < 0 ? -0.22 : 0.06) * env; // leading ear perks
+      pose.earR += (sweep > 0 ? -0.22 : 0.06) * env;
+      pose.headPitch -= env * 0.05; // chin up, scanning
+      pose.lids = Math.min(pose.lids ?? 0.05, 0.02); // wide curious eyes
+    },
+  },
+
+  // happy tail wiggle: quick hip shimmy (the tail rides the body group)
+  tailWiggle: {
+    duration: 1.1,
+    loop: false,
+    apply(pose, t) {
+      const env = ss(Math.min(1, t / 0.15)) * ss((1.1 - t) / 0.2);
+      const wig = Math.sin(t * TAU * 4); // 4 Hz shimmy
+      pose.rotY += wig * 0.13 * env;
+      pose.posX += Math.sin(t * TAU * 4 + 0.6) * 0.02 * env;
+      pose.scaleY *= 1 + Math.abs(wig) * 0.015 * env;
+      pose.earLRoll += wig * 0.09 * env;
+      pose.earRRoll += wig * 0.09 * env;
+      pose.headRoll -= wig * 0.05 * env;
+      pose.mouth = 'smile';
+      pose.mouthScale *= 1 + env * 0.12;
+    },
+  },
+
+  // brrr shiver: tucked-in rapid tremble (rain-watching flavor, §C11.2)
+  shiver: {
+    duration: 0.8,
+    loop: false,
+    apply(pose, t) {
+      const env = ss(Math.min(1, t / 0.12)) * ss((0.8 - t) / 0.18);
+      const tremble = Math.sin(t * TAU * 12); // 12 Hz
+      pose.rotZ += tremble * 0.028 * env;
+      pose.scaleX *= 1 + tremble * 0.012 * env;
+      pose.earL += env * 0.4; // ears tucked
+      pose.earR += env * 0.4;
+      pose.armL += env * 0.9; // arms hug the belly
+      pose.armR += env * 0.9;
+      pose.armLRoll -= env * 0.2;
+      pose.armRRoll -= env * 0.2;
+      pose.headPitch += env * 0.1;
+      pose.scaleY *= 1 - env * 0.03; // huddle down
+      pose.mouth = 'flat';
+    },
+  },
+  // ============================================================ end V2/G29 ==
 };
 
-/** The 14 clip ids (§D2.4) — registry completeness is unit-tested. */
+/** The clip ids — 14 v1 §D2.4 clips + the V2/G29 idle-variety set
+ * (registry completeness is unit-tested). */
 export const CLIP_IDS = Object.freeze(Object.keys(CLIPS));
+
+/** V2/G29: the idle-variety micro-clip ids (subset of CLIP_IDS). */
+export const V2_IDLE_CLIP_IDS = Object.freeze([
+  'stretch', 'earScratch', 'lookAround', 'tailWiggle', 'shiver',
+]);
 
 /**
  * Clip player: runs one main clip + any overlay clips, layered onto a pose.

@@ -12,7 +12,7 @@ import { goobyMat } from '../gfx/materials.js';
 import { createBlobShadow } from '../gfx/blobShadow.js';
 import { createGoobyFace } from './goobyFace.js';
 import { createClipPlayer, restPose, CLIPS } from './goobyAnims.js';
-import { FACES, EMOTION_IDS } from './emotions.js';
+import { FACES, EMOTION_IDS, pickIdleVariant, idleVarietyDelaySec } from './emotions.js'; // V2/G29: + idle variety
 import { WEIGHT } from '../systems/weight.js'; // V2/G20: §C4.3 tier scales (pure)
 
 /** Recipe-space height to ear tips (body 0.78 + head + ears, incl. head 1.08×). */
@@ -63,6 +63,8 @@ function pearPoints() {
  *   setStink: (on: boolean) => void,
  *   setDrool: (on: boolean) => void,
  *   setLidsBias: (v: number) => void,  // V2/G26 §C10.3 night eyelid floor
+ *   setRainWatch: (on: boolean) => void,  // V2/G29 §C11.2 rain-watching idle flavor
+ *   lastIdleVariant: () => ({clip: string, atSec: number}|null),  // V2/G29 debug
  *   emotion: () => string,
  *   isPlaying: (clip: string) => boolean,
  *   triangleCount: () => number,
@@ -292,6 +294,45 @@ export function createGooby(opts = {}) {
   headGrp.add(thermo);
   // ======================================================== end V2/G20 build =
 
+  // ==========================================================================
+  // V2/G29: richer idle life + rain/night flavor + sick sniffles (§E wave 4)
+  // ==========================================================================
+  // Micro-idle scheduler state: while ONLY the auto-idle runs, a variety
+  // moment (stretch / earScratch / lookAround / tailWiggle / + shiver in the
+  // rain) fires every ~11–21 s (night: 16–30 s). emotions.js IDLE_VARIETY is
+  // the pure rotation table; goobyAnims.js V2/G29 has the clips.
+  let idleVarietyIn = 6 + Math.random() * 6; // first moment comes a bit sooner
+  /** @type {{clip: string, atSec: number}|null} last fired variety moment */
+  let lastIdle = null;
+  let rainWatch = false; // §C11.2 rain-watching flavor (homeScene wires it)
+  let nightDrowsy = false; // mirrors G26's setLidsBias night bias (§C10.3)
+  let sniffleIn = 0; // sick/queasy sniffle countdown (0 = inactive)
+  let sniffleT = -1; // active sniffle head-wiggle envelope
+  const SNIFFLE_EVERY_SICK_SEC = 26;
+  const SNIFFLE_EVERY_QUEASY_SEC = 55;
+
+  // Lazy audio import — same guest pattern as outfitAttach.js's bell (no
+  // static audio dependency; headless tests never pull the module in).
+  /** @type {{play: Function}|null} */
+  let g29audio = null;
+  let g29audioLoading = false;
+  /** Play a voice/sfx id once the audio module is in (no-op first frame). */
+  function idleFx(id) {
+    if (g29audio) {
+      g29audio.play(id);
+      return;
+    }
+    if (!g29audioLoading) {
+      g29audioLoading = true;
+      import('../audio/audio.js')
+        .then((m) => {
+          g29audio = m;
+        })
+        .catch(() => {});
+    }
+  }
+  // ======================================================== end V2/G29 build =
+
   // -------------------------------------------------------------------------
   // State
   // -------------------------------------------------------------------------
@@ -454,9 +495,28 @@ export function createGooby(opts = {}) {
      */
     setLidsBias(v) {
       face.setLidsBias(v);
+      nightDrowsy = v > 0.05; // V2/G29: night bias also calms the idle variety
     },
 
     // ---- end V2/G26 ----
+
+    // ---- V2/G29: rain-watching flavor hook (§C11.2, pairs with G26's bias) ----
+
+    /**
+     * V2/G29: rain-watching mode — while it rains (homeScene wires this to
+     * the weather state), idle Gooby gazes up/out at the rain and the idle
+     * rotation adds the occasional shiver + 'gooby.brrr'. Pure flavor, no
+     * stat effect; inert while any non-idle clip plays (canopy sit, sleep…).
+     * @param {boolean} on
+     */
+    setRainWatch(on) {
+      rainWatch = !!on;
+    },
+
+    /** V2/G29: last idle-variety moment fired ({clip, atSec}) — debug/eval. */
+    lastIdleVariant: () => lastIdle,
+
+    // ---- end V2/G29 ----
 
     // ---- V2/G20: 2.0 pet-sim visual API (§C3.3/§C3.4/§C4.3) ----
 
@@ -498,6 +558,10 @@ export function createGooby(opts = {}) {
       sneezeIn = state === 'queasy' ? sneezeJitter(SNEEZE_EVERY_QUEASY_SEC)
         : state === 'sick' ? sneezeJitter(SNEEZE_EVERY_SICK_SEC) : 0;
       hiccupIn = state === 'queasy' ? 5 + Math.random() * 4 : 0;
+      // V2/G29: congested sniffles between sneezes (sick > queasy cadence)
+      sniffleIn = state === 'sick' ? sneezeJitter(SNIFFLE_EVERY_SICK_SEC)
+        : state === 'queasy' ? sneezeJitter(SNIFFLE_EVERY_QUEASY_SEC) : 0;
+      sniffleT = -1;
     },
 
     /** @returns {string} current health state (V2/G20) */
@@ -605,6 +669,7 @@ export function createGooby(opts = {}) {
           if (hiccupIn <= 0) {
             hiccupT = 0;
             hiccupIn = 5 + Math.random() * 5;
+            idleFx('gooby.hiccup'); // V2/G29: the queasy "hic!" voice
           }
         }
       }
@@ -654,6 +719,56 @@ export function createGooby(opts = {}) {
           sneezeT = -1;
         }
       }
+
+      // --- V2/G29: idle-variety scheduler (§E wave 4, pillar ③) ---
+      // Fires a micro-idle from the emotions.js IDLE_VARIETY rotation while
+      // the auto-idle is the ONLY main clip, Gooby is healthy and not
+      // slumped-sad. Night bias (G26 lids) calms the cadence; rain adds the
+      // shiver. Playing the pick replaces 'idle'; auto-idle resumes after.
+      if (healthState === 'healthy' && emotionId !== 'sad' && player.isPlaying('idle')) {
+        idleVarietyIn -= dt;
+        if (idleVarietyIn <= 0) {
+          const variant = pickIdleVariant(Math.random, { night: nightDrowsy, rain: rainWatch });
+          idleVarietyIn = idleVarietyDelaySec(Math.random, { night: nightDrowsy });
+          lastIdle = { clip: variant.clip, atSec: clockSec };
+          player.play(variant.clip);
+          if (variant.voice && Math.random() < variant.voiceChance) idleFx(variant.voice);
+        }
+      }
+
+      // --- V2/G29: rain-watching presentation (§C11.2 flavor) ---
+      // While it rains and Gooby just idles, he gazes up/out at the weather
+      // with a slow wondering sway (additive; any real clip overrides it).
+      if (rainWatch && player.isPlaying('idle')) {
+        pose.headPitch -= 0.055; // chin up toward the window/sky
+        pose.headYaw += Math.sin(clockSec * 0.45) * 0.05; // slow drift
+        pose.earL -= 0.04; // ears half-perked, listening to the patter
+        pose.earR -= 0.04;
+      }
+
+      // --- V2/G29: sick sniffles between sneezes (§C3 flavor) ---
+      if ((healthState === 'queasy' || healthState === 'sick') && sneezeT < 0 && sniffleT < 0) {
+        sniffleIn -= dt;
+        if (sniffleIn <= 0) {
+          sniffleT = 0;
+          sniffleIn = sneezeJitter(
+            healthState === 'sick' ? SNIFFLE_EVERY_SICK_SEC : SNIFFLE_EVERY_QUEASY_SEC
+          );
+          idleFx('gooby.sniffle');
+        }
+      }
+      if (sniffleT >= 0) {
+        sniffleT += dt;
+        if (sniffleT > 0.75) sniffleT = -1;
+        else {
+          // two small nose-wrinkle twitches matching the double-sniff audio
+          const env = Math.sin((sniffleT / 0.75) * Math.PI);
+          pose.headRoll += Math.sin(sniffleT * 24) * 0.03 * env;
+          pose.headPitch += 0.05 * env; // nose ducks down
+          pose.cheek *= 1 + 0.05 * env;
+        }
+      }
+      // --- end V2/G29 update ---
 
       // --- lookAt: head + pupils toward the target, clamped ±25° (§D2.3) ---
       let targetYaw = 0;

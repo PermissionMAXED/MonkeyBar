@@ -14,8 +14,10 @@
 // Pure data: no three.js/DOM imports (node:test runs this headlessly).
 
 /** @typedef {{kind: 'sample', keys: string[], volume?: number, haptic?: string}} SampleDef */
-/** @typedef {{kind: 'synth', name: string, volume?: number, haptic?: string, loop?: boolean}} SynthDef */
+/** @typedef {{kind: 'synth', name: string, volume?: number, haptic?: string, loop?: boolean, pitch?: number}} SynthDef */
 /** V2/G26: synth loop:true ids resolve via audio.js LOOP_RECIPES (run until audio.stop(id)). */
+/** V2/G29: synth defs may carry `pitch` — a frequency multiplier for pitch-aware
+ * recipes (audio.js), e.g. the four goobySays pads share one 'saysPad' recipe. */
 /** @typedef {{kind: 'voice', name: string, volume?: number, loop?: boolean}} VoiceDef */
 /** @typedef {SampleDef|SynthDef|VoiceDef} SfxDef */
 
@@ -173,56 +175,56 @@ export const SFX_MAP = Object.freeze({
   'hud.lowTick': synth('softTick', { volume: 0.3 }),
 
   // --- V2/G20: sickness & care (§C3.3/§C3.4 — existing recipes reused;
-  // G29 upgrades to bespoke sounds) ---
-  'health.sneeze': voice('squeakDizzy', { volume: 0.9 }),
+  // G29 upgraded to bespoke sounds) ---
+  'health.sneeze': voice('sneeze', { volume: 0.9 }), // V2/G29: real sneeze (windup+achoo+sniffle tail)
 
   // --- V2/G21: vet clinic + landmarks (§C9 — existing sounds/recipes reused;
-  // G29 upgrades to bespoke sounds) ---
-  'vet.doorbell': sample(seq(`${UI}/glass`, 6), { volume: 0.5 }),
-  'vet.cure': sample([`${JIN}/jingles_NES04`], { volume: 0.7, haptic: 'light' }),
-  'vet.checkup': sample(seq(`${UI}/confirmation`, 4), { volume: 0.6 }),
-  'landmark.found': synth('sparkle', { volume: 0.7, haptic: 'light' }),
+  // G29 upgraded to bespoke sounds) ---
+  'vet.doorbell': synth('doorbell', { volume: 0.6 }), // V2/G29: ding-dong chime
+  'vet.cure': synth('vetSparkle', { volume: 0.75, haptic: 'light' }), // V2/G29: healing shimmer
+  'vet.checkup': synth('checkupChime', { volume: 0.6 }), // V2/G29: clipboard + all-good notes
+  'landmark.found': synth('discovery', { volume: 0.7, haptic: 'light' }), // V2/G29: fourth-up + flash fizz
 
   // --- V2/G19: garden (§C2.2 — existing oggs/recipes per §E0.2 rule 5;
-  // G29 upgrades to bespoke sounds) ---
-  'garden.plant': synth('plop', { volume: 0.6, haptic: 'light' }),
-  'garden.water': synth('splash', { volume: 0.55 }),
-  'garden.fertilize': synth('sparkle', { volume: 0.6 }),
-  'garden.harvest': sample(seq(`${UI}/confirmation`, 4), { volume: 0.7, haptic: 'light' }),
-  'garden.harvestReady': synth('sparkle', { volume: 0.5 }),
-  'garden.buy': sample(seq(`${UI}/drop`, 4), { volume: 0.6 }),
-  'garden.sell': synth('coin', { volume: 0.55, haptic: 'light' }),
+  // G29 upgraded to bespoke sounds) ---
+  'garden.plant': synth('seedPlant', { volume: 0.65, haptic: 'light' }), // V2/G29: soil plop + paw pats
+  'garden.water': synth('trickle', { volume: 0.6 }), // V2/G29: watering-can burbles + droplets
+  'garden.fertilize': synth('fertilizerPuff', { volume: 0.6 }), // V2/G29: dust puffs + growth sparkle
+  'garden.harvest': synth('harvestJoy', { volume: 0.75, haptic: 'light' }), // V2/G29: pluck-pop + delighted gasp
+  'garden.harvestReady': synth('readyChime', { volume: 0.5 }), // V2/G29: gentle two-note glisten
+  'garden.buy': sample(seq(`${UI}/drop`, 4), { volume: 0.6 }), // V2/G29 sweep: coin-drop ogg fits, kept
+  'garden.sell': synth('chaChing', { volume: 0.6, haptic: 'light' }), // V2/G29: compost-bin cash register
   // --- end V2/G19 ---
 
   // --- V2/G23: progression UI (§C5/§C6/§C12 — existing oggs/recipes per
-  // §E0.2 rule 5; G29 upgrades to bespoke sounds) ---
-  'quest.claim': sample([`${JIN}/jingles_NES11`], { volume: 0.65, haptic: 'light' }),
-  'sticker.get': synth('sparkle', { volume: 0.7, haptic: 'light' }),
-  'album.claim': sample([`${JIN}/jingles_NES07`], { volume: 0.7, haptic: 'light' }),
-  'photo.shutter': sample(seq(`${UI}/click`, 5), { volume: 0.8, haptic: 'medium' }),
+  // §E0.2 rule 5; G29 upgraded to bespoke sounds) ---
+  'quest.claim': synth('questJingle', { volume: 0.7, haptic: 'light' }), // V2/G29: 3-note triumph + stab
+  'sticker.get': synth('stickerPop', { volume: 0.7, haptic: 'light' }), // V2/G29: peel + up-pop + ping
+  'album.claim': synth('setFanfare', { volume: 0.75, haptic: 'light' }), // V2/G29: set-complete fanfare
+  'photo.shutter': synth('shutter', { volume: 0.8, haptic: 'medium' }), // V2/G29: click-CLACK + motor wind
   // --- end V2/G23 ---
 
-  // --- V2/G24: goobySays pads (§C1.2 #1 — four distinct pitches). Existing
-  // synth recipes take no pitch param, so per §E0.2 rule 5 these reuse 4
-  // distinct interface oggs; G29 upgrades to pitched synth pads. ---
-  'says.pad1': sample([`${UI}/pluck_001`], { volume: 0.7, haptic: 'light' }),
-  'says.pad2': sample([`${UI}/pluck_002`], { volume: 0.7, haptic: 'light' }),
-  'says.pad3': sample([`${UI}/glass_002`], { volume: 0.7, haptic: 'light' }),
-  'says.pad4': sample([`${UI}/glass_005`], { volume: 0.7, haptic: 'light' }),
+  // --- V2/G24: goobySays pads (§C1.2 #1 — four distinct pitches). G29
+  // upgraded: the recipe system is pitch-aware now, so all four pads share
+  // ONE 'saysPad' recipe at rising C-D-E-G pentatonic pitches. ---
+  'says.pad1': synth('saysPad', { volume: 0.7, pitch: 1, haptic: 'light' }), // V2/G29: C5
+  'says.pad2': synth('saysPad', { volume: 0.7, pitch: 1.125, haptic: 'light' }), // V2/G29: D5
+  'says.pad3': synth('saysPad', { volume: 0.7, pitch: 1.25, haptic: 'light' }), // V2/G29: E5
+  'says.pad4': synth('saysPad', { volume: 0.7, pitch: 1.5, haptic: 'light' }), // V2/G29: G5
   // --- end V2/G24 ---
 
   // --- V2/G25: starHopper + pipeFlow (§C1.2 #8/#9 — existing oggs/recipes
-  // per §E0.2 rule 5; G29 upgrades to bespoke sounds) ---
-  'hopper.lane': synth('whoosh', { volume: 0.45 }),
-  'hopper.star': synth('sparkle', { volume: 0.6, haptic: 'light' }),
-  'hopper.gold': synth('coin', { volume: 0.65, haptic: 'light' }),
-  'hopper.shield': synth('riser', { volume: 0.6, haptic: 'light' }),
-  'hopper.shieldPop': synth('bubblePop', { volume: 0.7, haptic: 'medium' }),
-  'hopper.warning': sample(seq(`${UI}/error`, 4), { volume: 0.4 }),
-  'hopper.crash': sample(seq(`${IMP}/impactPunch_heavy`, 5, 0), { volume: 0.75, haptic: 'medium' }),
-  'pipe.rotate': sample(seq(`${UI}/scroll`, 5), { volume: 0.5, haptic: 'light' }),
-  'pipe.connect': sample(seq(`${UI}/confirmation`, 4), { volume: 0.7, haptic: 'light' }),
-  'pipe.fill': synth('splash', { volume: 0.35 }),
+  // per §E0.2 rule 5; G29 upgraded the placeholder-y ones, kept good fits) ---
+  'hopper.lane': synth('whoosh', { volume: 0.45 }), // V2/G29 sweep: fits, kept
+  'hopper.star': synth('starPing', { volume: 0.6, haptic: 'light' }), // V2/G29: bright ping + shimmer
+  'hopper.gold': synth('goldenPing', { volume: 0.7, haptic: 'light' }), // V2/G29: coin dyad + sparkle triplet
+  'hopper.shield': synth('riser', { volume: 0.6, haptic: 'light' }), // V2/G29 sweep: fits, kept
+  'hopper.shieldPop': synth('bubblePop', { volume: 0.7, haptic: 'medium' }), // V2/G29 sweep: fits, kept
+  'hopper.warning': sample(seq(`${UI}/error`, 4), { volume: 0.4 }), // V2/G29 sweep: fits, kept
+  'hopper.crash': sample(seq(`${IMP}/impactPunch_heavy`, 5, 0), { volume: 0.75, haptic: 'medium' }), // V2/G29 sweep: kept
+  'pipe.rotate': sample(seq(`${UI}/scroll`, 5), { volume: 0.5, haptic: 'light' }), // V2/G29 sweep: mechanical click fits, kept
+  'pipe.connect': synth('pipeConnect', { volume: 0.7, haptic: 'light' }), // V2/G29: click + bloops + gurgle
+  'pipe.fill': synth('trickle', { volume: 0.4, pitch: 0.8 }), // V2/G29: water fill (lower, softer trickle)
   // --- end V2/G25 ---
 
   // --- V2/G26: ambience loops (§C10.2 dawn birdsong / §C11.2 rain-on-leaves;
@@ -233,6 +235,47 @@ export const SFX_MAP = Object.freeze({
   'ambience.rain': synth('rainLoop', { loop: true }),
   'ambience.birdsong': synth('birdsong', { loop: true, volume: 0.8 }),
   // --- end V2/G26 ---
+
+  // --- V2/G27: veggieChop + goalieGooby (§C1.2 #4/#7 — existing oggs/synth
+  // recipes only per §E0.2 rule 5; G29 upgraded to bespoke sounds) ---
+  'chop.lob': synth('whoosh', { volume: 0.35 }), // V2/G29 sweep: lob toss fits, kept
+  'chop.slice': synth('chop', { volume: 0.7, haptic: 'light' }), // V2/G29: knife slice + board thunk
+  'chop.combo': sample(seq(`${UI}/glass`, 6), { volume: 0.6, haptic: 'light' }), // V2/G29 sweep: combo glass fits, kept
+  'chop.junk': synth('splat', { volume: 0.65, haptic: 'medium' }), // V2/G29: wet junk splat (soda/boot stun)
+  'chop.miss': synth('sadBlip', { volume: 0.5 }), // V2/G29 sweep: fits, kept
+  'goalie.dive': synth('diveWhoosh', { volume: 0.65 }), // V2/G29: save-dive sweep + grass landing
+  'goalie.kick': sample(seq(`${IMP}/impactPunch_medium`, 5, 0), { volume: 0.55 }), // V2/G29 sweep: kept
+  'goalie.save': sample(seq(`${IMP}/impactGeneric_light`, 5, 0), { volume: 0.7, haptic: 'light' }), // V2/G29 sweep: glove thud fits, kept
+  'goalie.super': synth('riser', { volume: 0.7, haptic: 'medium' }), // V2/G29 sweep: slow-mo riser fits, kept
+  'goalie.goal': synth('sadBlip', { volume: 0.6 }), // V2/G29 sweep: kept
+  'goalie.cheer': synth('bunnyCheer', { volume: 0.7, haptic: 'light' }), // V2/G29: bunny-crowd roar + squeaks
+  // --- end V2/G27 ---
+
+  // --- V2/G29: audio & reactions 2.0 (§E wave 4) — new ids owned by the
+  // audio pass. Voice ids feed the gooby.js idle-variety/sickness schedulers
+  // (emotions.js IDLE_VARIETY); hop.bell is the §C8.4 bell-collar jingle
+  // (outfitAttach.js). golf.*/delivery.* are ready-made bespoke mappings for
+  // G28's concurrent miniGolf/deliveryRush (their prompt limits them to
+  // existing recipes — point your calls at these ids, or remap your own ids
+  // to these recipe names in a follow-up). ---
+  'hop.bell': synth('bellJingle', { volume: 0.6, haptic: 'light' }),
+  'gooby.hiccup': voice('hiccup', { volume: 0.8 }),
+  'gooby.sniffle': voice('sniffle', { volume: 0.65 }),
+  'gooby.sigh': voice('contentSigh', { volume: 0.7 }),
+  'gooby.brrr': voice('brrr', { volume: 0.75 }),
+  'gooby.gasp': voice('delightedGasp', { volume: 0.8 }),
+  'golf.putt': synth('golfPutt', { volume: 0.65, haptic: 'light' }),
+  'golf.sink': synth('golfSink', { volume: 0.75, haptic: 'light' }),
+  'delivery.drop': synth('confettiPop', { volume: 0.75, haptic: 'medium' }),
+  'delivery.doorbell': synth('doorbell', { volume: 0.65 }),
+  // --- end V2/G29 ---
+
+  // --- V2/G28: miniGolf extras (§C1.2 #6 — existing oggs/recipes only per
+  // the G28 prompt; putt/sink/doorbell above are G29's bespoke mappings) ---
+  'golf.ace': sample([`${JIN}/jingles_NES11`], { volume: 0.75, haptic: 'medium' }), // hole-in-one triumph
+  'golf.bank': sample(seq(`${IMP}/impactPlank_medium`, 5, 0), { volume: 0.4 }), // ball off wooden rail
+  'golf.bump': synth('boing', { volume: 0.5, haptic: 'light' }), // dome-bounce boing
+  // --- end V2/G28 ---
 });
 
 /**

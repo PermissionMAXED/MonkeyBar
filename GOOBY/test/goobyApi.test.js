@@ -104,12 +104,36 @@ const SPEC_CLIPS = [
   'pokeWobble', 'dizzy', 'dance', 'wave', 'jump', 'refuse', 'sitDrive',
 ];
 
-test('clip registry has exactly the 14 §D2.4 clips', () => {
-  assert.deepEqual([...CLIP_IDS].sort(), [...SPEC_CLIPS].sort());
-  for (const id of SPEC_CLIPS) {
+// V2/G29: the idle-variety micro-clips (§E wave 4) join the registry
+const V2_CLIPS = ['stretch', 'earScratch', 'lookAround', 'tailWiggle', 'shiver'];
+
+test('clip registry has the 14 §D2.4 clips + the V2/G29 idle set', () => {
+  assert.deepEqual([...CLIP_IDS].sort(), [...SPEC_CLIPS, ...V2_CLIPS].sort());
+  for (const id of [...SPEC_CLIPS, ...V2_CLIPS]) {
     const def = CLIPS[id];
     assert.ok(def.duration > 0, `${id}.duration`);
     assert.equal(typeof def.apply, 'function', `${id}.apply`);
+  }
+});
+
+// V2/G29: micro-idles are one-shot, non-overlay, and only touch known pose
+// channels (they must layer cleanly over the emotion base like the v1 set)
+test('V2/G29 idle-variety clips: one-shot, non-overlay, valid channels', () => {
+  const channels = new Set(Object.keys(restPose()));
+  for (const id of V2_CLIPS) {
+    const def = CLIPS[id];
+    assert.equal(def.loop, false, `${id} must be a one-shot`);
+    assert.ok(!def.overlay, `${id} must be a main clip (auto-idle resumes after)`);
+    for (const t of [0, def.duration * 0.3, def.duration * 0.6, def.duration - 1e-4]) {
+      const pose = restPose();
+      def.apply(pose, t, { rawT: t, dt: 1 / 60, dir: null, event: () => {} });
+      for (const key of Object.keys(pose)) {
+        assert.ok(channels.has(key), `${id} wrote unknown pose channel '${key}'`);
+        if (key !== 'mouth' && key !== 'lids') {
+          assert.ok(Number.isFinite(pose[key]), `${id}.${key} finite at t=${t}`);
+        }
+      }
+    }
   }
 });
 

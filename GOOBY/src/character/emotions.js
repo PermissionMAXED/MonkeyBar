@@ -144,6 +144,66 @@ export function deriveEmotion({ mood = 60, stats = null, context = null, health 
   return statOverride(stats) ?? moodEmotion(cappedMood);
 }
 
+// ============================================================================
+// V2/G29: idle-variety rotation (§E wave 4, pillar ③ richer idle life).
+// Pure data + picker for the micro-idle scheduler in gooby.js: which flavor
+// clip (goobyAnims.js V2/G29 set) plays next, with which optional voice id,
+// weighted by ambience flags — `night` (G26's §C10.3 lids/sleepy bias: calmer,
+// stretchier) and `rain` (§C11.2 rain-watching: shivers join the rotation).
+// Headless-testable: no DOM/three imports, caller supplies the rand fn.
+// ============================================================================
+
+/**
+ * @typedef {Object} IdleVariant
+ * @property {string} clip        goobyAnims clip id
+ * @property {string|null} voice  sfx id to play alongside (null = silent)
+ * @property {number} voiceChance 0..1 odds the voice actually plays
+ * @property {number} weight      base weight (day, clear)
+ * @property {number} [nightWeight] weight during the night lids-bias
+ * @property {number} [rainWeight]  weight while rain-watching
+ */
+
+/** The rotation (V2/G29). Weights are relative within the active set. */
+export const IDLE_VARIETY = Object.freeze([
+  Object.freeze({ clip: 'stretch', voice: 'gooby.sigh', voiceChance: 0.7, weight: 2, nightWeight: 4, rainWeight: 2 }),
+  Object.freeze({ clip: 'earScratch', voice: 'gooby.giggle', voiceChance: 0.3, weight: 2, nightWeight: 1, rainWeight: 1.5 }),
+  Object.freeze({ clip: 'lookAround', voice: 'gooby.sniff', voiceChance: 0.35, weight: 3, nightWeight: 1.5, rainWeight: 3.5 }),
+  Object.freeze({ clip: 'tailWiggle', voice: 'gooby.squeakHappy', voiceChance: 0.4, weight: 2, nightWeight: 0.5, rainWeight: 1 }),
+  Object.freeze({ clip: 'shiver', voice: 'gooby.brrr', voiceChance: 0.8, weight: 0, nightWeight: 0, rainWeight: 2 }),
+]);
+
+/**
+ * V2/G29: pick the next idle-variety moment. Weighted roll over IDLE_VARIETY
+ * with the night/rain flavor weights; shiver only ever enters the rotation
+ * while it rains (weight 0 otherwise, so dry Gooby never shivers).
+ * @param {() => number} rand 0..1 source (caller-seeded in tests)
+ * @param {{night?: boolean, rain?: boolean}} [flavor]
+ * @returns {IdleVariant}
+ */
+export function pickIdleVariant(rand, { night = false, rain = false } = {}) {
+  const weightOf = (v) => (rain ? (v.rainWeight ?? v.weight)
+    : night ? (v.nightWeight ?? v.weight) : v.weight);
+  const total = IDLE_VARIETY.reduce((s, v) => s + weightOf(v), 0);
+  let roll = rand() * total;
+  for (const v of IDLE_VARIETY) {
+    roll -= weightOf(v);
+    if (roll < 0) return v;
+  }
+  return IDLE_VARIETY[0]; // numeric edge (roll === total)
+}
+
+/**
+ * V2/G29: seconds until the next idle-variety moment — 11–21 s by day,
+ * a drowsier 16–30 s during the night bias (§C10.3: night is for yawns).
+ * @param {() => number} rand @param {{night?: boolean}} [flavor]
+ * @returns {number}
+ */
+export function idleVarietyDelaySec(rand, { night = false } = {}) {
+  return night ? 16 + rand() * 14 : 11 + rand() * 10;
+}
+
+// ================================================================ end V2/G29
+
 /**
  * Stateful emotion machine wrapping deriveEmotion. Feed it mood/stats from the
  * store and push/clear contexts from gameplay (eating, sleeping, dizzy…);

@@ -197,6 +197,7 @@ export function createHomeScene(ctx) {
     const nightAwake = isNightAwake();
     gooby?.setLidsBias(nightAwake ? NIGHT_LIDS_BIAS : 0);
     ambMachine?.setNightBias(nightAwake);
+    gooby?.setRainWatch?.(amb.weather === 'rain' && !night); // V2/G29 (§C11.2): rain-watching idle flavor
     if (nightAwake && yawnIn <= 0) yawnIn = nextYawnIn();
     if (!nightAwake) yawnIn = 0;
   }
