@@ -783,6 +783,10 @@ function wireGestures(s) {
 
   const onTap = (p) => {
     if (!inHome() || s.washing || s.feeding) return;
+    // F6 (RE1 P2-9): while Gooby sleeps his taps open the early-wake sheet
+    // (ui/sleepFlow.js 'tap:gooby' route) — suppress the poke squeak/wobble
+    // so care taps stay quiet during the nap.
+    if (store.get('sleep.sleeping')) return;
     const hit = pickGooby(s, p.x, p.y);
     if (!hit) return;
     const res = s.gestures.tap({ t: performance.now(), region: hit.region });

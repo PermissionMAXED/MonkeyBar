@@ -671,6 +671,10 @@
   opacity: 0.8;
   text-align: center;
   line-height: 1.15;
+  /* F6 (RE3): long unbreakable names (DE "Schubladenschrank", …) must wrap
+     inside the ~89px card at 320px-wide viewports instead of painting out */
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .shop-card .shop-price {
   display: inline-flex;
@@ -686,6 +690,9 @@
   font-size: 11px;
   font-weight: 800;
   color: var(--teal-dark);
+  /* F6 (RE3): decor slot cards render item names here too — same wrap rule */
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .shop-card .shop-count {
   position: absolute;

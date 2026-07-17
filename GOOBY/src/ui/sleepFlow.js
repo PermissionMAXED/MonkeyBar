@@ -247,6 +247,13 @@ export function initSleepFlow({ store, ui, roomManager, homeScene, gooby }) {
     homeWired = true;
     roomManager.on('tap:lampSwitch', requestSleepToggle);
     roomManager.on('tap:bed', requestSleepToggle);
+    // F6 (RE1 P2-9): while asleep Gooby lies ON the bed and his raycast wins
+    // over the bed hitbox (roomManager.handleTap tests Gooby first), so bed
+    // taps arrive as 'tap:gooby' — route them to the early-wake sheet too.
+    // Awake taps on Gooby stay with G5's care gestures (no-op here).
+    roomManager.on('tap:gooby', () => {
+      if (isSleeping(store.get())) openWakeSheet();
+    });
     // Room lock (§C1.4): while sleeping the home stays on the bedroom night
     // view — any pan away (swipe/arrows/dots) bounces straight back.
     roomManager.on('roomChanged', ({ roomId }) => {

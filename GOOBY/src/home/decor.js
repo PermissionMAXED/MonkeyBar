@@ -231,21 +231,48 @@ export function initDecor({ store, ui, audio }) {
       timer = null;
       downAt = null;
     };
+    /** Real-time settle (ms) inside the post-hold re-check window — long
+     * enough for queued/in-flight cancel events to land under heavy jank. */
+    const HOLD_SETTLE_MS = 120;
     canvas.addEventListener('pointerdown', (e) => {
       cancel();
       // Long-press must be a genuinely still hold on furniture/empty space —
       // slow pet strokes over Gooby must never open the decorate picker.
       if (onGooby(e.clientX, e.clientY)) return;
-      downAt = { x: e.clientX, y: e.clientY, path: 0 };
+      downAt = { x: e.clientX, y: e.clientY, path: 0, at: performance.now() };
+      const gesture = downAt;
+      // F6 (RE1): under main-thread jank this timer can fire while a slow
+      // flick's pointermove/pointerup cancels are still queued (renderer
+      // input queue, or even still in flight from the browser process), so
+      // cancel ORDERING is not trustworthy. Instead of deciding immediately,
+      // run a settle window: a rendered frame (rAF-aligned input dispatches
+      // before rAF callbacks), a short real-time settle for late-arriving
+      // events, then one more frame. Only then re-check the LIVE gesture
+      // state — same gesture token still down, cumulative path within the
+      // tap budget, genuinely elapsed hold. A long-press opening ~150 ms
+      // later is imperceptible; a picker popping mid-flick is the bug.
       timer = setTimeout(() => {
         timer = null;
-        const live = getRoomManager();
-        if (!live) return; // only over the home scene
-        // §C8.1: don't let the player wander off the scripted first-run flow —
-        // no decorate mode while the onboarding tutorial overlay is active.
-        if (!store.get('onboarding.done') && document.querySelector('.g14-ob')) return;
-        audio.play('ui.open');
-        ui.openPanel('decorate', { roomId: live.activeRoom() });
+        if (downAt !== gesture) return; // already released / superseded
+        requestAnimationFrame(() => {
+          if (downAt !== gesture) return; // cancelled by frame-1 input
+          setTimeout(() => {
+            if (downAt !== gesture) return; // cancelled during the settle
+            requestAnimationFrame(() => {
+              if (downAt !== gesture) return; // cancelled by frame-2 input
+              if (gesture.path > ENGINE.TAP_MAX_PX) return; // drag/flick
+              if (performance.now() - gesture.at < ENGINE.HOLD_MS) return; // too short
+              const live = getRoomManager();
+              if (!live) return; // only over the home scene
+              // §C8.1: don't let the player wander off the scripted first-run
+              // flow — no decorate mode while the tutorial overlay is active.
+              if (!store.get('onboarding.done') && document.querySelector('.g14-ob')) return;
+              downAt = null; // consume the gesture
+              audio.play('ui.open');
+              ui.openPanel('decorate', { roomId: live.activeRoom() });
+            });
+          }, HOLD_SETTLE_MS);
+        });
       }, ENGINE.HOLD_MS + 60);
     });
     canvas.addEventListener('pointermove', (e) => {

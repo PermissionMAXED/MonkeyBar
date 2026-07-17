@@ -141,7 +141,8 @@ async function boot() {
   // Permission soft-ask flow (§C7), settings screen, sleep flow (§C1.4 — the
   // lamp/bed taps self-wire to G4's home scene via sleepFlow's guarded hook).
   // F2: sceneManager lets the soft-ask defer while a minigame/shop trip runs.
-  initPermissionFlow({ store, ui, sceneManager });
+  // F6: framework.isActive() belt-and-braces + boot-window (currentId null) defer.
+  initPermissionFlow({ store, ui, sceneManager, framework });
   ui.registerScreen('settings', createSettingsScreen({ store, ui }));
   initSleepFlow({ store, ui });
   // ---- end G6 block ----

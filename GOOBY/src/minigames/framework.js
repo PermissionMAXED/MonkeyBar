@@ -265,6 +265,13 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
     function pause() {
       if (!running || paused || ended) return;
       paused = true;
+      // F6 (RE5): optional §E8 game hook — games with real-time clocks
+      // (danceParty) freeze/rebase them across the paused span.
+      try {
+        game?.onPause?.();
+      } catch (err) {
+        console.warn('[minigames] game onPause error:', err);
+      }
       audio.play('ui.tap');
       pauseOverlayEl = document.createElement('div');
       pauseOverlayEl.className = 'screen';
@@ -298,6 +305,12 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
     function resume() {
       removePauseOverlay();
       paused = false;
+      // F6 (RE5): optional §E8 game hook — see pause().
+      try {
+        game?.onResume?.();
+      } catch (err) {
+        console.warn('[minigames] game onResume error:', err);
+      }
     }
 
     function onHidden() {
@@ -415,10 +428,20 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
   });
 
   // ---------------------------------------------------------------- launch
+  /** F6 (RE5): retry cadence/budget while an in-flight scene switch settles. */
+  const LAUNCH_RETRY_MS = 100;
+  const LAUNCH_RETRY_MAX_MS = 5000;
+
   /**
    * Launch a minigame by id (§E8): checks metadata, implementation, unlock
    * level (skipped for params.dev — harness/testing), sleep and exhaustion
    * (§C1) before switching scenes.
+   *
+   * F6 (RE5): sceneManager.switchTo is a SILENT no-op while another switch is
+   * in flight (fade guard) — launch keeps retrying until the switch settles
+   * and only resolves true once the minigame scene really is current (results
+   * "Home" → immediate relaunch, arcade taps during fades, …). Resolves false
+   * if it never lands within the retry budget.
    * @param {string} id
    * @param {object} [params] forwarded to the game as ctx.params;
    *   params.dev bypasses the level lock; params.onExit overrides the
@@ -445,8 +468,21 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
       return false;
     }
     ui.closeAll();
+    const deadline = Date.now() + LAUNCH_RETRY_MAX_MS;
+    const settled = () =>
+      sceneManager.currentId?.() === 'minigame' && sceneManager.isSwitching?.() !== true;
     await sceneManager.switchTo('minigame', { gameId: id, params });
-    return true;
+    while (!settled() && Date.now() < deadline) {
+      // A switch was in progress and ours was swallowed (or the OLD scene is
+      // still current during its fade-out) — wait for it to settle, re-check,
+      // then re-issue. isSwitching() guards the fade-out phase where
+      // currentId() still reports the pre-switch scene.
+      await new Promise((resolve) => setTimeout(resolve, LAUNCH_RETRY_MS));
+      if (settled()) break;
+      if (sceneManager.isSwitching?.() === true) continue; // still fading
+      await sceneManager.switchTo('minigame', { gameId: id, params });
+    }
+    return settled();
   }
 
   return {

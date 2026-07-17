@@ -111,6 +111,18 @@ export function createSceneManager({ canvas, assets, input, audio, store, ui }) 
     },
 
     /**
+     * F6 (RE5): read-only "a switchTo is in flight" flag. During the fade the
+     * OLD scene can still be current (fade-out phase), so currentId() alone
+     * cannot tell callers whether a queued switch will still change scenes —
+     * the minigame framework's launch retry needs this to avoid a false
+     * "already there" while a switch AWAY is mid-flight.
+     * @returns {boolean}
+     */
+    isSwitching() {
+      return switching;
+    },
+
+    /**
      * Switch to a scene (§E1): fade out → exit+dispose old → preload assets →
      * enter new → fade in.
      * @param {string} id

@@ -21,7 +21,10 @@ const PREVIEW_H = 280;
 const THUMB_SIZE = 108;
 
 const WARDROBE_CSS = `
-.screen-wardrobe{justify-content:flex-start;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+.screen-wardrobe{justify-content:flex-start;overflow:hidden;}
+/* F6 (RE4): the header (back/title/coins) stays pinned — only the catalog
+   body scrolls, so the back button is always reachable after a deep scroll. */
+.g12-wr-body{flex:1;min-height:0;width:100%;display:flex;flex-direction:column;align-items:center;overflow-y:auto;-webkit-overflow-scrolling:touch;}
 .g12-wr-head{width:100%;max-width:440px;display:flex;align-items:center;gap:10px;margin:6px 0 10px;flex:none;}
 /* F3: the title shrinks/ellipsizes at narrow widths — never the coins pill */
 .g12-wr-title{flex:1;min-width:0;margin:0;font-size:clamp(21px,7.5vw,30px);font-weight:800;color:var(--brown);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -143,10 +146,16 @@ export function registerWardrobe({ store, ui, audio }) {
     head.appendChild(coinsEl);
     el.appendChild(head);
 
+    // F6 (RE4): everything below the header scrolls inside this body — the
+    // header itself (back button, title, coins) stays pinned to the screen.
+    const body = document.createElement('div');
+    body.className = 'g12-wr-body';
+    el.appendChild(body);
+
     // ---------- live 3D try-on stage (own inset viewport — §G G12) ----------
     const stage = document.createElement('div');
     stage.className = 'g12-wr-stage';
-    el.appendChild(stage);
+    body.appendChild(stage);
     const tryOnBadge = document.createElement('div');
     tryOnBadge.className = 'g12-wr-tryon';
     tryOnBadge.style.display = 'none';
@@ -199,14 +208,14 @@ export function registerWardrobe({ store, ui, audio }) {
     // ---------- tabs + grid ----------
     const tabs = document.createElement('div');
     tabs.className = 'g12-wr-tabs';
-    el.appendChild(tabs);
+    body.appendChild(tabs);
     const grid = document.createElement('div');
     grid.className = 'g12-wr-grid';
-    el.appendChild(grid);
+    body.appendChild(grid);
     const hint = document.createElement('div');
     hint.className = 'g12-wr-hint';
     hint.textContent = buyMode ? t('wardrobe.buyHint') : t('wardrobe.equipHint');
-    el.appendChild(hint);
+    body.appendChild(hint);
 
     ensureThumbs();
 

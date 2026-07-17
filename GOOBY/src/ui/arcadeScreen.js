@@ -30,6 +30,9 @@ const ARCADE_CSS = `
 .g5-tile-lock{position:absolute;inset:0;border-radius:20px;background:rgba(74,59,54,.55);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:#fff;font-size:12px;font-weight:800;backdrop-filter:blur(1px);}
 .g5-tile-lock svg{opacity:.9;}
 .g5-tile.g5-locked{cursor:default;}
+/* F6 (RE3): locked tiles show ONLY the lock icon + requirement — hide the
+   name/best underneath so the overlay text never collides with them */
+.g5-tile.g5-locked .g5-tile-name,.g5-tile.g5-locked .g5-tile-best{visibility:hidden;}
 .g5-tile.g5-soon .g5-tile-icon{opacity:.4;}
 .g5-tile.g5-soon .g5-tile-name{opacity:.5;}
 `;

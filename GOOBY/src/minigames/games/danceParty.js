@@ -1,9 +1,10 @@
 // Dance Party (§C6.1 #9, agent G10): 3-lane note-tap rhythm at 100 BPM on a
 // disco stage. The seeded 75 s pattern comes from danceParty.logic.js
-// (DANCE.PATTERN_SEED — the §D6/G14 music contract); note timing follows the
-// framework clock (dt) at DANCE.BPM with real-frame-gap drift correction
-// (F4 P2-5) so it stays in tempo with G14's WebAudio-clocked 100 BPM track
-// across clamped slow frames. Hit windows perfect ≤70 ms (+4) /
+// (DANCE.PATTERN_SEED — the §D6/G14 music contract); note timing follows an
+// absolute-time-base song clock (createSongClock, F6/RE5) that phase-locks to
+// G14's WebAudio music clock (audio.getMusicTime()) when available and falls
+// back to a performance.now()-anchored wall clock — so it stays in tempo with
+// the 100 BPM track at any FPS. Hit windows perfect ≤70 ms (+4) /
 // good ≤140 ms (+2) / miss (combo reset); score = sum − 2×misses. Gooby
 // dances center-stage — dance energy follows the combo (bigger moves, fever
 // confetti at high tiers). Disco: colored sweeping spot lights, procedural
@@ -22,6 +23,7 @@ import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: 
 import { clampFloatTextToView } from '../framework.js'; // F4 P2-3
 import {
   DANCE_TUNING,
+  createSongClock, // F6 (RE5 P1): absolute-time-base song clock
   generatePattern,
   classifyHit,
   judgeTap,
@@ -243,7 +245,10 @@ export default {
     // city/carController.js thumb zones — ctx.input's 'tap' fires on
     // pointer-UP which is too late for a rhythm judgment) ---
     this.songTime = -DANCE_TUNING.LEAD_IN_SEC;
-    this.lastFrameAt = null; // F4 P2-5: real-frame-gap drift correction anchor
+    // F6 (RE5 P1): absolute time base — phase-locks to the WebAudio music
+    // clock when available; wall-clock fallback otherwise. Pauses freeze it
+    // via the framework onResume hook (rebase) + the frame-gap safety net.
+    this.songClock = createSongClock();
     this.onPointerDown = (e) => {
       if (this.phase !== 'play' || this.autoplay) return;
       const lane = Math.min(DANCE.LANES - 1, Math.max(0, Math.floor((e.clientX / innerWidth) * DANCE.LANES)));
@@ -268,6 +273,15 @@ export default {
     ctx.audio.music('dance');
     ctx.hud.setScore(0);
     ctx.hud.setTime(DANCE.DURATION_SEC);
+  },
+
+  /**
+   * F6 (RE5): §E8 optional resume hook (framework pause/resume) — re-anchor
+   * the song clock so the paused span (the music keeps playing through the
+   * overlay) never advances the chart, however long the pause lasted.
+   */
+  onResume() {
+    this.songClock?.rebase();
   },
 
   /** Reflect the §C6.1 score formula in the HUD (framework accumulates deltas). */
@@ -374,23 +388,19 @@ export default {
 
   update(dt, elapsed) {
     const ctx = this.ctx;
-    // F4 P2-5: keep the pattern clock from drifting against the 100 BPM
-    // track. The music sequencer runs on the WebAudio clock (real time) but
-    // `elapsed` accumulates rAF dt CLAMPED at 0.1 s (core/sceneManager.js),
-    // so every slow frame loses real time and the notes creep late. audio.js
-    // exposes no public time base (getStats() has no clock — see the F4
-    // report: a getMusicTime() accessor would enable true phase lock), so the
-    // best local correction is to step the song clock by the REAL frame gap
-    // whenever the gap is plausibly a rendered frame; longer gaps are pauses/
-    // backgrounding (update not called) and keep frozen-clock semantics.
-    const nowSec = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
-    let step = dt;
-    if (this.lastFrameAt != null) {
-      const gap = nowSec - this.lastFrameAt;
-      if (gap > dt && gap <= DANCE_TUNING.DRIFT_MAX_FRAME_GAP_SEC) step = gap;
+    // F6 (RE5 P1): the song clock uses an ABSOLUTE time base — the WebAudio
+    // music clock (true phase lock with the 100 BPM track) when available,
+    // else a performance.now()-anchored wall clock. F4's per-frame
+    // max(dt, gap) stepping accumulated one-sided rAF-vs-performance.now()
+    // jitter (~10% fast at healthy FPS); re-deriving from an anchor every
+    // frame makes jitter non-accumulating. Explicit pauses freeze the clock
+    // exactly (framework onResume → songClock.rebase()); wall gaps beyond
+    // DRIFT_MAX_FRAME_GAP_SEC (update stopped without a pause hook) also
+    // re-anchor without advancing as a safety net.
+    if (this.phase === 'play') {
+      const wallSec = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+      this.songTime = this.songClock.tick(wallSec, ctx.audio?.getMusicTime?.() ?? null);
     }
-    this.lastFrameAt = nowSec;
-    if (this.phase === 'play') this.songTime += step;
 
     this.gooby.update(dt);
     this.particles.update(dt);
@@ -438,7 +448,7 @@ export default {
       return;
     }
 
-    // song clock: stepped above (framework dt + F4 P2-5 drift correction)
+    // song clock: stepped above (absolute time base — F6/RE5)
     ctx.hud.setTime(DANCE.DURATION_SEC - this.songTime);
 
     // autoplay taps
@@ -516,6 +526,7 @@ export default {
     this.rings = [];
     this.spots = [];
     this.plan = null;
+    this.songClock = null;
     this.gooby = null;
     this.particles = null;
     this.floats = null;

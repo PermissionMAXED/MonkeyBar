@@ -40,14 +40,17 @@ export const DANCE_TUNING = Object.freeze({
   /** Ending celebration length before the results screen (s). */
   END_DELAY_SEC: 1.6,
   /**
-   * F4 P2-5 drift correction: real frame gaps up to this long (s) advance the
-   * song clock by their TRUE duration — the framework clock loses time on
-   * clamped long frames (sceneManager caps dt at 0.1 s) while the dance-track
-   * sequencer follows the WebAudio clock, so notes drift late vs the music.
-   * Gaps beyond this are pauses/backgrounding (update not called), which must
-   * NOT advance the chart.
+   * Song-clock stall tolerance (F4 P2-5, reworked by F6/RE5): real frame gaps
+   * up to this long (s) are rendered-but-slow frames (GC/JIT/SwiftShader
+   * stalls at heavy throttle reach ~1 s) and advance the song clock by their
+   * TRUE duration (createSongClock's absolute time base) — the music keeps
+   * playing through them, so freezing would drift the chart late. Explicit
+   * pauses freeze exactly via the framework pause/resume hooks
+   * (createSongClock.rebase()); this threshold is only the safety net for
+   * update() stopping WITHOUT a pause hook (rogue backgrounding), which must
+   * not fast-forward the chart unboundedly.
    */
-  DRIFT_MAX_FRAME_GAP_SEC: 0.45,
+  DRIFT_MAX_FRAME_GAP_SEC: 2.0,
 });
 
 /**
@@ -65,6 +68,77 @@ export function mulberry32(seed) {
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) | 0;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * F6 (RE5 P1): absolute-time-base song clock. F4's per-frame `max(dt, gap)`
+ * stepping accumulated only the POSITIVE side of rAF-timestamp-vs-
+ * performance.now() jitter, running ~10% fast at healthy FPS. This clock
+ * instead anchors songTime to an absolute reference and re-derives it every
+ * tick, so per-frame jitter can never accumulate:
+ *
+ *   songTime = anchorSong + (source now − source anchor)
+ *
+ * The source is the music clock (audio.getMusicTime(), WebAudio-derived —
+ * true phase lock) when available, else the wall clock (performance.now()).
+ * Pauses freeze songTime exactly: the framework's pause/resume hooks call
+ * rebase(), which re-anchors WITHOUT advancing. Wall gaps longer than
+ * `maxFrameGapSec` (update() stopped without a pause hook) also re-anchor as
+ * a safety net. Source appearing/disappearing re-anchors too (no jumps).
+ * Pure + deterministic (times are injected) for node:test.
+ *
+ * @param {{startSec?: number, maxFrameGapSec?: number}} [opts]
+ * @returns {{tick: (wallSec: number, musicSec?: number|null) => number,
+ *   rebase: () => void, current: () => number}}
+ */
+export function createSongClock({
+  startSec = -DANCE_TUNING.LEAD_IN_SEC,
+  maxFrameGapSec = DANCE_TUNING.DRIFT_MAX_FRAME_GAP_SEC,
+} = {}) {
+  let songTime = startSec;
+  let lastWall = null;
+  let anchorSong = startSec;
+  let anchorWall = null;
+  /** @type {number|null} music time at the anchor (null = wall-clock source) */
+  let anchorMusic = null;
+
+  return {
+    /**
+     * Advance the clock for one frame.
+     * @param {number} wallSec real time, seconds (performance.now()/1000)
+     * @param {number|null} [musicSec] music time (audio.getMusicTime()) or null
+     * @returns {number} current song time (seconds)
+     */
+    tick(wallSec, musicSec = null) {
+      const musicOk = typeof musicSec === 'number' && Number.isFinite(musicSec);
+      const frameGap = lastWall == null ? 0 : wallSec - lastWall;
+      lastWall = wallSec;
+      const sourceChanged = musicOk !== (anchorMusic != null);
+      if (anchorWall == null || frameGap > maxFrameGapSec || frameGap < 0 || sourceChanged) {
+        // first tick / resume after a pause gap / clock source switch:
+        // re-anchor at the current songTime — time resumes from here.
+        anchorWall = wallSec;
+        anchorSong = songTime;
+        anchorMusic = musicOk ? musicSec : null;
+        return songTime;
+      }
+      const advance = musicOk ? musicSec - anchorMusic : wallSec - anchorWall;
+      const next = anchorSong + advance;
+      if (next > songTime) songTime = next; // strictly monotonic — never rewind
+      return songTime;
+    },
+    /**
+     * Drop the anchors so the NEXT tick re-anchors at the current songTime
+     * without advancing — the framework pause/resume hook path (an explicitly
+     * paused span must freeze the chart exactly, whatever its length).
+     */
+    rebase() {
+      lastWall = null;
+      anchorWall = null;
+    },
+    /** @returns {number} */
+    current: () => songTime,
   };
 }
 

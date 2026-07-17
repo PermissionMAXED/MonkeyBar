@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 
 import {
   DANCE_TUNING,
+  createSongClock,
   mulberry32,
   generatePattern,
   classifyHit,
@@ -201,6 +202,113 @@ test('dance: typical raw score ≈ 96 pays ~16c; extremes clamp (§C6 row)', () 
   assert.equal(computeCoins(row, 0, false), row.min);
   assert.equal(computeCoins(row, 100000, false), row.max);
   assert.equal(computeCoins(row, 96, true), 32, 'daily ×2 after clamp');
+});
+
+// --------------------------------------------------------------- song clock
+// F6 (RE5 P1): createSongClock — absolute time base for danceParty's chart.
+
+test('dance clock: starts at −LEAD_IN and tracks the wall clock exactly', () => {
+  const clock = createSongClock();
+  assert.equal(clock.current(), -DANCE_TUNING.LEAD_IN_SEC);
+  let t = 100;
+  clock.tick(t);
+  for (let i = 0; i < 300; i += 1) {
+    t += 1 / 60;
+    clock.tick(t);
+  }
+  // 300 frames × 1/60 s: exact (absolute base — no per-frame accumulation)
+  assert.ok(Math.abs(clock.current() - (-DANCE_TUNING.LEAD_IN_SEC + 5)) < 1e-9);
+});
+
+test('dance clock: one-sided frame-gap jitter can NOT accumulate (RE5 bug)', () => {
+  // Model the F4 failure: wall-time frame gaps jitter ±4 ms around 30 ms.
+  // The old max(dt, gap) stepping accumulated only the positive side (≈ +13%
+  // fast); the absolute base must land exactly on the total elapsed time.
+  const clock = createSongClock();
+  let t = 50;
+  clock.tick(t);
+  const t0 = t;
+  for (let i = 0; i < 1000; i += 1) {
+    t += 0.03 + (i % 2 === 0 ? 0.004 : -0.004);
+    clock.tick(t);
+  }
+  const songAdvance = clock.current() - -DANCE_TUNING.LEAD_IN_SEC;
+  const wall = t - t0;
+  assert.ok(Math.abs(songAdvance / wall - 1) < 1e-9, `ratio ${songAdvance / wall}`);
+});
+
+test('dance clock: slow frames advance true duration; pause gaps freeze', () => {
+  const clock = createSongClock();
+  let t = 10;
+  clock.tick(t);
+  t += 0.125; // ~8 FPS frame — under the pause threshold, advances fully
+  clock.tick(t);
+  assert.ok(Math.abs(clock.current() - (-DANCE_TUNING.LEAD_IN_SEC + 0.125)) < 1e-9);
+  const before = clock.current();
+  t += 3; // pause: update() not called for 3 s → frozen, re-anchored
+  clock.tick(t);
+  assert.equal(clock.current(), before, 'pause gap must not advance');
+  t += 0.1; // next real frame resumes from the frozen time
+  clock.tick(t);
+  assert.ok(Math.abs(clock.current() - (before + 0.1)) < 1e-9);
+});
+
+test('dance clock: rebase() freezes an explicitly paused span of any length', () => {
+  const clock = createSongClock();
+  let t = 5;
+  clock.tick(t);
+  t += 0.1;
+  clock.tick(t);
+  const before = clock.current();
+  clock.rebase(); // framework pause → resume hook (danceParty.onResume)
+  t += 1.2; // paused span UNDER the frame-gap safety net — must still freeze
+  clock.tick(t);
+  assert.equal(clock.current(), before);
+  t += 0.1;
+  clock.tick(t);
+  assert.ok(Math.abs(clock.current() - (before + 0.1)) < 1e-9);
+});
+
+test('dance clock: phase-locks to the music clock when available', () => {
+  const clock = createSongClock();
+  clock.tick(100, 5.0); // first tick anchors to the music time base
+  clock.tick(100.4, 5.25); // wall says 0.4 s but the music clock says 0.25 s
+  assert.ok(Math.abs(clock.current() - (-DANCE_TUNING.LEAD_IN_SEC + 0.25)) < 1e-9);
+  clock.tick(100.7, 5.5); // music leads → songTime follows the music, not wall
+  assert.ok(Math.abs(clock.current() - (-DANCE_TUNING.LEAD_IN_SEC + 0.5)) < 1e-9);
+});
+
+test('dance clock: source switches re-anchor without jumping', () => {
+  const clock = createSongClock();
+  let t = 20;
+  clock.tick(t); // wall source
+  t += 0.2;
+  clock.tick(t);
+  const atSwitch = clock.current();
+  t += 0.02;
+  clock.tick(t, 40.0); // music becomes available mid-round → re-anchor, no jump
+  assert.equal(clock.current(), atSwitch);
+  t += 0.02;
+  clock.tick(t, 40.3);
+  assert.ok(Math.abs(clock.current() - (atSwitch + 0.3)) < 1e-6);
+  t += 0.02;
+  clock.tick(t, null); // music clock vanishes (ctx suspended) → wall fallback
+  const atDrop = clock.current();
+  assert.ok(Math.abs(atDrop - (atSwitch + 0.3)) < 1e-6);
+  t += 0.1;
+  clock.tick(t, null);
+  assert.ok(Math.abs(clock.current() - (atDrop + 0.1)) < 1e-6);
+});
+
+test('dance clock: never runs backwards on a regressing source', () => {
+  const clock = createSongClock();
+  clock.tick(10, 2.0);
+  clock.tick(10.1, 2.1);
+  const s = clock.current();
+  clock.tick(10.2, 2.05); // buggy/regressing music clock — hold, don't rewind
+  assert.equal(clock.current(), s);
+  clock.tick(10.3, 2.3); // once the source catches up, time flows again
+  assert.ok(Math.abs(clock.current() - (s + 0.2)) < 1e-9);
 });
 
 // ===========================================================================

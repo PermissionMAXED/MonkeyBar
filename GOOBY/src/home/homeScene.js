@@ -176,7 +176,14 @@ export function createHomeScene(ctx) {
       subs.push(store.on('statsChanged', () => refreshEmotionInputs(machine)));
       // sleep transitions set/clear grumpyUntil without touching stats — refresh
       // so the §C1.4 grumpy face shows immediately after an early wake.
-      subs.push(store.on('sleepChanged', () => refreshEmotionInputs(machine)));
+      subs.push(store.on('sleepChanged', (sleep) => {
+        refreshEmotionInputs(machine);
+        // F6 (RE4): the sleep flow poses the 'sleepy' face DIRECTLY on the rig
+        // (bypassing the machine), so onChange won't fire when the mood band
+        // is unchanged across the nap — force-apply the machine's emotion on
+        // wake so the sleepy face can never stick.
+        if (!sleep?.sleeping) gooby.setEmotion(machine.get());
+      }));
 
       // --- room navigation: arrows + dots (ui/roomNav.js) + swipe ---
       roomNav = createRoomNav({ onNavigate: (roomId) => api.goToRoom(roomId) });

@@ -10,6 +10,9 @@
 //                         loop (~72 BPM, quiet) and 'dance' 100 BPM upbeat
 //                         track honoring the DANCE constants contract (§D6:
 //                         same BPM + PATTERN_SEED as danceParty's chart).
+//   getMusicTime()      — F6: seconds since the current track started
+//                         (WebAudio clock; null when stopped/pre-init/
+//                         suspended) — danceParty's phase-lock time base.
 //   setVolume(kind, v)  — 'sfx'|'music' runtime buses; also accepts an object
 //                         ({sfx, music}). Mute PERSISTENCE lives in the save
 //                         (settings.sfx/music/haptics) — this module follows
@@ -492,7 +495,9 @@ function startMusic(id) {
   const sched = id === 'dance' ? schedDanceStep : schedHomeStep;
   if (id !== 'dance' && id !== 'home' && DEV) console.warn(`[audio] unknown music track '${id}' — playing 'home'`);
   const rng = mulberry32(id === 'dance' ? DANCE.PATTERN_SEED : 72_2026);
-  seq = { id, timer: null, next: ctx.currentTime + 0.08, step: 0, rng };
+  // startAt (F6): WebAudio time of sequencer step 0 — getMusicTime()'s zero.
+  const startAt = ctx.currentTime + 0.08;
+  seq = { id, timer: null, next: startAt, startAt, step: 0, rng };
   if (id === 'dance') {
     seq.pattern = Array.from({ length: 16 }, () =>
       rng() < 0.7 ? DANCE_SCALE[Math.floor(rng() * DANCE_SCALE.length)] : 0);
@@ -525,6 +530,20 @@ export function music(id) {
   }
   if (seq?.id === id) return;
   startMusic(id);
+}
+
+/**
+ * F6 (RE5): read-only music time base — seconds since the current music
+ * track started (WebAudio clock, ctx.currentTime − the track's step-0
+ * reference). Returns null when no track is running or the context clock is
+ * not advancing (pre-init / suspended — e.g. headless VMs without an audio
+ * device), so callers (danceParty's song clock) can phase-lock when they can
+ * and fall back to a wall clock when they can't.
+ * @returns {number|null}
+ */
+export function getMusicTime() {
+  if (!ctx || !seq || ctx.state !== 'running') return null;
+  return ctx.currentTime - seq.startAt;
 }
 
 // ---------------------------------------------------------------------------
@@ -602,4 +621,4 @@ export function getStats() {
   };
 }
 
-export default { init, play, music, setVolume, stop, impact, getStats };
+export default { init, play, music, getMusicTime, setVolume, stop, impact, getStats };
