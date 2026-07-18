@@ -8,6 +8,13 @@
  *   3. copy ONLY whitelisted files into public/assets/kenney/<slug>/
  *      (GLBs flat, audio under audio/), plus the pack's License.txt.
  *
+ * V3/G31 (PLAN3 §D8-1): local staging is preferred over the network — when
+ * `--staging <path>` is passed, or the default staging library
+ * `/workspace/asset-staging/kenney/` exists, packs are copied from the
+ * already-extracted `<staging>/<slug>/` dirs instead of downloading.
+ * Also handles the §D3 audio forms (dir arrays, exact `oggs` whitelists,
+ * `source` slug override) and the §D4 UI_SPRITES set → public/assets/ui/.
+ *
  * Idempotent: packs whose committed output is already complete are skipped
  * (no network). Pass --force to re-download everything.
  *
@@ -29,6 +36,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   PACKS,
+  UI_SPRITES,
   BUDGET_BYTES,
   discoveryRegex,
   modelEntry,
@@ -36,7 +44,18 @@ import {
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT_ROOT = path.join(ROOT, 'public', 'assets', 'kenney');
+const UI_OUT = path.join(ROOT, 'public', 'assets', 'ui');
 const FORCE = process.argv.includes('--force');
+
+// V3/G31 (§D8-1): prefer the local staging library over the network.
+const DEFAULT_STAGING = '/workspace/asset-staging/kenney';
+const stagingArg = process.argv.indexOf('--staging');
+const STAGING =
+  stagingArg !== -1
+    ? process.argv[stagingArg + 1]
+    : fs.existsSync(DEFAULT_STAGING)
+      ? DEFAULT_STAGING
+      : null;
 
 /** Normalize a filename for fuzzy matching (case/hyphen/underscore/space). */
 const norm = (s) => s.toLowerCase().replace(/[-_ ]/g, '');
@@ -108,13 +127,54 @@ function packComplete(pack) {
       ).every((uri) => fs.existsSync(path.join(dir, uri)))
     );
   }
-  // Audio packs: complete if License.txt + at least one matching ogg exist.
+  // Audio packs: License.txt + every whitelisted ogg (V3/G31: exact `oggs`
+  // lists are verified name-by-name; glob packs need at least one match).
   const audioDir = path.join(dir, 'audio');
-  return (
-    fs.existsSync(path.join(dir, 'License.txt')) &&
-    fs.existsSync(audioDir) &&
-    fs.readdirSync(audioDir).some((f) => f.endsWith('.ogg'))
-  );
+  if (!fs.existsSync(path.join(dir, 'License.txt')) || !fs.existsSync(audioDir)) {
+    return false;
+  }
+  const oggs = fs.readdirSync(audioDir).filter((f) => f.endsWith('.ogg'));
+  if (pack.oggs) return pack.oggs.every((n) => oggs.includes(`${n}.ogg`));
+  return oggs.length > 0;
+}
+
+// ── V3/G31: shared source-pack roots (staging dirs or downloaded zips) ──────
+/** sourceSlug → extracted/staging dir (ui-pack serves sounds AND sprites). */
+const sourceRoots = new Map();
+
+/**
+ * Directory holding a Kenney source pack's extracted contents: the staging
+ * library when available (§D8-1), else download + unzip into tmpRoot.
+ * @param {string} sourceSlug kenney.nl asset slug
+ * @param {string} tmpRoot temp dir for network downloads
+ * @returns {Promise<string>}
+ */
+async function getSourceRoot(sourceSlug, tmpRoot) {
+  let dir = sourceRoots.get(sourceSlug);
+  if (dir) return dir;
+  if (STAGING) {
+    dir = path.join(STAGING, sourceSlug);
+    if (!fs.existsSync(dir)) {
+      throw new Error(`staging pack missing: ${dir} (fetch it or drop --staging)`);
+    }
+    console.log(`  using staging ${dir}`);
+  } else {
+    console.log(`  discovering zip URL for ${sourceSlug}…`);
+    const page = await (
+      await fetchOk(`https://kenney.nl/assets/${sourceSlug}`)
+    ).text();
+    const m = page.match(discoveryRegex(sourceSlug));
+    if (!m) throw new Error(`${sourceSlug}: no zip URL matched the §D1 regex`);
+    const zipUrl = `https://kenney.nl${m[0]}`;
+    const zipPath = path.join(tmpRoot, `${sourceSlug}.zip`);
+    console.log(`  downloading ${zipUrl}`);
+    await download(zipUrl, zipPath);
+    dir = path.join(tmpRoot, sourceSlug);
+    fs.mkdirSync(dir, { recursive: true });
+    execFileSync('unzip', ['-q', '-o', zipPath, '-d', dir]);
+  }
+  sourceRoots.set(sourceSlug, dir);
+  return dir;
 }
 
 const substitutions = [];
@@ -126,20 +186,12 @@ async function processPack(pack, tmpRoot) {
     return;
   }
 
-  console.log(`> ${pack.slug}: discovering zip URL…`);
-  const page = await (await fetchOk(`https://kenney.nl/assets/${pack.slug}`)).text();
-  const m = page.match(discoveryRegex(pack.slug));
-  if (!m) throw new Error(`${pack.slug}: no zip URL matched the §D1 regex`);
-  const zipUrl = `https://kenney.nl${m[0]}`;
+  console.log(`> ${pack.slug}`);
+  // V3/G31: `source` overrides the download/staging slug (ui-pack-sounds
+  // ships inside the ui-pack asset).
+  const srcRoot = await getSourceRoot(pack.source ?? pack.slug, tmpRoot);
 
-  const zipPath = path.join(tmpRoot, `${pack.slug}.zip`);
-  console.log(`  downloading ${zipUrl}`);
-  await download(zipUrl, zipPath);
-  const extractDir = path.join(tmpRoot, pack.slug);
-  fs.mkdirSync(extractDir, { recursive: true });
-  execFileSync('unzip', ['-q', '-o', zipPath, '-d', extractDir]);
-
-  const all = walk(extractDir);
+  const all = walk(srcRoot);
   fs.rmSync(outDir, { recursive: true, force: true });
   fs.mkdirSync(outDir, { recursive: true });
 
@@ -198,16 +250,29 @@ async function processPack(pack, tmpRoot) {
       fs.copyFileSync(tex.abs, dest);
     }
   } else {
-    const rx = globToRegex(pack.glob);
-    const matches = all
-      .filter(
-        (f) =>
-          path.dirname(f.rel) === pack.dir && rx.test(path.basename(f.rel))
-      )
-      .sort((a, b) => a.rel.localeCompare(b.rel))
-      .slice(0, pack.max);
-    if (matches.length === 0) {
-      throw new Error(`${pack.slug}: glob '${pack.glob}' matched nothing in '${pack.dir}'`);
+    // V3/G31 (§D3): `dir` may be an array; `oggs` is an exact whitelist.
+    const dirs = Array.isArray(pack.dir) ? pack.dir : [pack.dir];
+    const inDirs = all.filter((f) => dirs.includes(path.dirname(f.rel)));
+    let matches;
+    if (pack.oggs) {
+      matches = pack.oggs.map((name) => {
+        const src = inDirs.find((f) => path.basename(f.rel) === `${name}.ogg`);
+        if (!src) {
+          throw new Error(
+            `${pack.slug}: '${name}.ogg' not found in ${dirs.join(', ')}`
+          );
+        }
+        return src;
+      });
+    } else {
+      const rx = globToRegex(pack.glob);
+      matches = inDirs
+        .filter((f) => rx.test(path.basename(f.rel)))
+        .sort((a, b) => a.rel.localeCompare(b.rel))
+        .slice(0, pack.max);
+      if (matches.length === 0) {
+        throw new Error(`${pack.slug}: glob '${pack.glob}' matched nothing in '${dirs.join(', ')}'`);
+      }
     }
     const audioOut = path.join(outDir, 'audio');
     fs.mkdirSync(audioOut, { recursive: true });
@@ -216,6 +281,49 @@ async function processPack(pack, tmpRoot) {
     }
   }
   console.log(`  ok: ${pack.slug}`);
+}
+
+// ── V3/G31 (§D4): ui-pack sprites → public/assets/ui/<color>/<name>.png ─────
+
+function spritesComplete() {
+  if (!fs.existsSync(path.join(UI_OUT, 'License.txt'))) return false;
+  return UI_SPRITES.sets.every((set) =>
+    set.files.every((f) =>
+      fs.existsSync(path.join(UI_OUT, set.out, `${f}.png`))
+    )
+  );
+}
+
+async function processSprites(tmpRoot) {
+  if (!FORCE && spritesComplete()) {
+    console.log('= ui sprites: already complete, skipping');
+    return;
+  }
+  console.log(`> ui sprites (${UI_SPRITES.source} → public/assets/ui/)`);
+  const srcRoot = await getSourceRoot(UI_SPRITES.source, tmpRoot);
+  const all = walk(srcRoot);
+  fs.rmSync(UI_OUT, { recursive: true, force: true });
+  fs.mkdirSync(UI_OUT, { recursive: true });
+  const license = all.find(
+    (f) => path.basename(f.rel).toLowerCase() === 'license.txt'
+  );
+  if (!license) throw new Error(`${UI_SPRITES.source}: License.txt not found`);
+  fs.copyFileSync(license.abs, path.join(UI_OUT, 'License.txt'));
+  let count = 0;
+  for (const set of UI_SPRITES.sets) {
+    const setOut = path.join(UI_OUT, set.out);
+    fs.mkdirSync(setOut, { recursive: true });
+    for (const name of set.files) {
+      const wanted = path.join(set.dir, `${name}.png`);
+      const src = all.find((f) => f.rel === wanted);
+      if (!src) {
+        throw new Error(`${UI_SPRITES.source}: sprite '${wanted}' not found`);
+      }
+      fs.copyFileSync(src.abs, path.join(setOut, `${name}.png`));
+      count += 1;
+    }
+  }
+  console.log(`  ok: ui sprites (${count} PNGs)`);
 }
 
 function dirSize(dir) {
@@ -230,9 +338,11 @@ function dirSize(dir) {
 const mb = (b) => (b / (1024 * 1024)).toFixed(2);
 
 async function main() {
+  if (STAGING) console.log(`Source: local staging library at ${STAGING}`);
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gooby-kenney-'));
   try {
     for (const pack of PACKS) await processPack(pack, tmpRoot);
+    await processSprites(tmpRoot); // V3/G31 §D4
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
@@ -244,6 +354,13 @@ async function main() {
     const { bytes, files } = dirSize(path.join(OUT_ROOT, pack.slug));
     total += bytes;
     console.log(`${pack.slug.padEnd(24)} ${String(files).padStart(6)} ${mb(bytes).padStart(8)}`);
+  }
+  {
+    // V3/G31: ui sprites live OUTSIDE the kenney root but come from a Kenney
+    // pack — count them against the same budget.
+    const { bytes, files } = dirSize(UI_OUT);
+    total += bytes;
+    console.log(`${'(ui sprites)'.padEnd(24)} ${String(files).padStart(6)} ${mb(bytes).padStart(8)}`);
   }
   console.log(`${'TOTAL'.padEnd(24)} ${''.padStart(6)} ${mb(total).padStart(8)}`);
 

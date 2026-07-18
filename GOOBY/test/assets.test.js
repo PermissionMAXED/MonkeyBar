@@ -12,12 +12,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   PACKS,
+  UI_SPRITES,
   BUDGET_BYTES,
   modelEntry,
 } from '../scripts/kenney-manifest.mjs';
+// V3/G31 (PLAN3 §B6/§D2): second asset root
+import { KAYKIT_PACKS, kaykitEntry } from '../scripts/kaykit-manifest.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const KENNEY = path.join(ROOT, 'public', 'assets', 'kenney');
+const KAYKIT = path.join(ROOT, 'public', 'assets', 'kaykit');
+const UI_DIR = path.join(ROOT, 'public', 'assets', 'ui');
 
 function walk(dir) {
   const out = [];
@@ -30,7 +35,7 @@ function walk(dir) {
 }
 
 test('every manifest model file exists on disk', () => {
-  for (const pack of PACKS.filter((p) => p.files)) {
+  for (const pack of PACKS.filter((p) => p.modelDir)) {
     for (const entry of pack.files) {
       const { key } = modelEntry(entry);
       const file = path.join(KENNEY, pack.slug, `${key}.glb`);
@@ -40,15 +45,25 @@ test('every manifest model file exists on disk', () => {
 });
 
 test('every audio pack has oggs within its cap', () => {
-  for (const pack of PACKS.filter((p) => p.glob)) {
+  // V3/G31: audio packs are glob-capped OR exact `oggs` whitelists (§D3).
+  for (const pack of PACKS.filter((p) => p.glob || p.oggs)) {
     const audioDir = path.join(KENNEY, pack.slug, 'audio');
     assert.ok(fs.existsSync(audioDir), `missing ${pack.slug}/audio/`);
     const oggs = fs.readdirSync(audioDir).filter((f) => f.endsWith('.ogg'));
     assert.ok(oggs.length > 0, `${pack.slug}: no .ogg files`);
+    const cap = pack.max ?? pack.oggs.length;
     assert.ok(
-      oggs.length <= pack.max,
-      `${pack.slug}: ${oggs.length} oggs exceeds cap ${pack.max}`
+      oggs.length <= cap,
+      `${pack.slug}: ${oggs.length} oggs exceeds cap ${cap}`
     );
+    if (pack.oggs) {
+      for (const name of pack.oggs) {
+        assert.ok(
+          oggs.includes(`${name}.ogg`),
+          `${pack.slug}: whitelisted '${name}.ogg' not committed`
+        );
+      }
+    }
   }
 });
 
@@ -116,10 +131,15 @@ test('all committed .glb files are valid binary glTF', () => {
   }
 });
 
+/** All committed slugs (kenney + kaykit) for key-shaped string scans. */
+const ALL_SLUGS = [
+  ...PACKS.map((p) => p.slug),
+  ...KAYKIT_PACKS.map((p) => p.slug), // V3/G31
+];
+
 /** Collect asset-key-shaped strings ('<known-slug>/<name>') from a value tree. */
 function collectAssetKeys(value, out = new Set(), seen = new Set()) {
-  const slugs = PACKS.map((p) => p.slug).join('|');
-  const keyRx = new RegExp(`^(?:${slugs})/[A-Za-z0-9._ -]+$`);
+  const keyRx = new RegExp(`^(?:${ALL_SLUGS.join('|')})/[A-Za-z0-9._ -]+$`);
   if (typeof value === 'string') {
     if (keyRx.test(value)) out.add(value);
   } else if (value && typeof value === 'object' && !seen.has(value)) {
@@ -132,8 +152,11 @@ function collectAssetKeys(value, out = new Set(), seen = new Set()) {
 function assetKeyToFile(key) {
   const [slug, ...rest] = key.split('/');
   const name = rest.join('/');
+  // V3/G31: kaykit slugs live under the second root with their own ext (§B6).
+  const kaykit = KAYKIT_PACKS.find((p) => p.slug === slug);
+  if (kaykit) return path.join(KAYKIT, slug, `${name}.${kaykit.ext}`);
   const pack = PACKS.find((p) => p.slug === slug);
-  return pack.glob
+  return pack.glob || pack.oggs
     ? path.join(KENNEY, slug, 'audio', `${name}.ogg`)
     : path.join(KENNEY, slug, `${name}.glb`);
 }
@@ -460,6 +483,387 @@ test('V2/FIX-F P2-3: isCachedResource marks cache masters (and their shared clon
   assert.equal(assets.isCachedResource(new THREE.BoxGeometry()), false);
   assert.equal(assets.isCachedResource(null), false);
   assert.equal(assets.isCachedResource(undefined), false);
+});
+
+// ---------------------------------------------------------------------------
+// V3/G31 (PLAN3 §B6/§D2–§D5): 3.0 asset pipeline. Frozen copies of the §D2
+// kaykit whitelists + §D3 audio whitelists + §D5 3D additions — a manifest
+// regression (dropped entry) fails HERE even though the manifest-driven tests
+// above would silently shrink along with it.
+// ---------------------------------------------------------------------------
+
+const V3_KAYKIT_FILES = {
+  // §D2.1 — the 3 NPC characters (self-contained GLBs)
+  'kaykit-characters': splitNames(`Knight Mage Rogue_Hooded`),
+  // §D2.2 — §C9.6 restaurant set (24)
+  'kaykit-restaurant': splitNames(`kitchencounter_straight kitchencounter_sink
+    oven wall_orderwindow wall_doorway floor_kitchen floor_kitchen_small plate
+    plate_small menu chair_A chair_stool table_round_A cuttingboard crate
+    crate_buns crate_cheese crate_tomatoes crate_carrots jar_A_large
+    jar_A_medium jar_C_small bowl fridge_A`),
+  // §D2.3 — surf façades + city dressing (15)
+  'kaykit-city': splitNames(`building_A_withoutBase building_B_withoutBase
+    building_C_withoutBase building_D_withoutBase building_E_withoutBase
+    building_F_withoutBase box_A box_B bench streetlight firehydrant dumpster
+    trash_A trash_B bush`),
+  // §D2.4 — ghostHunt set (18)
+  'kaykit-halloween': splitNames(`grave_A grave_B gravemarker_A gravemarker_B
+    gravestone crypt coffin_decorated pumpkin_orange pumpkin_orange_small
+    pumpkin_orange_jackolantern pumpkin_yellow_small lantern_standing
+    lantern_hanging fence_gate fence_seperate tree_dead_large
+    tree_pine_orange_small floor_dirt_grave`),
+};
+
+const V3_KENNEY_AUDIO = {
+  // §D3.1 — completed music-jingles (85 = 5 families × 17)
+  'music-jingles': ['NES', 'HIT', 'PIZZI', 'SAX', 'STEEL'].flatMap((fam) =>
+    Array.from({ length: 17 }, (_, i) => `jingles_${fam}${String(i).padStart(2, '0')}`)
+  ),
+  // §D3.2 (15)
+  'ui-audio': splitNames(`click1 click2 click3 click4 click5 rollover1
+    rollover2 rollover3 rollover4 switch1 switch2 switch8 switch13 mouseclick1
+    mouserelease1`),
+  // §D3.3 (6)
+  'ui-pack-sounds': splitNames(`tap-a tap-b click-a click-b switch-a switch-b`),
+  // §D3.4 (15)
+  'casino-audio': splitNames(`chip-lay-1 chip-lay-2 chip-lay-3
+    chips-collide-1 chips-collide-2 chips-collide-3 chips-collide-4
+    chips-stack-1 chips-stack-2 card-slide-1 card-slide-2 card-slide-3
+    card-place-1 card-place-2 card-shuffle`),
+};
+
+const V3_KENNEY_3D = {
+  // §D5 — every named model (some were already committed by v1/v2; the
+  // manifest must expose ALL of them regardless of which wave added them)
+  'food-kit': splitNames(`cake cake-birthday cupcake muffin whipped-cream
+    strawberry chocolate donut-sprinkles honey`),
+  'toy-car-kit': splitNames(`track-narrow-straight track-narrow-curve
+    track-narrow-corner-small track-narrow-corner-large
+    track-narrow-straight-bump-up track-narrow-straight-bump-down
+    track-narrow-straight-hill-beginning track-narrow-straight-hill-end
+    track-narrow-looping gate gate-finish item-box item-banana item-cone
+    item-coin-gold item-coin-silver item-coin-bronze supports supports-clamp
+    smoke`),
+  'watercraft-kit': splitNames(`boat-fishing-small boat-row-small boat-sail-a
+    buoy buoy-flag arrow-standing`),
+  'survival-kit': splitNames(`bucket`),
+  'nature-kit': splitNames(`bench fence_gate stump_round flower_purpleA
+    flower_redA plant_bush pot_large rock_smallFlatA`),
+  'furniture-kit': splitNames(`kitchenCoffeeMachine books lampSquareCeiling
+    plantSmall1 plantSmall2 bathroomMirror toaster kitchenBar`),
+};
+
+test('V3 §D2: every kaykit whitelist entry is in the manifest and committed', () => {
+  for (const [slug, names] of Object.entries(V3_KAYKIT_FILES)) {
+    const pack = KAYKIT_PACKS.find((p) => p.slug === slug);
+    assert.ok(pack, `kaykit manifest missing pack '${slug}'`);
+    const keys = new Set(pack.files.map((e) => kaykitEntry(e, pack.ext).key));
+    for (const name of names) {
+      assert.ok(keys.has(name), `kaykit manifest ${slug} missing '${name}'`);
+      const file = path.join(KAYKIT, slug, `${name}.${pack.ext}`);
+      assert.ok(fs.existsSync(file), `missing kaykit/${slug}/${name}.${pack.ext}`);
+    }
+  }
+});
+
+test('V3 §D2: every kaykit slug ships a non-empty LICENSE.txt', () => {
+  for (const pack of KAYKIT_PACKS) {
+    const file = path.join(KAYKIT, pack.slug, 'LICENSE.txt');
+    assert.ok(fs.existsSync(file), `missing ${pack.slug}/LICENSE.txt`);
+    assert.ok(fs.statSync(file).size > 0, `${pack.slug}/LICENSE.txt is empty`);
+  }
+});
+
+test('V3 §B6: committed kaykit .gltf files are valid glTF 2.0 with every buffer/image dep present', () => {
+  const gltfs = walk(KAYKIT).filter((f) => f.endsWith('.gltf'));
+  assert.ok(gltfs.length > 0, 'no kaykit .gltf files committed');
+  for (const file of gltfs) {
+    const json = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(json.asset?.version, '2.0', `${file}: bad asset.version`);
+    assert.ok(
+      Array.isArray(json.meshes) && json.meshes.length > 0,
+      `${file}: no meshes`
+    );
+    const deps = [
+      ...(json.buffers ?? []).map((b) => b.uri),
+      ...(json.images ?? []).map((i) => i.uri),
+    ].filter((uri) => uri && !uri.startsWith('data:'));
+    assert.ok(deps.length > 0, `${file}: expected external .bin/texture deps`);
+    for (const uri of deps) {
+      const dep = path.join(path.dirname(file), uri);
+      assert.ok(fs.existsSync(dep), `${file}: missing dep ${uri}`);
+    }
+  }
+});
+
+test('V3 §D2.1: character GLBs are valid, self-contained, and carry the 76 clips', () => {
+  const REQUIRED_CLIPS = splitNames(`Idle Walking_A Running_A Sit_Chair_Idle
+    Cheer Interact PickUp Jump_Full_Long`);
+  for (const name of V3_KAYKIT_FILES['kaykit-characters']) {
+    const file = path.join(KAYKIT, 'kaykit-characters', `${name}.glb`);
+    const buf = fs.readFileSync(file);
+    assert.equal(buf.toString('ascii', 0, 4), 'glTF', `${file}: bad magic`);
+    assert.equal(buf.readUInt32LE(4), 2, `${file}: unexpected glTF version`);
+    assert.equal(buf.readUInt32LE(8), buf.length, `${file}: length mismatch`);
+    const json = JSON.parse(buf.toString('utf8', 20, 20 + buf.readUInt32LE(12)));
+    assert.equal(json.asset?.version, '2.0', `${file}: bad asset.version`);
+    assert.ok((json.skins ?? []).length > 0, `${file}: no skin (not rigged?)`);
+    // §B6 form (a): self-contained — no external buffer/image URIs.
+    const external = [
+      ...(json.buffers ?? []).map((b) => b.uri),
+      ...(json.images ?? []).map((i) => i.uri),
+    ].filter((uri) => uri && !uri.startsWith('data:'));
+    assert.deepEqual(external, [], `${file}: not self-contained: ${external}`);
+    const clips = (json.animations ?? []).map((a) => a.name);
+    assert.equal(clips.length, 76, `${file}: expected 76 clips, got ${clips.length}`);
+    for (const clip of REQUIRED_CLIPS) {
+      assert.ok(clips.includes(clip), `${file}: missing clip '${clip}'`);
+    }
+  }
+});
+
+test('V3 §D3/§D5: every 3.0 kenney file is in the manifest and committed', () => {
+  for (const [slug, names] of Object.entries(V3_KENNEY_AUDIO)) {
+    const pack = PACKS.find((p) => p.slug === slug);
+    assert.ok(pack?.oggs, `manifest missing audio pack '${slug}' (oggs form)`);
+    for (const name of names) {
+      assert.ok(pack.oggs.includes(name), `manifest ${slug} missing '${name}'`);
+      const file = path.join(KENNEY, slug, 'audio', `${name}.ogg`);
+      assert.ok(fs.existsSync(file), `missing ${slug}/audio/${name}.ogg`);
+      assert.ok(fs.statSync(file).size > 0, `${slug}/audio/${name}.ogg is empty`);
+    }
+  }
+  for (const [slug, names] of Object.entries(V3_KENNEY_3D)) {
+    const pack = PACKS.find((p) => p.slug === slug);
+    assert.ok(pack, `manifest missing pack '${slug}'`);
+    const keys = new Set(pack.files.map((e) => modelEntry(e).key));
+    for (const name of names) {
+      assert.ok(keys.has(name), `manifest ${slug} whitelist missing '${name}'`);
+      const file = path.join(KENNEY, slug, `${name}.glb`);
+      assert.ok(fs.existsSync(file), `missing ${slug}/${name}.glb`);
+      assert.equal(
+        fs.readFileSync(file).toString('ascii', 0, 4),
+        'glTF',
+        `${file}: bad magic bytes`
+      );
+    }
+  }
+});
+
+test('V3 §D4: every ui-pack sprite is committed under public/assets/ui/ with the pack licence', () => {
+  for (const set of UI_SPRITES.sets) {
+    for (const name of set.files) {
+      const file = path.join(UI_DIR, set.out, `${name}.png`);
+      assert.ok(fs.existsSync(file), `missing ui/${set.out}/${name}.png`);
+      const buf = fs.readFileSync(file);
+      assert.equal(
+        buf.toString('hex', 0, 4),
+        '89504e47',
+        `${file}: bad PNG magic`
+      );
+    }
+  }
+  const license = path.join(UI_DIR, 'License.txt');
+  assert.ok(fs.existsSync(license), 'missing ui/License.txt');
+  assert.ok(fs.statSync(license).size > 0, 'ui/License.txt is empty');
+});
+
+// ---------------------------------------------------------------------------
+// V3/G31 (PLAN3 §B6/§D8-3): PACK_FORMATS URL resolution — kaykit slugs route
+// to the second root with their ext; every other slug resolves EXACTLY as
+// v1/v2 (kenney/glb), so no existing key changes behavior.
+// ---------------------------------------------------------------------------
+
+test('V3 §B6: PACK_FORMATS routes kaykit keys and leaves kenney keys untouched', async () => {
+  const assets = await import('../src/core/assets.js');
+  assert.ok(Object.isFrozen(assets.PACK_FORMATS), 'PACK_FORMATS must be frozen');
+  // every §D2 slug present with the right root/ext
+  for (const pack of KAYKIT_PACKS) {
+    const fmt = assets.PACK_FORMATS[pack.slug];
+    assert.ok(fmt, `PACK_FORMATS missing '${pack.slug}'`);
+    assert.equal(fmt.root, 'kaykit');
+    assert.equal(fmt.ext, pack.ext);
+  }
+  assert.equal(
+    assets.getModelUrl('kaykit-characters/Knight'),
+    '/assets/kaykit/kaykit-characters/Knight.glb'
+  );
+  assert.equal(
+    assets.getModelUrl('kaykit-restaurant/oven'),
+    '/assets/kaykit/kaykit-restaurant/oven.gltf'
+  );
+  assert.equal(
+    assets.getModelUrl('kaykit-city/bench'),
+    '/assets/kaykit/kaykit-city/bench.gltf'
+  );
+  assert.equal(
+    assets.getModelUrl('kaykit-halloween/crypt'),
+    '/assets/kaykit/kaykit-halloween/crypt.gltf'
+  );
+  // default (unlisted) slugs stay kenney/glb — incl. the new §D5 packs
+  assert.equal(
+    assets.getModelUrl('food-kit/carrot'),
+    '/assets/kenney/food-kit/carrot.glb'
+  );
+  assert.equal(
+    assets.getModelUrl('toy-car-kit/track-narrow-looping'),
+    '/assets/kenney/toy-car-kit/track-narrow-looping.glb'
+  );
+  assert.equal(
+    assets.getModelUrl('watercraft-kit/buoy'),
+    '/assets/kenney/watercraft-kit/buoy.glb'
+  );
+  assert.equal(
+    assets.getModelUrl('survival-kit/bucket'),
+    '/assets/kenney/survival-kit/bucket.glb'
+  );
+  // §D3 audio slugs resolve via getAudioUrl (AUDIO_PACK_SLUGS extension)
+  assert.equal(
+    assets.getAudioUrl('ui-audio/switch1'),
+    '/assets/kenney/ui-audio/audio/switch1.ogg'
+  );
+  assert.equal(
+    assets.getAudioUrl('ui-pack-sounds/tap-a'),
+    '/assets/kenney/ui-pack-sounds/audio/tap-a.ogg'
+  );
+  assert.equal(
+    assets.getAudioUrl('casino-audio/chip-lay-1'),
+    '/assets/kenney/casino-audio/audio/chip-lay-1.ogg'
+  );
+  // audio keys must be skipped by preload (no GLTFLoader fetch)
+  await assets.preload(['ui-audio/switch1', 'casino-audio/chip-lay-1']);
+});
+
+// ---------------------------------------------------------------------------
+// V3/G31 (PLAN3 §B6): getAnimations / getSkinnedModel contracts (stubbed
+// loader, real three.js scene graph). SkeletonUtils.clone must re-bind every
+// SkinnedMesh to its OWN cloned skeleton — plain Object3D.clone() keeps
+// driving the master's bones (the forbidden case).
+// ---------------------------------------------------------------------------
+
+/** Build a minimal rigged scene: root → bone + SkinnedMesh bound to it. */
+async function makeSkinnedScene() {
+  const THREE = await import('three');
+  const scene = new THREE.Group();
+  scene.name = 'master';
+  const bone = new THREE.Bone();
+  bone.name = 'root_bone';
+  const geo = new THREE.BoxGeometry();
+  const count = geo.attributes.position.count;
+  geo.setAttribute(
+    'skinIndex',
+    new THREE.Uint16BufferAttribute(new Uint16Array(count * 4), 4)
+  );
+  geo.setAttribute(
+    'skinWeight',
+    new THREE.Float32BufferAttribute(
+      Float32Array.from({ length: count * 4 }, (_, i) => (i % 4 === 0 ? 1 : 0)),
+      4
+    )
+  );
+  const mesh = new THREE.SkinnedMesh(geo, new THREE.MeshStandardMaterial());
+  mesh.name = 'body';
+  mesh.add(bone);
+  mesh.bind(new THREE.Skeleton([bone]));
+  scene.add(mesh);
+  return { THREE, scene };
+}
+
+test('V3 §B6: modelCache keeps AnimationClips; getAnimations returns the SHARED array', async (t) => {
+  const assets = await import('../src/core/assets.js');
+  const THREE = await import('three');
+  t.after(() => assets._setLoaderForTests(null));
+
+  const key = 'kaykit-characters/__g31-anims-test';
+  const { scene } = await makeSkinnedScene();
+  const clips = [
+    new THREE.AnimationClip('Idle', 1, []),
+    new THREE.AnimationClip('Walking_A', 1, []),
+  ];
+  assets._setLoaderForTests({
+    loadAsync: () => Promise.resolve({ scene, animations: clips }),
+  });
+
+  // not loaded yet → warn + empty array, no throw
+  assert.deepEqual(assets.getAnimations(key), []);
+
+  await assets.preload([key]);
+  const got = assets.getAnimations(key);
+  assert.equal(got, assets.getAnimations(key), 'same (cached) array every call');
+  assert.equal(got.length, 2);
+  assert.equal(got[0], clips[0], 'clips are the shared masters, never cloned');
+  assert.equal(got[1].name, 'Walking_A');
+});
+
+test('V3 §B6: getSkinnedModel clones via SkeletonUtils — clone drives its OWN bones', async (t) => {
+  const assets = await import('../src/core/assets.js');
+  t.after(() => assets._setLoaderForTests(null));
+
+  const key = 'kaykit-characters/__g31-skinned-test';
+  const { scene } = await makeSkinnedScene();
+  assets._setLoaderForTests({
+    loadAsync: () => Promise.resolve({ scene, animations: [] }),
+  });
+  await assets.preload([key]);
+
+  const masterMesh = scene.getObjectByName('body');
+  const clone = assets.getSkinnedModel(key);
+  assert.equal(clone.name, key);
+  const cloneMesh = clone.getObjectByName('body');
+  assert.ok(cloneMesh?.isSkinnedMesh, 'clone contains the SkinnedMesh');
+  assert.notEqual(cloneMesh.skeleton, masterMesh.skeleton, 'own Skeleton instance');
+  assert.notEqual(
+    cloneMesh.skeleton.bones[0],
+    masterMesh.skeleton.bones[0],
+    'skeleton bound to CLONED bones (plain .clone() would keep the masters)'
+  );
+  assert.equal(
+    cloneMesh.skeleton.bones[0],
+    clone.getObjectByName('root_bone'),
+    'clone skeleton bones are the clone-tree bones'
+  );
+  // geometry/material stay shared with the cached master (getModel semantics)
+  assert.equal(cloneMesh.geometry, masterMesh.geometry);
+  assert.equal(assets.isCachedResource(cloneMesh.geometry), true);
+
+  // the FORBIDDEN pattern really is broken — document it in-test: a plain
+  // clone's skeleton still points at the MASTER's bones.
+  const plain = scene.clone(true);
+  assert.equal(
+    plain.getObjectByName('body').skeleton.bones[0],
+    masterMesh.skeleton.bones[0],
+    'plain Object3D.clone() shares the master skeleton (why it is forbidden)'
+  );
+});
+
+test('V3 §B6: getSkinnedModel cache miss — placeholder + background retry, no throw', async (t) => {
+  const assets = await import('../src/core/assets.js');
+  t.after(() => assets._setLoaderForTests(null));
+
+  const key = 'kaykit-characters/__g31-skinned-miss-test';
+  const { scene } = await makeSkinnedScene();
+  let calls = 0;
+  assets._setLoaderForTests({
+    loadAsync() {
+      calls += 1;
+      if (calls === 1) return Promise.reject(new Error('boom: transient'));
+      return Promise.resolve({ scene, animations: [] });
+    },
+  });
+
+  await assert.rejects(assets.preload([key]), /transient/);
+  const got = assets.getSkinnedModel(key); // must not throw
+  assert.equal(got.userData.placeholder, true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(assets.isLoaded(key), true, 'retry populated the cache');
+  assert.equal(got.userData.placeholder, false, 'placeholder self-healed');
+  const healedMesh = got.getObjectByName('body');
+  assert.ok(healedMesh?.isSkinnedMesh, 'healed content is the skinned model');
+  assert.notEqual(
+    healedMesh.skeleton,
+    scene.getObjectByName('body').skeleton,
+    'healed clone got its own skeleton (SkeletonUtils path)'
+  );
 });
 
 test('assets cache: concurrent callers share one rejection, then recover', async (t) => {

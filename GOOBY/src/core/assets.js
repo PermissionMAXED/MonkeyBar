@@ -1,24 +1,57 @@
 /**
- * GOOBY — asset loader + permanent cache (PLAN.md §B, §D1, §E1).
+ * GOOBY — asset loader + permanent cache (PLAN.md §B, §D1, §E1; PLAN3 §B6).
  *
  * Committed Kenney assets live under `public/assets/kenney/` (see
  * `scripts/kenney-manifest.mjs`):
  *   <slug>/<name>.glb           — models
  *   <slug>/audio/<name>.ogg     — audio packs
  *
+ * V3/G31 (PLAN3 §B6): a second committed root `public/assets/kaykit/` (see
+ * `scripts/kaykit-manifest.mjs`) with two file forms:
+ *   <slug>/<name>.glb           — self-contained (the 3 rigged characters)
+ *   <slug>/<name>.gltf + .bin + one shared <pack>_texture.png — GLTFLoader
+ *                                 resolves the relative URIs against the URL
+ * The frozen PACK_FORMATS table maps slug → { root, ext }; every slug not
+ * listed resolves exactly as before (kenney/glb).
+ *
  * Asset key format everywhere in the game: `'<slug>/<file-no-ext>'`,
- * e.g. `'food-kit/carrot'`, `'interface-sounds/click_001'`.
+ * e.g. `'food-kit/carrot'`, `'kaykit-restaurant/oven'`,
+ * `'kaykit-characters/Knight'`, audio `'ui-audio/switch1'`.
  */
 
 import * as THREE from 'three'; // V2/FIX-F: placeholder Group (P2-5, E18)
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+// V3/G31 (§B6): skinned characters MUST be cloned via SkeletonUtils.clone —
+// plain Object3D.clone() breaks skeleton bindings (binding rule §E0.1-10).
+import { clone as skeletonClone } from 'three/addons/utils/SkeletonUtils.js';
 
-/** Packs whose files are OGGs under `<slug>/audio/` (PLAN.md §D1). */
+/** Packs whose files are OGGs under `<slug>/audio/` (PLAN.md §D1 + PLAN3 §D3). */
 const AUDIO_PACK_SLUGS = new Set([
   'interface-sounds',
   'impact-sounds',
   'music-jingles',
+  // V3/G31 (PLAN3 §D3.2–§D3.4)
+  'ui-audio',
+  'ui-pack-sounds',
+  'casino-audio',
 ]);
+
+/**
+ * V3/G31 (PLAN3 §B6/§D8-3): slug → { root: 'kenney'|'kaykit', ext:
+ * 'glb'|'gltf' } for model packs that deviate from the kenney/glb default
+ * (toy-car-kit, watercraft-kit, survival-kit etc. need no entry). `.gltf`
+ * entries load their sibling `.bin` + shared texture by relative URI.
+ * @type {Readonly<Record<string, {root: string, ext: string}>>}
+ */
+export const PACK_FORMATS = Object.freeze({
+  'kaykit-characters': Object.freeze({ root: 'kaykit', ext: 'glb' }),
+  'kaykit-restaurant': Object.freeze({ root: 'kaykit', ext: 'gltf' }),
+  'kaykit-city': Object.freeze({ root: 'kaykit', ext: 'gltf' }),
+  'kaykit-halloween': Object.freeze({ root: 'kaykit', ext: 'gltf' }),
+});
+
+/** Default format for every slug not in PACK_FORMATS (v1/v2 behavior). */
+const DEFAULT_FORMAT = Object.freeze({ root: 'kenney', ext: 'glb' });
 
 // Vite injects import.meta.env (BASE_URL './' per vite.config.js); plain node
 // (tests) has no env object, so fall back to '/'.
@@ -26,7 +59,11 @@ const baseUrl = () => import.meta.env?.BASE_URL ?? '/';
 
 let loader = new GLTFLoader();
 
-/** Permanent cache: key → loaded gltf.scene (master copy, never handed out). */
+/**
+ * Permanent cache: key → { scene, animations } (master copies, never handed
+ * out). V3/G31 (§B6): animations are the gltf's AnimationClip array — shared
+ * via getAnimations, never cloned; scene clones bind them by node name.
+ */
 const modelCache = new Map();
 /** In-flight/settled load promises so concurrent preloads coalesce. */
 const loadPromises = new Map();
@@ -101,13 +138,16 @@ function parseKey(key) {
 const isAudioKey = (key) => AUDIO_PACK_SLUGS.has(parseKey(key).slug);
 
 /**
- * URL of a model GLB for a key.
- * @param {string} key
+ * URL of a model file for a key. V3/G31 (§B6): consults PACK_FORMATS —
+ * kaykit slugs resolve under `assets/kaykit/` with their `.glb`/`.gltf`
+ * extension; everything else stays `assets/kenney/<slug>/<name>.glb`.
+ * @param {string} key e.g. 'food-kit/carrot', 'kaykit-restaurant/oven'
  * @returns {string}
  */
 export function getModelUrl(key) {
   const { slug, name } = parseKey(key);
-  return `${baseUrl()}assets/kenney/${slug}/${name}.glb`;
+  const fmt = PACK_FORMATS[slug] ?? DEFAULT_FORMAT;
+  return `${baseUrl()}assets/${fmt.root}/${slug}/${name}.${fmt.ext}`;
 }
 
 /**
@@ -126,7 +166,11 @@ function loadModel(key) {
     p = loader.loadAsync(getModelUrl(key)).then(
       (gltf) => {
         normalizeLoadedScene(gltf.scene); // V2/FIX-F P1-2 + P2-3
-        modelCache.set(key, gltf.scene);
+        // V3/G31 (§B6): keep the AnimationClips — masters cache both.
+        modelCache.set(key, {
+          scene: gltf.scene,
+          animations: gltf.animations ?? [],
+        });
         return gltf.scene;
       },
       (err) => {
@@ -209,8 +253,17 @@ function makePlaceholder(key) {
  * @returns {import('three').Group}
  */
 export function getModel(key) {
-  const master = modelCache.get(key);
+  const master = modelCache.get(key)?.scene;
   if (master) {
+    // V3/G31 (§B6): plain Object3D.clone() breaks skeleton bindings — the
+    // KayKit characters (or any skinned model) must go through
+    // getSkinnedModel. Warn loudly instead of handing out a broken rig.
+    if (hasSkinnedMesh(master)) {
+      console.warn(
+        `assets: '${key}' contains SkinnedMesh — use getSkinnedModel(key), ` +
+          'plain clones break skeleton bindings (PLAN3 §B6)'
+      );
+    }
     const clone = master.clone(true);
     clone.name = key;
     return clone;
@@ -222,6 +275,72 @@ export function getModel(key) {
       if (loaded?.isObject3D !== true) return; // test seams may stub the scene
       placeholder.userData.placeholder = false;
       placeholder.add(loaded.clone(true));
+    },
+    (err) => {
+      console.warn(`assets: retry for '${key}' failed — placeholder stays:`, err);
+    }
+  );
+  return placeholder;
+}
+
+// ── V3/G31 (PLAN3 §B6): animations + skinned-character cloning ──────────────
+
+/** @param {object} root @returns {boolean} any SkinnedMesh in the subtree? */
+function hasSkinnedMesh(root) {
+  let found = false;
+  root.traverse?.((obj) => {
+    if (obj.isSkinnedMesh) found = true;
+  });
+  return found;
+}
+
+/**
+ * The cached AnimationClip array of a preloaded model (PLAN3 §B6). The array
+ * and its clips are SHARED masters — never cloned, never mutated by callers;
+ * bind them to a getSkinnedModel clone via `new AnimationMixer(clone)
+ * .clipAction(clip)` (clips bind by node name). Static models simply return
+ * `[]`. Not-yet-loaded keys warn and return `[]` — preload first (§E1).
+ * @param {string} key e.g. 'kaykit-characters/Knight'
+ * @returns {import('three').AnimationClip[]}
+ */
+export function getAnimations(key) {
+  const cached = modelCache.get(key);
+  if (!cached) {
+    console.warn(`assets: getAnimations('${key}') before load — [] returned`);
+    return [];
+  }
+  return cached.animations;
+}
+
+/**
+ * Get a fresh instance of a preloaded SKINNED model (the KayKit characters),
+ * cloned via `SkeletonUtils.clone` so every SkinnedMesh is re-bound to its
+ * OWN cloned skeleton (PLAN3 §B6 binding rule: plain `Object3D.clone()` is
+ * FORBIDDEN for skinned models — clones would keep driving the master's
+ * bones). Geometries/materials stay shared with the cached master (same
+ * ownership semantics as getModel — see isCachedResource). Animate with the
+ * shared clips from `getAnimations(key)`.
+ *
+ * Cache miss: mirrors getModel's fail-soft (V2/FIX-F P2-5) — background
+ * retry + neutral placeholder Group that self-heals with a proper
+ * SkeletonUtils clone when the load lands.
+ * @param {string} key e.g. 'kaykit-characters/Knight'
+ * @returns {import('three').Object3D}
+ */
+export function getSkinnedModel(key) {
+  const master = modelCache.get(key)?.scene;
+  if (master) {
+    const clone = skeletonClone(master);
+    clone.name = key;
+    return clone;
+  }
+  console.warn(`assets: '${key}' not loaded — retrying fetch, placeholder returned`);
+  const placeholder = makePlaceholder(key);
+  loadModel(key).then(
+    (loaded) => {
+      if (loaded?.isObject3D !== true) return; // test seams may stub the scene
+      placeholder.userData.placeholder = false;
+      placeholder.add(skeletonClone(loaded));
     },
     (err) => {
       console.warn(`assets: retry for '${key}' failed — placeholder stays:`, err);
