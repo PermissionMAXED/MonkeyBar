@@ -834,7 +834,11 @@ export function stepRun(run, dt, input) {
       }
     }
     if (hit) handleHit(run, ob, events);
-    if (run.ended) break;
+    // handleHit can end this frame's world mid-loop: an arcade wipeout sets
+    // run.ended, and the 3rd travel crash flips to jog and CLEARS
+    // run.obstacles under us. Either way the cursor is stale — stop before
+    // touching (or reading) any obstacle past the state change.
+    if (run.ended || i >= run.obstacles.length) break;
     if (ob.z > tune.DESPAWN_Z) run.obstacles.splice(i, 1);
   }
   if (run.ended) return events;

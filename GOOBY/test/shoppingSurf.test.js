@@ -512,6 +512,43 @@ test('§C8.6 travel: no fail-out — 3rd crash → 7 m/s jog, no more obstacles'
   assert.equal(currentSpeed(run), SURF.TRAVEL.JOG_SPEED);
 });
 
+test('§C8.6 regression (P1): run-ending 3rd hit with more obstacles pending does not throw', () => {
+  // The 3rd travel crash clears run.obstacles from INSIDE the obstacle loop
+  // (jog forgiveness). With obstacles queued at indexes below the hit, the
+  // loop used to keep iterating and read run.obstacles[i] === undefined
+  // ("Cannot read properties of undefined (reading 'def')").
+  const run = cleanRun('travel');
+  run.crashes = 2; // two prior stumbles, invulnerability elapsed
+  injectObstacle(run, 'crate', { lane: 0, z: -20 }); // index 0 — read after the clear
+  injectObstacle(run, 'crate', { lane: 1, z: -0.5 }); // index 1 — collides this frame
+  injectObstacle(run, 'crate', { lane: 2, z: -15 }); // index 2 — processed before the hit
+  let events = [];
+  assert.doesNotThrow(() => { events = stepRun(run, 1 / 60, null); });
+  assert.equal(run.crashes, 3);
+  assert.equal(run.jog, true);
+  assert.equal(run.ended, false, 'travel never hard-fails');
+  assert.equal(run.obstacles.length, 0, 'jog cleared every obstacle');
+  assert.ok(events.some((e) => e.type === 'crash'));
+  assert.ok(events.some((e) => e.type === 'jogStart'));
+  // the frames after the state-clearing hit keep updating cleanly
+  assert.doesNotThrow(() => stepFrames(run, 120));
+  assert.equal(currentSpeed(run), SURF.TRAVEL.JOG_SPEED);
+});
+
+test('§C8.3 regression: arcade wipeout mid-loop with obstacles pending → clean end state', () => {
+  const run = cleanRun('arcade');
+  run.crashes = 2;
+  injectObstacle(run, 'crate', { lane: 0, z: -20 });
+  injectObstacle(run, 'crate', { lane: 1, z: -0.5 }); // run-ending hit
+  injectObstacle(run, 'crate', { lane: 2, z: -15 });
+  let events = [];
+  assert.doesNotThrow(() => { events = stepRun(run, 1 / 60, null); });
+  assert.equal(run.ended, true);
+  assert.equal(run.crashes, 3);
+  assert.ok(events.some((e) => e.type === 'wipeout'));
+  assert.deepEqual(stepRun(run, 1 / 60, null), [], 'ended run steps are no-ops');
+});
+
 test('§C8.6 travel: finish event fires at 700 m with coinsCollected + crashes', () => {
   const run = createRun({ rng: rng(42), mode: 'travel' });
   let finish = null;
