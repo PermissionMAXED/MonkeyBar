@@ -47,6 +47,7 @@ import { bandAt } from '../systems/dayNight.js';
 import { weatherAt } from '../systems/weather.js';
 import { makeDome, windowTexture } from '../gfx/sky.js';
 import { windowRainTexture } from '../gfx/weatherFx.js'; // V2/G26 (§C11.2 animated panes)
+import musicDirector from '../audio/musicDirector.js'; // V3/G32: room-enter medley context hook (§B2.4)
 import { CROPS } from '../data/crops.js'; // V2/G19: growth-stage GLB preloads
 import { ROOM as KITCHEN } from './rooms/kitchen.js';
 import { ROOM as LIVING } from './rooms/living.js';
@@ -983,6 +984,7 @@ export function createRoomManager({ scene, camera, assets, store }) {
         refreshDomeVisibility();
       }
       if (prev !== roomId) emit('roomChanged', { roomId, prevRoomId: prev });
+      if (prev !== roomId) musicDirector.setContext(roomId === GARDEN.id ? 'garden' : 'home'); // V3/G32: home/garden medley follows the room (§B2.4)
     },
 
     /** @returns {boolean} true while the camera pan is easing */

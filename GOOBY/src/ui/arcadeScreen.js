@@ -10,6 +10,7 @@ import { t } from '../data/strings.js';
 import { icon } from './icons.js';
 import { isMinigameUnlocked } from '../systems/leveling.js';
 import { hasGame } from '../minigames/registry.js';
+import musicDirector from '../audio/musicDirector.js'; // V3/G32: arcade medley overlay (§B2.4)
 
 const ARCADE_CSS = `
 .screen-arcade{justify-content:flex-start;overflow-y:auto;-webkit-overflow-scrolling:touch;}
@@ -51,6 +52,7 @@ export function createArcadeScreen({ store, ui, framework }) {
   return {
     /** @param {HTMLElement} el */
     mount(el) {
+      musicDirector.pushContext('arcade'); // V3/G32: NES medley while browsing (§B2.4)
       if (!document.querySelector('style[data-owner="g5-arcade"]')) {
         const style = document.createElement('style');
         style.dataset.owner = 'g5-arcade';
@@ -115,6 +117,8 @@ export function createArcadeScreen({ store, ui, framework }) {
         grid.appendChild(tile);
       });
     },
-    unmount() {},
+    unmount() {
+      musicDirector.popContext('arcade'); // V3/G32: fall back to the scene medley (§B2.4)
+    },
   };
 }

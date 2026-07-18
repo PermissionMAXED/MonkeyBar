@@ -439,7 +439,13 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
         firstToday: reward.firstToday,
         launchParams,
       };
-      audio.play('jingle.results');
+      // V3/G32 (§C3.3): context-aware results stingers replace the blind
+      // 'jingle.results' pick — best (HIT15) / normal (HIT10) / zero (HIT08).
+      audio.play(
+        reward.score <= 0 ? 'jingle.resultsZero'
+          : reward.score >= reward.best ? 'jingle.resultsBest'
+            : 'jingle.resultsNormal'
+      );
       ui.showScreen('mgResults');
     }
 
@@ -458,6 +464,12 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
           await ctx.assets?.preload?.(mod.assetKeys ?? []);
         } catch (err) {
           console.warn('[minigames] asset preload failed:', err);
+        }
+        // V3/G32 (§B2.3): warm the game's sample buffers into the decoded
+        // LRU cache — optional `sfx: []` export of sfx ids and/or raw
+        // '<pack>/<file>' keys (fire-and-forget: never blocks the launch).
+        if (Array.isArray(mod.sfx) && mod.sfx.length > 0) {
+          Promise.resolve(audio.preloadSamples?.(mod.sfx)).catch(() => {});
         }
         const seed = Number.isFinite(launchParams.seed) ? launchParams.seed : Math.floor(Math.random() * 2 ** 31);
         game = mod;

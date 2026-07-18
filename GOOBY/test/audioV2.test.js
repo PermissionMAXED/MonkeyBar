@@ -20,14 +20,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { SFX_MAP, getSfxDef } from '../src/audio/sfxMap.js';
+import { SFX_MAP, getSfxDef, busFor } from '../src/audio/sfxMap.js';
 import { VOICE_RECIPES } from '../src/audio/goobyVoice.js';
 import { CLIPS, V2_IDLE_CLIP_IDS } from '../src/character/goobyAnims.js';
 import { IDLE_VARIETY, pickIdleVariant, idleVarietyDelaySec } from '../src/character/emotions.js';
 // V2/FIX-B (E15): live-module imports for the music-toggle seam
-import audio from '../src/audio/audio.js';
+// V3/G32: + the §B2.2 slider math + §B2.3 cache constants
+import audio, { volumeGain, sanitizeVolumes, DEFAULT_VOLUMES, SAMPLE_CACHE_BUDGET } from '../src/audio/audio.js';
 import { createStore } from '../src/core/store.js';
 import { defaultState } from '../src/core/save.js';
+// V3/G32 (§B2.4): the medley director's pure schedule math + tables
+import {
+  MEDLEY, MEDLEY_CONTEXTS, phraseBars,
+  BAR_SEC, PHRASE_BARS, XFADE_SEC, CONTEXT_FADE_SEC, BED_LEVEL, NO_REPEAT_BARS,
+} from '../src/audio/musicDirector.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -84,34 +90,27 @@ test('says.pad1–4: one pitched recipe, 4 rising pentatonic pitches (§C1.2 #1)
 
 // ------------------------------------------------------- 2.0 bespoke remaps
 
-test('2.0 feature ids map to their bespoke recipes (§E G29 consolidation)', () => {
+test('2.0 feature ids map to their bespoke recipes (§E G29 consolidation, V3/G32 sweep)', () => {
+  // V3/G32 (PLAN3 §C3.1): the ids kept on their bespoke recipes — the §C3.1
+  // whitelist (voice, ambience loops, water/soil juice, whoosh/sparkle family).
   /** id → [kind, recipe name] */
   const expected = {
     'health.sneeze': ['voice', 'sneeze'],
-    'vet.doorbell': ['synth', 'doorbell'],
     'vet.cure': ['synth', 'vetSparkle'],
-    'vet.checkup': ['synth', 'checkupChime'],
-    'landmark.found': ['synth', 'discovery'],
     'garden.plant': ['synth', 'seedPlant'],
     'garden.water': ['synth', 'trickle'],
     'garden.fertilize': ['synth', 'fertilizerPuff'],
     'garden.harvest': ['synth', 'harvestJoy'],
-    'garden.harvestReady': ['synth', 'readyChime'],
-    'garden.sell': ['synth', 'chaChing'],
-    'quest.claim': ['synth', 'questJingle'],
     'sticker.get': ['synth', 'stickerPop'],
     'album.claim': ['synth', 'setFanfare'],
     'photo.shutter': ['synth', 'shutter'],
     'hop.bell': ['synth', 'bellJingle'],
-    'golf.putt': ['synth', 'golfPutt'],
     'golf.sink': ['synth', 'golfSink'],
     'chop.slice': ['synth', 'chop'],
     'chop.junk': ['synth', 'splat'],
     'goalie.dive': ['synth', 'diveWhoosh'],
     'goalie.cheer': ['synth', 'bunnyCheer'],
     'delivery.drop': ['synth', 'confettiPop'],
-    'delivery.doorbell': ['synth', 'doorbell'],
-    'hopper.star': ['synth', 'starPing'],
     'hopper.gold': ['synth', 'goldenPing'],
     'pipe.connect': ['synth', 'pipeConnect'],
     'pipe.fill': ['synth', 'trickle'],
@@ -121,6 +120,25 @@ test('2.0 feature ids map to their bespoke recipes (§E G29 consolidation)', () 
     assert.ok(def, `'${id}' must be mapped`);
     assert.equal(def.kind, kind, `'${id}' kind`);
     assert.equal(def.name, name, `'${id}' recipe`);
+  }
+  // V3/G32 (§C3.1 sweep): these v2 bespoke-synth ids flipped to REAL files.
+  /** id → a key fragment every mapped sample key must contain */
+  const flipped = {
+    'vet.doorbell': 'impactBell_heavy',
+    'vet.checkup': 'question_',
+    'landmark.found': 'jingles_HIT01',
+    'garden.harvestReady': 'glass_',
+    'garden.sell': 'chips-stack',
+    'quest.claim': 'jingles_HIT02',
+    'golf.putt': 'footstep_wood',
+    'delivery.doorbell': 'impactBell_heavy',
+    'hopper.star': 'impactPlate_light',
+  };
+  for (const [id, frag] of Object.entries(flipped)) {
+    const def = getSfxDef(id);
+    assert.ok(def, `'${id}' must be mapped`);
+    assert.equal(def.kind, 'sample', `'${id}' flips to a sample (§C3.1)`);
+    assert.ok(def.keys.every((k) => k.includes(frag)), `'${id}' keys carry '${frag}'`);
   }
 });
 
@@ -231,7 +249,10 @@ class FakeParam {
   exponentialRampToValueAtTime() {
     return this;
   }
-  setTargetAtTime() {
+  // V3/G32: record the target so the §B2.2 bus-gain assertions can read the
+  // value applyGains() landed (the real node converges to it).
+  setTargetAtTime(v) {
+    this.value = v;
     return this;
   }
 }
@@ -312,18 +333,19 @@ test('E15: settings.music=false creates ZERO music nodes; re-enable resumes', as
     assert.equal(audio.getStats().ctxState, 'running');
 
     audio.music('home');
-    assert.equal(audio.getStats().track, 'home');
+    // V3/G32: 'home' now delegates to the §B2.4 jingle-medley director
+    assert.equal(audio.getStats().track, 'medley:home');
     assert.equal(typeof audio.getMusicTime(), 'number', 'time base live while playing');
     const on0 = audio.getStats().nodesCreated;
-    fake.currentTime += 3; // sequencer look-ahead chases the clock
-    await sleep(200); // several TICK_MS(60) interval fires
-    assert.ok(audio.getStats().nodesCreated > on0, 'sequencer schedules while ON');
+    fake.currentTime += 3; // scheduler look-ahead chases the clock
+    await sleep(300); // several scheduler ticks (medley TICK_MS is 200)
+    assert.ok(audio.getStats().nodesCreated > on0, 'medley schedules while ON (glue-bed nodes)');
 
     // toggle OFF through the save settings — the production path
     // (hud toggle → store 'change' → applySettings)
     e15Store.set('settings.music', false);
     await sleep(100); // store event flush (setTimeout in node) + margin
-    assert.equal(audio.getStats().track, null, 'sequencer torn down');
+    assert.equal(audio.getStats().track, null, 'medley scheduler torn down (§C2.3 airtight)');
     assert.equal(audio.getMusicTime(), null, 'time base null (danceParty falls back to wall clock)');
     const muted = audio.getStats();
     for (let i = 0; i < 4; i += 1) {
@@ -341,11 +363,11 @@ test('E15: settings.music=false creates ZERO music nodes; re-enable resumes', as
     // getMusicTime() base — the documented §D6 resume behavior)
     e15Store.set('settings.music', true);
     await sleep(100);
-    assert.equal(audio.getStats().track, 'home', 'track resumes on re-enable');
+    assert.equal(audio.getStats().track, 'medley:home', 'track resumes on re-enable');
     const resumed = audio.getStats().nodesCreated;
     fake.currentTime += 3;
-    await sleep(200);
-    assert.ok(audio.getStats().nodesCreated > resumed, 'sequencer schedules again');
+    await sleep(300);
+    assert.ok(audio.getStats().nodesCreated > resumed, 'medley schedules again');
     const t = audio.getMusicTime();
     assert.ok(typeof t === 'number' && t >= 0, `fresh music time base (got ${t})`);
   } finally {
@@ -369,4 +391,189 @@ test('E15: music(id) requested while OFF stays silent and starts on re-enable', 
   assert.equal(audio.getStats().track, 'dance', 'remembered request starts on re-enable');
   audio.music(null);
   assert.equal(audio.getStats().track, null);
+});
+
+// ===================== V3/G32 (PLAN3 §B2): audio engine 2.0 ==================
+// The E15 block above doubles as the §E "mute-during-medley zero-node probe":
+// music('home') IS the medley director now, and test 10 asserts zero node
+// creation across 16 s of advanced clock while settings.music is off.
+
+// ------------------------------------------ §B2.2 slider → gain mapping
+
+test('§B2.2: volumeGain is the binding (v/100)² curve — volumeGain(80)===0.64', () => {
+  assert.equal(volumeGain(80), 0.64);
+  assert.equal(volumeGain(100), 1);
+  assert.equal(volumeGain(70), 0.49);
+  assert.equal(volumeGain(0), 0);
+  assert.equal(volumeGain(50), 0.25);
+  // clamps + garbage tolerance (defensive against hand-edited saves)
+  assert.equal(volumeGain(120), 1);
+  assert.equal(volumeGain(-10), 0);
+  assert.equal(volumeGain(NaN), 0);
+  assert.equal(volumeGain('80'), 0.64);
+});
+
+test('§C2.2: DEFAULT_VOLUMES are 80/100/70/100/80; sanitizeVolumes is defensive', () => {
+  assert.deepEqual(DEFAULT_VOLUMES, { master: 80, sfx: 100, music: 70, voice: 100, ambience: 80 });
+  // missing slice (pre-G34 saves) → defaults
+  assert.deepEqual(sanitizeVolumes(undefined), { ...DEFAULT_VOLUMES });
+  assert.deepEqual(sanitizeVolumes(null), { ...DEFAULT_VOLUMES });
+  assert.deepEqual(sanitizeVolumes('nope'), { ...DEFAULT_VOLUMES });
+  // partial slice merges over the defaults; out-of-range clamps to 0..100
+  assert.deepEqual(
+    sanitizeVolumes({ master: 40, music: 150, voice: -3, ambience: 'x' }),
+    { master: 40, sfx: 100, music: 100, voice: 0, ambience: 80 }
+  );
+  assert.equal(sanitizeVolumes({ sfx: 62.4 }).sfx, 62, 'rounded to ints');
+});
+
+test('§B2.2: store volume writes land on the buses as (v/100)² (master ×0.9)', async () => {
+  // Rides the E15 singleton (fake ctx installed + store-followed above).
+  e15Store.set('settings.volumes', { master: 50, sfx: 80, music: 30, voice: 100, ambience: 0 });
+  await sleep(100); // store 'change' flush
+  const s = audio.getStats();
+  assert.deepEqual(s.volumes, { master: 50, sfx: 80, music: 30, voice: 100, ambience: 0 });
+  assert.equal(s.buses.master, 0.9 * 0.25, 'master keeps the ×0.9 base (§B2.2)');
+  assert.equal(s.buses.sfx, 0.64);
+  assert.equal(s.buses.music, 0.09);
+  assert.equal(s.buses.voice, 1);
+  assert.equal(s.buses.ambience, 0);
+  // quick-mutes stay booleans: sfx-bool mutes sfx+voice (§C2.3)
+  e15Store.set('settings.sfx', false);
+  await sleep(100);
+  const m = audio.getStats();
+  assert.equal(m.buses.sfx, 0, 'sfx bus hard-zero while the boolean is off');
+  assert.equal(m.buses.voice, 0, 'voice follows the sfx boolean (§C2.3)');
+  assert.equal(m.buses.music, 0.09, 'music untouched by the sfx boolean');
+  e15Store.set('settings.sfx', true);
+  e15Store.set('settings.volumes', { ...DEFAULT_VOLUMES });
+  await sleep(100);
+});
+
+// ------------------------------------------ §B2.1 routing kinds
+
+test('§B2.1: busFor routes voice→voice, ambience loops→ambience, rest→sfx', () => {
+  const routed = { sfx: 0, voice: 0, ambience: 0 };
+  for (const [id, def] of Object.entries(SFX_MAP)) {
+    const b = busFor(id, def);
+    assert.ok(b === 'sfx' || b === 'voice' || b === 'ambience', `${id} → '${b}'`);
+    routed[b] += 1;
+    if (def.kind === 'voice') assert.equal(b, 'voice', `${id} is a voice def`);
+  }
+  assert.ok(routed.voice >= 10, 'voice family routed');
+  assert.equal(routed.ambience, 2, 'exactly the two ambience loops');
+  // the §B2.1 anchors
+  assert.equal(busFor('ui.tap', getSfxDef('ui.tap')), 'sfx');
+  assert.equal(busFor('gooby.snore', getSfxDef('gooby.snore')), 'voice');
+  assert.equal(busFor('ambience.rain', getSfxDef('ambience.rain')), 'ambience');
+  assert.equal(busFor('ambience.birdsong', getSfxDef('ambience.birdsong')), 'ambience');
+  assert.equal(busFor('dance.tierUpAccent', getSfxDef('dance.tierUpAccent')), 'sfx', '§C3.4 accent rides the sfx bus');
+});
+
+// ------------------------------------------ §B2.3 decoded-buffer LRU cache
+
+test('§B2.3: preloadSamples decodes into the cache; LRU evicts beyond 6 MB', async () => {
+  const fake = FakeAudioContext.last;
+  assert.ok(fake, 'E15 singleton fake ctx present');
+  const MB = 1024 * 1024;
+  // ~2.8 MB decoded per buffer (length × channels × 4 B)
+  const fakeBuffer = () => ({ length: 700_000, numberOfChannels: 1, duration: 2 });
+  const origDecode = fake.decodeAudioData;
+  const origFetch = globalThis.fetch;
+  fake.decodeAudioData = () => Promise.resolve(fakeBuffer());
+  globalThis.fetch = async () => ({ arrayBuffer: async () => new ArrayBuffer(8) });
+  try {
+    const before = audio.getStats().samples;
+    assert.equal(before.budgetBytes, SAMPLE_CACHE_BUDGET);
+    assert.equal(SAMPLE_CACHE_BUDGET, 6 * MB, '§B2.3 budget');
+    // 4 × 2.8 MB = 11.2 MB decoded → the two oldest must be LRU-evicted
+    await audio.preloadSamples([
+      'music-jingles/jingles_SAX00',
+      'music-jingles/jingles_SAX04',
+      'music-jingles/jingles_SAX05',
+      'music-jingles/jingles_SAX06',
+    ]);
+    const after = audio.getStats().samples;
+    assert.ok(after.bytes <= SAMPLE_CACHE_BUDGET, `cache stays under budget (${after.bytes} B)`);
+    assert.equal(after.bytes, 2 * 700_000 * 4, 'exactly two decoded buffers survive');
+    // preloadSamples also resolves sfx IDS through the map (per-game sfx: [])
+    await audio.preloadSamples(['ui.win']); // → music-jingles/jingles_HIT16
+    assert.ok(audio.getStats().samples.bytes >= after.bytes, 'id-resolved key decoded into the cache');
+  } finally {
+    fake.decodeAudioData = origDecode;
+    globalThis.fetch = origFetch;
+  }
+});
+
+// ------------------------------------------ §B2.4 music() context delegation
+
+test("§B2.4: music() accepts every medley context; unknown ids fall back to 'home'", async () => {
+  for (const ctxId of MEDLEY_CONTEXTS) {
+    audio.music(ctxId);
+    assert.equal(audio.getStats().track, `medley:${ctxId}`, `music('${ctxId}')`);
+  }
+  audio.music('lofi-beats-to-feed-gooby-to'); // unknown → warned 'home' fallback
+  assert.equal(audio.getStats().track, 'medley:home');
+  audio.music(null);
+  assert.equal(audio.getStats().track, null);
+  assert.equal(audio.getStats().medley.context, null, 'director fully idle');
+});
+
+// ------------------------------------------ §B2.4 medley scheduler math
+
+test('§B2.4: composition tables — 5 contexts, 16 bars, §C3.3 anchors', () => {
+  assert.deepEqual(MEDLEY_CONTEXTS, ['home', 'garden', 'arcade', 'city', 'shop']);
+  assert.equal(BAR_SEC, 3.2);
+  assert.equal(PHRASE_BARS, 16);
+  assert.equal(XFADE_SEC, 0.15);
+  assert.equal(CONTEXT_FADE_SEC, 0.8);
+  assert.ok(Math.abs(BED_LEVEL - 10 ** (-26 / 20)) < 1e-9, 'glue bed at −26 dBFS');
+  const roots = { home: 65.41, garden: 98.0, arcade: 110.0, city: 87.31, shop: 73.42 };
+  for (const [ctxId, root] of Object.entries(roots)) {
+    assert.equal(MEDLEY[ctxId].root, root, `${ctxId} bed root`);
+    assert.equal(MEDLEY[ctxId].bars.length, PHRASE_BARS, `${ctxId} is 16 bars`);
+    assert.ok(MEDLEY[ctxId].bars.some((b) => b === null), `${ctxId} has rest bars`);
+  }
+  // §C3.3 spot anchors (first bars + the shop's PIZZI/STEEL interleave)
+  assert.equal(MEDLEY.home.bars[0], 'music-jingles/jingles_PIZZI01');
+  assert.equal(MEDLEY.garden.bars[0], 'music-jingles/jingles_STEEL00');
+  assert.equal(MEDLEY.arcade.bars[0], 'music-jingles/jingles_NES00');
+  assert.equal(MEDLEY.city.bars[0], 'music-jingles/jingles_SAX07');
+  assert.deepEqual(MEDLEY.shop.bars.slice(0, 2), ['music-jingles/jingles_PIZZI00', 'music-jingles/jingles_STEEL09']);
+});
+
+test('§B2.4: phraseBars — deterministic per seed, rests fixed, no repeat within 8 bars', () => {
+  for (const ctxId of MEDLEY_CONTEXTS) {
+    // phrase 0 is the §C3.3 table verbatim
+    assert.deepEqual(phraseBars(ctxId, 0), [...MEDLEY[ctxId].bars], `${ctxId} phrase 0`);
+    let prev = null;
+    for (let ph = 0; ph <= 12; ph += 1) {
+      const bars = phraseBars(ctxId, ph);
+      // determinism: same (context, phrase) → identical schedule
+      assert.deepEqual(phraseBars(ctxId, ph), bars, `${ctxId} phrase ${ph} deterministic`);
+      // rest positions NEVER move
+      bars.forEach((key, i) => {
+        assert.equal(key == null, MEDLEY[ctxId].bars[i] == null, `${ctxId} ph${ph} bar${i} rest fixed`);
+      });
+      // each phrase is a permutation of the table's jingles
+      assert.deepEqual(
+        bars.filter(Boolean).sort(),
+        [...MEDLEY[ctxId].bars].filter(Boolean).sort(),
+        `${ctxId} ph${ph} permutation`
+      );
+      // no jingle repeats within NO_REPEAT_BARS — incl. across the phrase seam
+      const flat = prev ? [...prev, ...bars] : bars;
+      const offset = prev ? PHRASE_BARS : 0;
+      for (let i = offset; i < flat.length; i += 1) {
+        const key = flat[i];
+        if (!key) continue;
+        for (let j = Math.max(0, i - NO_REPEAT_BARS + 1); j < i; j += 1) {
+          assert.notEqual(flat[j], key, `${ctxId} ph${ph}: '${key}' repeats within ${NO_REPEAT_BARS} bars`);
+        }
+      }
+      prev = bars;
+    }
+    // phrases actually differ from each other (the reshuffle does something)
+    assert.notDeepEqual(phraseBars(ctxId, 1), phraseBars(ctxId, 0), `${ctxId} reshuffles`);
+  }
 });

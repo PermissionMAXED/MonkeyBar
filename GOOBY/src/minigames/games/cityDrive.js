@@ -311,6 +311,7 @@ export default {
   /** @param {object} ctx §E8 game context */
   init(ctx) {
     this.ctx = ctx;
+    ctx.audio.music('city'); // V3/G32: Sax medley context while driving (§B2.4/§C3.3)
     // V2/G21 (§C9.2): three modes — 'shopTrip' | 'vetTrip' (guided trips
     // sharing the machinery) | 'arcade' (§C4.7 free coin-run).
     const reqMode = isTripMode(ctx.params.mode) ? ctx.params.mode : devParam('mode');

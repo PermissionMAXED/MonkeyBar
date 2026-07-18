@@ -359,6 +359,7 @@ export default {
       this.particles.emit('confetti', this.gooby.group.position.clone().add(new THREE.Vector3(0, 1.2, 0)), { count: 14 });
     } else if (up) {
       this.ctx.audio.play('dance.tierUp');
+      this.ctx.audio.play('dance.tierUpAccent'); // V3/G32 (§C3.4): jingles_HIT00 accent on the sfx bus — synth track untouched
     }
   },
 

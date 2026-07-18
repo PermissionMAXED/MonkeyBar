@@ -1,42 +1,59 @@
-// Audio manager (§D6, agent G14) — the real WebAudio implementation behind the
-// stub API every agent wired against:
+// Audio manager (§D6 agent G14; V3/G32 Audio Engine 2.0 per PLAN3 §B2) — the
+// real WebAudio implementation behind the stub API every agent wired against:
 //   init()              — builds the AudioContext on the FIRST USER GESTURE
 //                         (main.js pointerdown once-listener; iOS requirement)
 //   play(id, opts)      — one-shot sfx by semantic id: sfxMap lookup → Kenney
-//                         ogg (WebAudio buffer pool, random-from-set, per-id
-//                         volume, ±3% humanized rate), synth recipe, or Gooby
-//                         voice recipe. Loop ids (gooby.snore, and V2/G26's
-//                         ambience.rain/ambience.birdsong synth loops) run
+//                         ogg (decoded-buffer LRU cache §B2.3, random-from-
+//                         set, per-id volume/rate, ±3% humanized rate, per-id
+//                         throttleMs), synth recipe, or Gooby voice recipe.
+//                         Loop ids (gooby.snore, ambience.rain/birdsong) run
 //                         until stop(). V2/G29: synth recipes are pitch-aware
-//                         (def.pitch × opts.pitch frequency multiplier) so one
-//                         recipe serves a pitched family (goobySays pads).
-//   music(id|null)      — procedural sequencers: 'home' lo-fi pentatonic pluck
-//                         loop (~72 BPM, quiet) and 'dance' 100 BPM upbeat
-//                         track honoring the DANCE constants contract (§D6:
-//                         same BPM + PATTERN_SEED as danceParty's chart).
+//                         (def.pitch × opts.pitch frequency multiplier).
+//   music(id|null)      — 'home' delegates to the §B2.4 jingle-medley
+//                         director (musicDirector.js — real files, per-context
+//                         via setContext); 'dance' stays the 100 BPM synth
+//                         sequencer honoring the DANCE constants contract
+//                         (§C3.4 ruling: same BPM + PATTERN_SEED as
+//                         danceParty's chart, sample-accurate beat grid).
 //   getMusicTime()      — F6: seconds since the current track started
 //                         (WebAudio clock; null when stopped/pre-init/
 //                         suspended) — danceParty's phase-lock time base.
-//   setVolume(kind, v)  — 'sfx'|'music' runtime buses; also accepts an object
-//                         ({sfx, music}). Mute PERSISTENCE lives in the save
-//                         (settings.sfx/music/haptics) — this module follows
-//                         the store live and applies toggles to the buses.
+//                         Medley contexts report their own start-relative time.
+//   preloadSamples(ks)  — §B2.3: warm sfx ids or raw '<pack>/<file>' keys into
+//                         the ≤6 MB decoded-buffer LRU cache (framework calls
+//                         this with each game's optional `sfx: []` export).
+//   previewBus(bus)     — §C2.2 slider-release blips: 'master'/'sfx'→ui.pick,
+//                         'music'→0.5 s medley jingle, 'voice'→gooby.squeak,
+//                         'ambience'→1 s rain fade (G33's settings rows call it).
+//   setVolume(kind, v)  — legacy 0..1 runtime multipliers on the sfx/music
+//                         buses (kept for API compat). The PERSISTED 5-slider
+//                         volumes live in settings.volumes (§C2: master 80,
+//                         sfx 100, music 70, voice 100, ambience 80 defaults)
+//                         — this module store-follows them live and applies
+//                         gain = (v/100)² per bus (§B2.2), master ×0.9 base.
 //   stop(id)            — stop a looping sfx (snore).
 //   impact(style)       — haptics: guarded @capacitor/haptics dynamic import
-//                         (same globalThis.Capacitor pattern as
-//                         core/notifications.js) + navigator.vibrate fallback;
-//                         sfxMap defs carry a `haptic` field so catches/bonks/
-//                         buttons buzz automatically alongside their sound.
+//                         + navigator.vibrate fallback; sfxMap defs carry a
+//                         `haptic` field.
+//
+// V3/G32 bus graph (§B2.1): master ← { sfx, music, voice, ambience }; the
+// master keeps the 0.9 base + limiter chain (+ a peak analyser for the §C4.2
+// dev overlay). Routing rule = sfxMap.busFor(): sample/synth → sfx, voice →
+// voice, ambience.* loops → ambience; the medley director + synth sequencer
+// own the music bus. Mute booleans stay quick-mutes (§C2.3): settings.sfx
+// mutes sfx+voice, settings.music mutes music+ambience AND tears down the
+// medley/sequencer (v2 FIX-B airtight rule: zero node creation while muted).
+// Sliders at 0 do NOT tear down (gain-0 only).
 //
 // Calls made before init() are safe no-ops (music remembers the requested
-// track and starts it after the unlock). Everything routes master ← sfx/music
-// buses; the Gooby voice shares the sfx bus (muting SFX mutes the voice too).
+// track and starts it after the unlock).
 
 import { getAudioUrl } from '../core/assets.js';
 import { getStore } from '../core/store.js';
 import { DANCE } from '../data/constants.js';
-import { getSfxDef } from './sfxMap.js';
+import { getSfxDef, busFor } from './sfxMap.js';
 import { VOICE_RECIPES } from './goobyVoice.js';
+import musicDirector, { MEDLEY_CONTEXTS } from './musicDirector.js';
 
 const DEV = !!import.meta.env?.DEV;
 
@@ -44,21 +61,73 @@ const DEV = !!import.meta.env?.DEV;
 let ctx = null;
 /** @type {GainNode|null} master bus */
 let masterGain = null;
-/** @type {{sfx: GainNode, music: GainNode}|null} */
+/** @type {{sfx: GainNode, music: GainNode, voice: GainNode, ambience: GainNode}|null} */
 let bus = null;
+/** @type {AnalyserNode|null} master peak meter (§C4.2 dev overlay) */
+let analyser = null;
+/** @type {Float32Array|null} analyser scratch buffer */
+let analyserBuf = null;
+/** @type {GainNode|null} quiet staging of the synth sequencer (MUSIC_LEVEL) */
+let seqGain = null;
 
 /** Runtime volume multipliers (setVolume) — combined with the enabled flags. */
 const volumes = { sfx: 1, music: 1 };
+
+// ── V3/G32 (§B2.2/§C2.2): the 5 persisted volume sliders ────────────────────
+/** §C2.2 defaults — used whenever settings.volumes is missing/partial (the
+ * save schema lands with G34; this module is defensive against old saves). */
+export const DEFAULT_VOLUMES = Object.freeze({ master: 80, sfx: 100, music: 70, voice: 100, ambience: 80 });
+/** Master keeps its historical 0.9 base factor (§B2.2). */
+const MASTER_BASE = 0.9;
+/** Live slider values 0–100 (store-followed). */
+const slider = { ...DEFAULT_VOLUMES };
+
+/**
+ * §B2.2 binding slider→gain mapping: gain = (v/100)² (perceptual curve).
+ * @param {number} v 0..100
+ * @returns {number} 0..1
+ */
+export function volumeGain(v) {
+  const c = Math.min(100, Math.max(0, Number(v) || 0));
+  return (c * c) / 10000; // = (v/100)² without float dust: volumeGain(80) === 0.64
+}
+
+/**
+ * Clamp/complete a settings.volumes slice against the §C2.2 defaults —
+ * non-numbers and out-of-range values fall back / clamp to 0..100 ints.
+ * @param {object|null|undefined} v
+ * @returns {{master: number, sfx: number, music: number, voice: number, ambience: number}}
+ */
+export function sanitizeVolumes(v) {
+  const out = { ...DEFAULT_VOLUMES };
+  if (v && typeof v === 'object') {
+    for (const k of Object.keys(DEFAULT_VOLUMES)) {
+      const n = Number(v[k]);
+      if (Number.isFinite(n)) out[k] = Math.round(Math.min(100, Math.max(0, n)));
+    }
+  }
+  return out;
+}
+// ── end V3/G32 slider math ───────────────────────────────────────────────────
+
 /** Persisted toggles, mirrored live from save settings (§E3). */
 const enabled = { sfx: true, music: true, haptics: true };
 
 /** Diagnostics: node/play counters (§G G14 DoD: verify the graph headlessly). */
 const stats = { nodesCreated: 0, plays: 0, errors: 0 };
 
-/** @type {Map<string, Promise<AudioBuffer|null>>} ogg buffer pool by asset key */
-const buffers = new Map();
+// ── V3/G32 (§B2.3): decoded-buffer LRU cache (≤ 6 MB decoded) ────────────────
+/** Decoded-bytes budget: LRU-evict beyond it (§B2.3). */
+export const SAMPLE_CACHE_BUDGET = 6 * 1024 * 1024;
+/** @type {Map<string, {promise: Promise<AudioBuffer|null>, buffer: AudioBuffer|null, bytes: number}>}
+ * key → cache entry; Map insertion order IS the LRU order (touch = re-insert). */
+const bufferCache = new Map();
+let bufferCacheBytes = 0;
+
 /** @type {Map<string, {stop: () => void}>} live loop handles by sfx id */
 const loops = new Map();
+/** V3/G32: per-id last-play clock for defs with throttleMs (ui.slider 80 ms). */
+const lastPlayAt = new Map();
 /** F3: loop ids requested while the ctx/sfx bus was unavailable (pre-gesture
  * boot mid-sleep, or muted) — resumed on init()/unmute so e.g. the snore
  * survives a reload during a nap (§D6). */
@@ -71,6 +140,15 @@ let hasGesture = false;
 // Init + settings
 // ---------------------------------------------------------------------------
 
+/**
+ * V3/G32 (§C2.3): the mute boolean gating a bus — settings.sfx mutes
+ * sfx+voice, settings.music mutes music+ambience (no new toggles).
+ * @param {'sfx'|'music'|'voice'|'ambience'} busId
+ */
+function busEnabled(busId) {
+  return busId === 'music' || busId === 'ambience' ? enabled.music : enabled.sfx;
+}
+
 /** Apply the (possibly changed) save settings to the buses. */
 function applySettings(settings) {
   if (settings) {
@@ -78,6 +156,9 @@ function applySettings(settings) {
     enabled.music = settings.music !== false;
     enabled.haptics = settings.haptics !== false;
   }
+  // V3/G32 (§B2.2): live store-follow of the 5 sliders (missing → §C2.2
+  // defaults — G34's schema may not exist in older saves).
+  Object.assign(slider, sanitizeVolumes(settings?.volumes));
   applyGains();
   // V2/FIX-B (E15): the music toggle must be airtight — zeroing the bus gain
   // is not enough, the sequencer interval kept creating nodes into the muted
@@ -85,39 +166,81 @@ function applySettings(settings) {
   // track (fresh, from step 0) when it comes back on. Runs on every store
   // 'change': both branches are no-ops when nothing changed (stopMusic with
   // no seq / seq already playing wantTrack).
+  // V3/G32 (§C2.3): the same airtight rule extends to the medley director —
+  // setEnabled tears its scheduler down / resumes the remembered context.
+  musicDirector.setEnabled(enabled.music);
   if (!enabled.music) {
     stopMusic();
-  } else if (ctx && wantTrack != null && seq?.id !== wantTrack) {
+  } else if (ctx && wantTrack != null && wantTrack === 'dance' && seq?.id !== wantTrack) {
     startMusic(wantTrack);
   }
-  // F3: park running loops while sfx is off; bring them back on re-enable
-  // (e.g. mute during a nap must not permanently silence the snore).
-  if (!enabled.sfx) {
+  // F3: park running loops while their bus is off; bring them back on
+  // re-enable (e.g. mute during a nap must not permanently silence the
+  // snore). V3/G32: per-bus — the snore (voice) parks with the sfx boolean,
+  // ambience loops (rain/birdsong) park with the music boolean (§C2.3).
+  const parkBuses = [];
+  if (!enabled.sfx) parkBuses.push('sfx', 'voice');
+  if (!enabled.music) parkBuses.push('ambience');
+  if (parkBuses.length > 0) {
     // V2/G29: park AFTER stopping — stop(id) clears pendingLoops entries, so
     // the old add-then-stop order silently dropped the parked ids and a mute
     // cycle never resumed the loops (§D6 toggle contract).
-    const running = [...loops.keys()];
-    stopAllLoops();
+    const running = [...loops.keys()].filter((id) => {
+      const def = getSfxDef(id);
+      return def && parkBuses.includes(busFor(id, def));
+    });
+    for (const id of running) stop(id);
     for (const id of running) pendingLoops.add(id);
-  } else {
-    resumePendingLoops();
   }
+  resumePendingLoops();
 }
 
-/** F3: (re)start loops that were requested while blocked (no ctx / sfx off). */
+/** F3: (re)start loops that were requested while blocked (no ctx / bus off). */
 function resumePendingLoops() {
-  if (!ctx || !enabled.sfx) return;
+  if (!ctx) return;
   for (const id of [...pendingLoops]) {
+    const def = getSfxDef(id);
+    if (!def || !busEnabled(busFor(id, def))) continue; // stays parked
     pendingLoops.delete(id);
     play(id);
   }
 }
 
+/** @type {Map<AudioParam, number>} last target applied per bus param (ramp). */
+const lastTargets = new Map();
+
+/**
+ * Anchored bus-gain ramp: skip when the target is already applied, then
+ * cancel the pending timeline and PIN the current value before scheduling.
+ * applyGains runs on every store 'change' (~1/s from gameplay ticks);
+ * unconditional setTargetAtTime piled stacked events onto the params, and
+ * chaining a new setTargetAtTime onto an old open-ended one makes Chrome
+ * mis-evaluate the curve (observed live in the V3/G32 CDP tour: the sfx bus
+ * ignored a fresh 0.64 target and sat at 1). setValueAtTime(param.value, t)
+ * closes the previous target event so the new ramp starts cleanly.
+ * @param {AudioParam} param @param {number} target
+ * @param {number} t @param {number} tau
+ */
+function ramp(param, target, t, tau) {
+  if (lastTargets.get(param) === target) return;
+  lastTargets.set(param, target);
+  param.cancelScheduledValues?.(t);
+  param.setValueAtTime?.(param.value, t);
+  param.setTargetAtTime(target, t, tau);
+}
+
+/**
+ * V3/G32 (§B2.2): effective per-bus gains — enabled ? sliderGain : 0; the
+ * legacy setVolume 0..1 multipliers still ride the sfx/music buses.
+ */
 function applyGains() {
   if (!bus) return;
   const t = ctx.currentTime;
-  bus.sfx.gain.setTargetAtTime(enabled.sfx ? volumes.sfx : 0, t, 0.02);
-  bus.music.gain.setTargetAtTime(enabled.music ? volumes.music * MUSIC_LEVEL : 0, t, 0.05);
+  ramp(masterGain.gain, MASTER_BASE * volumeGain(slider.master), t, 0.02);
+  ramp(bus.sfx.gain, enabled.sfx ? volumeGain(slider.sfx) * volumes.sfx : 0, t, 0.02);
+  ramp(bus.voice.gain, enabled.sfx ? volumeGain(slider.voice) : 0, t, 0.02);
+  ramp(bus.music.gain, enabled.music ? volumeGain(slider.music) * volumes.music : 0, t, 0.05);
+  ramp(bus.ambience.gain, enabled.music ? volumeGain(slider.ambience) : 0, t, 0.05);
 }
 
 /** Init on first user gesture (iOS unlock requirement §D6). Idempotent. */
@@ -145,15 +268,37 @@ export function init() {
     };
   }
 
+  // V3/G32 (§B2.1): master keeps the 0.9 base (× the master slider §B2.2) +
+  // the limiter chain; a peak analyser taps the post-limiter signal for the
+  // §C4.2 dev-overlay meter (skipped on stub contexts without createAnalyser).
   masterGain = ctx.createGain();
-  masterGain.gain.value = 0.9;
+  masterGain.gain.value = MASTER_BASE * volumeGain(slider.master);
   const limiter = ctx.createDynamicsCompressor(); // gentle safety limiter
   limiter.threshold.value = -12;
   limiter.ratio.value = 6;
-  masterGain.connect(limiter).connect(ctx.destination);
-  bus = { sfx: ctx.createGain(), music: ctx.createGain() };
-  bus.sfx.connect(masterGain);
-  bus.music.connect(masterGain);
+  if (typeof ctx.createAnalyser === 'function') {
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    analyserBuf = new Float32Array(analyser.fftSize);
+    masterGain.connect(limiter).connect(analyser).connect(ctx.destination);
+  } else {
+    masterGain.connect(limiter).connect(ctx.destination);
+  }
+  // V3/G32 (§B2.1): 4 sub-buses — voice + ambience split OUT of sfx.
+  bus = { sfx: ctx.createGain(), music: ctx.createGain(), voice: ctx.createGain(), ambience: ctx.createGain() };
+  for (const b of Object.values(bus)) b.connect(masterGain);
+  // The synth sequencer keeps its historical quiet staging (MUSIC_LEVEL)
+  // BELOW the music bus, so the bus gain itself is exactly (v/100)² (§B2.2).
+  seqGain = ctx.createGain();
+  seqGain.gain.value = MUSIC_LEVEL;
+  seqGain.connect(bus.music);
+  // V3/G32 (§B2.4): wire the medley director to the live graph + §B2.3 cache.
+  musicDirector.attach({
+    ctx,
+    dest: bus.music,
+    loadBuffer,
+    getCachedBuffer,
+  });
 
   // Mute persistence (§D6): follow save settings now + live (§E2 store events).
   try {
@@ -191,48 +336,122 @@ export function init() {
     music(track);
   }
   resumePendingLoops(); // F3: e.g. snore requested at boot while asleep (§D6)
-  console.info(`[audio] WebAudio init — state=${ctx.state}, sampleRate=${ctx.sampleRate}, buses=sfx/music`);
+  console.info(`[audio] WebAudio init — state=${ctx.state}, sampleRate=${ctx.sampleRate}, buses=sfx/music/voice/ambience→master`);
 }
 
 // ---------------------------------------------------------------------------
-// Sample pool
+// Sample pool — V3/G32 (§B2.3): decoded-buffer LRU cache (≤ 6 MB decoded)
 // ---------------------------------------------------------------------------
 
+/** Decoded PCM bytes of an AudioBuffer (Float32 per channel). */
+function decodedBytes(buffer) {
+  const len = Number(buffer?.length) || 0;
+  const ch = Number(buffer?.numberOfChannels) || 1;
+  return len * ch * 4;
+}
+
+/** Evict least-recently-used SETTLED entries beyond the budget (§B2.3). */
+function evictLru() {
+  if (bufferCacheBytes <= SAMPLE_CACHE_BUDGET) return;
+  for (const [key, entry] of bufferCache) {
+    if (bufferCacheBytes <= SAMPLE_CACHE_BUDGET) break;
+    if (entry.buffer == null) continue; // in-flight/failed loads are weightless
+    bufferCache.delete(key);
+    bufferCacheBytes -= entry.bytes;
+    if (DEV) console.debug(`[audio] LRU-evicted '${key}' (${entry.bytes} B, cache now ${bufferCacheBytes} B)`);
+  }
+}
+
 /**
- * Fetch + decode a Kenney ogg into the pool (promise-cached; null on failure).
+ * Fetch + decode a Kenney ogg into the LRU cache (promise-cached; null on
+ * failure). A cache hit re-inserts the entry — Map order IS the LRU order.
  * @param {string} key '<pack>/<file-no-ext>' — resolved via assets.getAudioUrl
  * @returns {Promise<AudioBuffer|null>}
  */
 function loadBuffer(key) {
-  if (buffers.has(key)) return buffers.get(key);
-  const p = (async () => {
+  const hit = bufferCache.get(key);
+  if (hit) {
+    bufferCache.delete(key); // touch: move to the fresh end
+    bufferCache.set(key, hit);
+    return hit.promise;
+  }
+  const entry = { promise: null, buffer: null, bytes: 0 };
+  entry.promise = (async () => {
     try {
       const url = getAudioUrl(key);
       if (!url) return null;
       const res = await fetch(url);
       const data = await res.arrayBuffer();
-      return await ctx.decodeAudioData(data);
+      const buffer = await ctx.decodeAudioData(data);
+      if (bufferCache.get(key) === entry) {
+        entry.buffer = buffer;
+        entry.bytes = decodedBytes(buffer);
+        bufferCacheBytes += entry.bytes;
+        evictLru();
+      }
+      return buffer;
     } catch (err) {
       stats.errors += 1;
       console.warn(`[audio] failed to load '${key}':`, err?.message);
       return null;
     }
   })();
-  buffers.set(key, p);
-  return p;
+  bufferCache.set(key, entry);
+  return entry.promise;
 }
 
-/** @param {import('./sfxMap.js').SampleDef} def @param {number} vol */
-async function playSample(def, vol) {
+/**
+ * Synchronous cache read (no fetch) — the medley director schedules bars from
+ * here so a slow decode can never stall the bar grid (§B2.4).
+ * @param {string} key
+ * @returns {AudioBuffer|null}
+ */
+function getCachedBuffer(key) {
+  const entry = bufferCache.get(key);
+  if (!entry?.buffer) return null;
+  bufferCache.delete(key); // touch — active medley jingles stay hot
+  bufferCache.set(key, entry);
+  return entry.buffer;
+}
+
+/**
+ * V3/G32 (§B2.3): warm samples into the decoded-buffer cache. Accepts sfx IDS
+ * (resolved through sfxMap — the per-game `sfx: []` export convention) and/or
+ * raw '<pack>/<file-no-ext>' asset keys. Safe pre-init (no-op) and repeatable.
+ * @param {string[]} keysOrIds
+ * @returns {Promise<void>}
+ */
+export async function preloadSamples(keysOrIds) {
+  if (!ctx || !Array.isArray(keysOrIds)) return;
+  const keys = new Set();
+  for (const item of keysOrIds) {
+    if (typeof item !== 'string') continue;
+    if (item.includes('/')) {
+      keys.add(item);
+    } else {
+      const def = getSfxDef(item);
+      if (def?.kind === 'sample') for (const k of def.keys) keys.add(k);
+    }
+  }
+  await Promise.all([...keys].map((k) => loadBuffer(k)));
+}
+
+/**
+ * @param {import('./sfxMap.js').SampleDef} def
+ * @param {number} vol
+ * @param {AudioNode} dest V3/G32 (§B2.1): the routed bus
+ */
+async function playSample(def, vol, dest) {
   const key = def.keys[Math.floor(Math.random() * def.keys.length)];
-  const buffer = await loadBuffer(key);
+  const buffer = await loadBuffer(key); // cached → resolves immediately
   if (!buffer || !ctx) return;
   const src = ctx.createBufferSource();
   src.buffer = buffer;
-  src.playbackRate.value = 0.97 + Math.random() * 0.06; // subtle humanize
+  // V3/G32: def.rate (e.g. the §C3.1 pitched jump ×1.3) × subtle humanize
+  src.playbackRate.value = (def.rate ?? 1) * (0.97 + Math.random() * 0.06);
   const g = ctx.createGain();
   g.gain.value = vol;
-  src.connect(g).connect(bus.sfx);
+  src.connect(g).connect(dest);
   src.start();
   src.onended = () => {
     try {
@@ -760,6 +979,9 @@ const LOOP_RECIPES = {
  * Play a one-shot sfx by semantic id (§D6). Unknown ids warn in dev builds
  * (the coverage test in test/onboarding.test.js keeps the map complete).
  * V2/G29: opts.pitch multiplies the def's pitch for pitch-aware synth recipes.
+ * V3/G32 (§B2.1): the def routes to its bus via sfxMap.busFor() — sample/
+ * synth → sfx, voice → voice, ambience loops → ambience — and the matching
+ * mute boolean gates it airtight (§C2.3: no nodes into a muted bus).
  * @param {string} id
  * @param {{volume?: number, pitch?: number}} [opts]
  */
@@ -770,32 +992,41 @@ export function play(id, opts = {}) {
     return;
   }
   if (def.haptic) impact(def.haptic);
-  if (!ctx || !enabled.sfx) {
-    // F3: remember loop requests (snore) so they start once unblocked —
-    // covers "reload mid-sleep, first tap arrives later" and mute cycles.
+  const busId = busFor(id, def);
+  if (!ctx || !busEnabled(busId)) {
+    // F3: remember loop requests (snore/ambience) so they start once
+    // unblocked — covers "reload mid-sleep, first tap arrives later" and
+    // mute cycles (per-bus since V3/G32: see applySettings parking).
     if (def.loop) pendingLoops.add(id);
     return;
+  }
+  // V3/G32 (§D3.5): per-id throttle — ui.slider drag ticks at most every 80 ms.
+  if (def.throttleMs) {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (now - (lastPlayAt.get(id) ?? -Infinity) < def.throttleMs) return;
+    lastPlayAt.set(id, now);
   }
   pendingLoops.delete(id);
   stats.plays += 1;
   const vol = (def.volume ?? 1) * (opts.volume ?? 1);
+  const dest = bus[busId];
   try {
     if (def.kind === 'sample') {
-      playSample(def, vol);
+      playSample(def, vol, dest);
     } else if (def.kind === 'synth' && def.loop) {
       // V2/G26: looping synth (ambience.rain / ambience.birdsong) — same
       // handle plumbing as the voice snore loop below.
       if (loops.has(id)) return; // already running
       const make = LOOP_RECIPES[def.name];
       if (make) {
-        const handle = make(bus.sfx, vol);
+        const handle = make(dest, vol);
         if (handle?.stop) loops.set(id, handle);
       } else if (DEV) console.warn(`[audio] unknown loop recipe '${def.name}'`);
     } else if (def.kind === 'synth') {
       const recipe = SYNTH_RECIPES[def.name];
       // V2/G29: pitched recipe families — def.pitch (sfxMap) × opts.pitch
       // (call site) multiply every frequency in pitch-aware recipes.
-      if (recipe) recipe(bus.sfx, vol, { pitch: (def.pitch ?? 1) * (opts.pitch ?? 1) });
+      if (recipe) recipe(dest, vol, { pitch: (def.pitch ?? 1) * (opts.pitch ?? 1) });
       else if (DEV) console.warn(`[audio] unknown synth recipe '${def.name}'`);
     } else if (def.kind === 'voice') {
       const recipe = VOICE_RECIPES[def.name];
@@ -805,13 +1036,13 @@ export function play(id, opts = {}) {
       }
       if (def.loop) {
         if (loops.has(id)) return; // already snoring
-        const handle = recipe(ctx, bus.sfx, { volume: vol });
+        const handle = recipe(ctx, dest, { volume: vol });
         if (handle?.stop) loops.set(id, handle);
       } else {
-        recipe(ctx, bus.sfx, { volume: vol });
+        recipe(ctx, dest, { volume: vol });
       }
     }
-    if (DEV) console.debug(`[audio] play ${id} (${def.kind}) — nodes=${stats.nodesCreated} plays=${stats.plays}`);
+    if (DEV) console.debug(`[audio] play ${id} (${def.kind}→${busId}) — nodes=${stats.nodesCreated} plays=${stats.plays}`);
   } catch (err) {
     stats.errors += 1;
     console.warn(`[audio] play('${id}') failed:`, err);
@@ -832,15 +1063,17 @@ export function stop(id) {
   } catch { /* already stopped */ }
 }
 
-function stopAllLoops() {
-  for (const id of [...loops.keys()]) stop(id);
-}
 
 // ---------------------------------------------------------------------------
-// Music — procedural sequencers (§D6)
+// Music — V3/G32 (§B2.4): 'home' delegates to the jingle-medley director
+// (musicDirector.js, real files per context); 'dance' keeps the procedural
+// 100 BPM sequencer below (§C3.4 binding ruling: the chart is generated from
+// DANCE.PATTERN_SEED and must stay sample-accurate to the beat grid — jingle
+// files have variable internal onsets and cannot guarantee ≤70 ms windows).
 // ---------------------------------------------------------------------------
 
-/** Base level of the music bus (§D6: home loop is QUIET under the sfx). */
+/** Quiet staging of the synth sequencer under the music bus (§D6; V3/G32:
+ * applied via the seqGain node so the BUS gain stays exactly (v/100)²). */
 const MUSIC_LEVEL = 0.55;
 const LOOKAHEAD_SEC = 0.25;
 const TICK_MS = 60;
@@ -872,28 +1105,6 @@ let pendingTrack;
  */
 let wantTrack = null;
 
-/** Home loop (§D6): pentatonic pluck sequencer ~72 BPM, lo-fi and quiet. */
-const HOME = {
-  bpm: 72,
-  scale: [261.63, 293.66, 329.63, 392.0, 440.0, 523.25], // C-major pentatonic
-  bass: [65.41, 49.0], // C2 / G1
-};
-
-function schedHomeStep(step, t) {
-  const eighth = 60 / HOME.bpm / 2;
-  const r = seq.rng;
-  if (step % 8 === 0) {
-    // soft bass root every bar
-    tone(bus.music, { type: 'sine', f0: HOME.bass[(step / 8) % 2], dur: eighth * 6, vol: 0.16, at: t - ctx.currentTime, attack: 0.05 });
-  }
-  if (r() < 0.52) {
-    const f = HOME.scale[Math.floor(r() * HOME.scale.length)];
-    // lo-fi pluck: triangle through its own decay envelope
-    tone(bus.music, { type: 'triangle', f0: f, dur: eighth * (1.6 + r()), vol: 0.12 + r() * 0.05, at: t - ctx.currentTime });
-  }
-  return eighth;
-}
-
 /**
  * Dance track (§D6 contract): DANCE.BPM (100) and DANCE.PATTERN_SEED shared
  * with danceParty's chart generator, so tempo lines up with the falling notes.
@@ -906,48 +1117,45 @@ function schedDanceStep(step, t) {
   const beat = step % 2 === 0;
   if (beat) {
     // kick on every beat: sine drop 150→50
-    tone(bus.music, { f0: 150, f1: 50, dur: 0.12, vol: 0.5, at });
+    tone(seqGain, { f0: 150, f1: 50, dur: 0.12, vol: 0.5, at });
   } else {
     // offbeat hat
-    noise(bus.music, { type: 'highpass', f0: 6000, dur: 0.04, vol: 0.14, at });
+    noise(seqGain, { type: 'highpass', f0: 6000, dur: 0.04, vol: 0.14, at });
   }
-  if (step % 8 === 4) noise(bus.music, { f0: 1800, q: 1.4, dur: 0.09, vol: 0.22, at }); // backbeat snare
+  if (step % 8 === 4) noise(seqGain, { f0: 1800, q: 1.4, dur: 0.09, vol: 0.22, at }); // backbeat snare
   // seeded 16-step bassline (regenerated once per track start)
   const f = seq.pattern[step % seq.pattern.length];
-  if (f > 0) tone(bus.music, { type: 'sawtooth', f0: f, dur: eighth * 0.85, vol: 0.14, at });
+  if (f > 0) tone(seqGain, { type: 'sawtooth', f0: f, dur: eighth * 0.85, vol: 0.14, at });
   if (step % 16 === 0) {
     // sparkly stab at the top of every 2 bars
     [523.25, 659.25, 783.99].forEach((cf, i) =>
-      tone(bus.music, { type: 'triangle', f0: cf, dur: 0.3, vol: 0.08, at: at + i * 0.02 }));
+      tone(seqGain, { type: 'triangle', f0: cf, dur: 0.3, vol: 0.08, at: at + i * 0.02 }));
   }
   return eighth;
 }
 
+/** V3/G32: only 'dance' runs the synth sequencer now (§C3.4). */
 function startMusic(id) {
   stopMusic();
-  if (id == null) return;
+  if (id !== 'dance') return;
   // V2/FIX-B (E15): never run the sequencer while music is toggled off — it
   // would schedule tone()/noise() nodes into a zero-gain bus forever. The
   // request stays in wantTrack; applySettings restarts it on re-enable.
   if (!enabled.music) return;
-  const sched = id === 'dance' ? schedDanceStep : schedHomeStep;
-  if (id !== 'dance' && id !== 'home' && DEV) console.warn(`[audio] unknown music track '${id}' — playing 'home'`);
-  const rng = mulberry32(id === 'dance' ? DANCE.PATTERN_SEED : 72_2026);
+  const rng = mulberry32(DANCE.PATTERN_SEED);
   // startAt (F6): WebAudio time of sequencer step 0 — getMusicTime()'s zero.
   const startAt = ctx.currentTime + 0.08;
   seq = { id, timer: null, next: startAt, startAt, step: 0, rng };
-  if (id === 'dance') {
-    seq.pattern = Array.from({ length: 16 }, () =>
-      rng() < 0.7 ? DANCE_SCALE[Math.floor(rng() * DANCE_SCALE.length)] : 0);
-  }
+  seq.pattern = Array.from({ length: 16 }, () =>
+    rng() < 0.7 ? DANCE_SCALE[Math.floor(rng() * DANCE_SCALE.length)] : 0);
   seq.timer = setInterval(() => {
     if (!ctx || !seq) return;
     while (seq.next < ctx.currentTime + LOOKAHEAD_SEC) {
-      seq.next += sched(seq.step, seq.next);
+      seq.next += schedDanceStep(seq.step, seq.next);
       seq.step += 1;
     }
   }, TICK_MS);
-  if (DEV) console.debug(`[audio] music '${id}' started (bpm=${id === 'dance' ? DANCE.BPM : HOME.bpm})`);
+  if (DEV) console.debug(`[audio] music 'dance' started (bpm=${DANCE.BPM})`);
 }
 
 function stopMusic() {
@@ -957,11 +1165,17 @@ function stopMusic() {
 }
 
 /**
- * Start/stop background music (§D6). Tracks: 'home', 'dance', null = stop.
- * Safe pre-init: the request is remembered and starts after the unlock.
+ * Start/stop background music (§D6/§B2.4). Tracks: any §C3.3 medley context
+ * ('home'|'garden'|'arcade'|'city'|'shop'), 'dance', null = stop. Medley
+ * contexts delegate to the director (per-context real-file medleys; the
+ * roomManager/screen hooks may refine the context afterwards); 'dance' is
+ * the §C3.4 synth sequencer and SUPPRESSES the medley while it owns the
+ * music bus. Safe pre-init: the request is remembered and starts after the
+ * unlock.
  * V2/FIX-B (E15): also safe while settings.music is off — the request is
- * remembered (wantTrack) and starts when the toggle comes back on; no
- * sequencer (and no node creation) runs while music is off.
+ * remembered (wantTrack + the director's context wish) and starts when the
+ * toggle comes back on; no sequencer/medley (and no node creation) runs
+ * while music is off.
  * @param {string|null} id
  */
 export function music(id) {
@@ -970,12 +1184,25 @@ export function music(id) {
     pendingTrack = id;
     return;
   }
-  if (!enabled.music) {
-    stopMusic(); // defensive — the sequencer never runs while music is off
+  musicDirector.setSuppressed(id === 'dance');
+  if (id == null) {
+    stopMusic();
+    musicDirector.setContext(null);
     return;
   }
-  if (seq?.id === id) return;
-  startMusic(id);
+  if (id === 'dance') {
+    if (!enabled.music) {
+      stopMusic(); // defensive — the sequencer never runs while music is off
+      return;
+    }
+    if (seq?.id !== 'dance') startMusic('dance');
+    return;
+  }
+  // Medley contexts (and any unknown id, warned) → the director owns playback.
+  const known = MEDLEY_CONTEXTS.includes(id);
+  if (!known && DEV) console.warn(`[audio] unknown music track '${id}' — playing the 'home' medley`);
+  stopMusic();
+  musicDirector.setContext(known ? id : 'home');
 }
 
 /**
@@ -985,11 +1212,14 @@ export function music(id) {
  * not advancing (pre-init / suspended — e.g. headless VMs without an audio
  * device), so callers (danceParty's song clock) can phase-lock when they can
  * and fall back to a wall clock when they can't.
+ * V3/G32: while a medley context is live (no synth sequencer) this reports
+ * seconds since that context started — same null semantics.
  * @returns {number|null}
  */
 export function getMusicTime() {
-  if (!ctx || !seq || ctx.state !== 'running') return null;
-  return ctx.currentTime - seq.startAt;
+  if (!ctx || ctx.state !== 'running') return null;
+  if (seq) return ctx.currentTime - seq.startAt;
+  return musicDirector.getTime();
 }
 
 // ---------------------------------------------------------------------------
@@ -1054,17 +1284,94 @@ export function impact(style = 'light') {
   });
 }
 
-/** Diagnostics snapshot (dev/DoD verification). */
+/** @returns {number|null} master peak level in dBFS (post-limiter, §C4.2) */
+function masterPeakDb() {
+  if (!analyser || !analyserBuf) return null;
+  try {
+    analyser.getFloatTimeDomainData(analyserBuf);
+  } catch {
+    return null;
+  }
+  let peak = 0;
+  for (let i = 0; i < analyserBuf.length; i += 1) {
+    const a = Math.abs(analyserBuf[i]);
+    if (a > peak) peak = a;
+  }
+  return peak <= 0 ? -Infinity : Math.round(20 * Math.log10(peak) * 10) / 10;
+}
+
+/**
+ * V3/G32 (§C2.2): slider-release preview blip on the affected bus — G33's
+ * settings rows call this on pointer-up (not during drag).
+ *   master/sfx → ui.pick · music → 0.5 s medley jingle · voice →
+ *   gooby.squeak · ambience → 1 s rain fade.
+ * Airtight per §C2.3: muted buses produce zero nodes (play()/director gate).
+ * @param {'master'|'sfx'|'music'|'voice'|'ambience'} busId
+ */
+export function previewBus(busId) {
+  if (!ctx) return;
+  if (busId === 'master' || busId === 'sfx') {
+    play('ui.pick');
+  } else if (busId === 'voice') {
+    play('gooby.squeak');
+  } else if (busId === 'music') {
+    musicDirector.previewJingle();
+  } else if (busId === 'ambience' && enabled.music) {
+    try {
+      const handle = LOOP_RECIPES.rainLoop(bus.ambience, 1);
+      setTimeout(() => handle?.stop?.(), 1000);
+    } catch (err) {
+      if (DEV) console.warn('[audio] ambience preview failed:', err);
+    }
+  }
+}
+
+/**
+ * Diagnostics snapshot (dev/DoD verification; §C4.2 dev-overlay feed).
+ * V3/G32 extended shape (documented for G33's overlay + the evals):
+ *   nodesCreated/plays/errors — module counters (existing)
+ *   ctxState, loops, pendingLoops — existing
+ *   track       — 'dance' (synth sequencer) | 'medley:<context>' | null
+ *   gains       — LEGACY {sfx, music} live bus gains (kept for v2 probes)
+ *   buses       — live gain per bus {master, sfx, music, voice, ambience}
+ *                 (bus gain = enabled ? (v/100)² : 0; master ×0.9 base §B2.2)
+ *   volumes     — the live slider values 0–100 {master, sfx, music, voice, ambience}
+ *   enabled     — the quick-mute booleans {sfx, music, haptics}
+ *   samples     — §B2.3 decoded-buffer cache {cached, bytes, budgetBytes}
+ *   medley      — musicDirector.getStats(): {context, wantContext, base,
+ *                 overlays, bar, phrase, sourcesLive, nextBarAt,
+ *                 schedule[≤24 of {bar, key, at}], barsScheduled,
+ *                 jinglesScheduled, contextSwitches, enabled, suppressed}
+ *   masterPeakDb — instantaneous post-limiter peak (dBFS; null pre-init/stub)
+ */
 export function getStats() {
+  const medley = musicDirector.getStats();
   return {
     ...stats,
     ctxState: ctx?.state ?? 'uninitialized',
     loops: loops.size,
     pendingLoops: pendingLoops.size, // F3
-    track: seq?.id ?? null,
+    track: seq?.id ?? (medley.context ? `medley:${medley.context}` : null),
     // F3: live bus gains — headless proof that mute/unmute really lands
     gains: bus ? { sfx: bus.sfx.gain.value, music: bus.music.gain.value } : null,
+    buses: bus
+      ? {
+          master: masterGain.gain.value,
+          sfx: bus.sfx.gain.value,
+          music: bus.music.gain.value,
+          voice: bus.voice.gain.value,
+          ambience: bus.ambience.gain.value,
+        }
+      : null,
+    volumes: { ...slider },
+    enabled: { ...enabled },
+    samples: { cached: bufferCache.size, bytes: bufferCacheBytes, budgetBytes: SAMPLE_CACHE_BUDGET },
+    medley,
+    masterPeakDb: masterPeakDb(),
   };
 }
 
-export default { init, play, music, getMusicTime, setVolume, stop, impact, getStats };
+export default {
+  init, play, music, getMusicTime, setVolume, stop, impact, getStats,
+  preloadSamples, previewBus, volumeGain, sanitizeVolumes,
+};

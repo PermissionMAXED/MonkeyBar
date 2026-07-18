@@ -51,6 +51,7 @@ import {
   appliedSurface,
 } from '../systems/furniturePlacement.js';
 import { icon } from './icons.js';
+import musicDirector from '../audio/musicDirector.js'; // V3/G32: shop medley overlay (§B2.4)
 
 /** Food id → emoji (iconography, not translated text — mirrors G5's tray). */
 const FOOD_EMOJI = {
@@ -838,6 +839,7 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
      * @param {{mode?: 'trip'|'browse', tab?: string}} [params]
      */
     mount(el, params = {}) {
+      musicDirector.pushContext('shop'); // V3/G32: shop medley overlay (§B2.4)
       mode = params.mode === 'trip' ? 'trip' : 'browse';
       tab = TABS.some(([id]) => id === params.tab) ? params.tab : 'food';
       selFood = null;
@@ -901,6 +903,7 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
     },
 
     unmount() {
+      musicDirector.popContext('shop'); // V3/G32: back to the scene medley (§B2.4)
       for (const off of subs) off?.();
       subs = [];
       bodyEl = null;
