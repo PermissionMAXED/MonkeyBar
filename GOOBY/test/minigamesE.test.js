@@ -17,6 +17,7 @@ import {
   hopperScore,
   laneAfterTap,
   laneAfterSwipe,
+  laneAfterGesture,
   hitsMeteor,
   sweepHitsMeteor,
   maxLaneShift,
@@ -24,6 +25,8 @@ import {
   generateRow,
   rollPickup,
   shouldSpawnShield,
+  shouldSpawnWormhole,
+  wormholeAwards,
   pickShowerLanes,
   resolveHit,
   chooseLane,
@@ -37,6 +40,9 @@ import {
   connectionsOf,
   hasConnection,
   rotateTile,
+  rotationTarget,
+  leakJointFor,
+  leakPenaltyDue,
   minTapsFor,
   waterReach,
   isSolved,
@@ -49,11 +55,15 @@ import {
 import {
   DELIVERY,
   pickDeliveries,
+  pickFragileParcel,
+  fragileCrashPenalty,
+  fragileDeliveryBonus,
   applyDrop,
   applyCrash,
   timeBonus,
   roundScore,
   dropPoint,
+  segmentHitsDrop,
   nearestRoadTile,
   roadPathBetween,
 } from '../src/minigames/games/deliveryRush.logic.js';
@@ -64,10 +74,15 @@ import {
   rollDistance,
   rollTimeToDistance,
   powerForDistance,
+  powerFromDrag,
+  maxDragPxForViewport,
   reflect,
   windmillBlocked,
   isCaptured,
   generateCourse,
+  createNougatLoopHole,
+  qualifiesNougatLoop,
+  nougatXAt,
   canBeAt,
   isStopped,
   stepBall,
@@ -133,6 +148,17 @@ test('starHopper: tap = 1 lane, swipe = 2 lanes, both clamped', () => {
   assert.equal(laneAfterSwipe(2, 'left'), 0);
   assert.equal(laneAfterSwipe(1, 'right'), 2); // clamp: 1 + 2 → 2
   assert.equal(laneAfterSwipe(1, 'left'), 0);
+});
+
+test('starHopper V3/G44 audit: a swipe-end tap cannot undo the two-lane jump', () => {
+  const afterSwipe = laneAfterGesture(0, { kind: 'swipe', dir: 'right' });
+  assert.equal(afterSwipe, 2);
+  assert.equal(
+    laneAfterGesture(afterSwipe, { kind: 'tap', side: 'left' }, true),
+    2,
+    'synthetic tap is suppressed'
+  );
+  assert.equal(laneAfterGesture(afterSwipe, { kind: 'tap', side: 'left' }, false), 1);
 });
 
 // ---------------------------------------------------------------------------
@@ -243,6 +269,16 @@ test('starHopper: shield spawns exactly once at score ≥ 60 (§C1.2 #8)', () =>
   assert.equal(shouldSpawnShield(60, false), true);
   assert.equal(shouldSpawnShield(200, false), true);
   assert.equal(shouldSpawnShield(200, true), false); // only ever one
+});
+
+test('starHopper V3/G44: rare wormhole is one-shot and awards ten frame-independent ticks', () => {
+  assert.equal(shouldSpawnWormhole(() => 0, HOPPER.WORMHOLE_FIRST_SEC - 0.01, false, false), false);
+  assert.equal(shouldSpawnWormhole(() => 0, HOPPER.WORMHOLE_FIRST_SEC, false, false), true);
+  assert.equal(shouldSpawnWormhole(() => 0, 60, true, false), false);
+  assert.equal(shouldSpawnWormhole(() => 0, 60, false, true), false);
+  assert.equal(wormholeAwards(0, HOPPER.WORMHOLE_SEC), 10);
+  assert.equal(wormholeAwards(0.19, 0.61), 3, 'crossed 0.2/0.4/0.6 boundaries');
+  assert.equal(wormholeAwards(1.9, 3), 1, 'clamped at the two-second exit');
 });
 
 test('starHopper: one hit ends the run unless shielded (§C1.2 #8)', () => {
@@ -375,6 +411,12 @@ test('pipeFlow: a tap rotates 90° clockwise, 4 taps come home', () => {
   assert.equal(opposite(DIRS.E), DIRS.W);
 });
 
+test('pipeFlow V3/G44 audit: rapid visual turns stay unwrapped and solver-aligned', () => {
+  assert.equal(rotationTarget(0), 0);
+  assert.equal(rotationTarget(1), -Math.PI / 2);
+  assert.equal(rotationTarget(4), -Math.PI * 2, 'wrapped logic rot still completes four visual turns');
+});
+
 test('pipeFlow: minTapsFor honors shape symmetry and impossibility', () => {
   // straight: {N,S} needs 0 taps at rot 0 AND rot 2; 1 tap from rot 1
   assert.equal(minTapsFor({ shape: 'straight', rot: 0 }, [DIRS.N, DIRS.S]), 0);
@@ -504,6 +546,18 @@ test('pipeFlow: score = 25·solved + bonus; typical 3 puzzles ≈ 75 (§C1.1)', 
   assert.equal(computeCoins(COIN_TABLE.pipeFlow, 9999, false), 25);
 });
 
+test('pipeFlow V3/G44: puzzle 3+ gets one deterministic 25 s leak worth −5', () => {
+  const board = generateBoard(4403);
+  assert.equal(leakJointFor(board, 2), null);
+  const joint = leakJointFor(board, 3);
+  assert.ok(joint >= 0 && joint < board.tiles.length);
+  assert.equal(leakJointFor(board, 3), joint);
+  assert.equal(leakPenaltyDue(24.999, false), false);
+  assert.equal(leakPenaltyDue(25, false), true);
+  assert.equal(leakPenaltyDue(30, true), false);
+  assert.equal(pipeScore(3, 30, 30, PIPE, 1), 80);
+});
+
 // ===========================================================================
 // V2/G28 (wave 4): deliveryRush + miniGolf (§C1.2 #5/#6, §C1.5)
 // ===========================================================================
@@ -546,6 +600,18 @@ test('deliveryRush: pick is seeded-deterministic and covers the pool', () => {
     for (const id of pickDeliveries(rngFrom(seed), ids)) seen.add(id);
   }
   assert.equal(seen.size, ids.length, 'every landmark can be drawn');
+});
+
+test('deliveryRush V3/G44: exactly one fragile parcel takes −20 or earns clean +15', () => {
+  for (let seed = 1; seed <= 100; seed += 1) {
+    const idx = pickFragileParcel(rngFrom(seed));
+    assert.ok(idx >= 0 && idx < DELIVERY.PARCELS);
+  }
+  assert.equal(fragileCrashPenalty(1, 0, false), 0);
+  assert.equal(fragileCrashPenalty(1, 1, false), DELIVERY.FRAGILE_CRASH_PENALTY);
+  assert.equal(fragileCrashPenalty(1, 1, true), 0, 'damage penalty only once');
+  assert.equal(fragileDeliveryBonus(1, 1, false), DELIVERY.FRAGILE_CLEAN_BONUS);
+  assert.equal(fragileDeliveryBonus(1, 1, true), 0);
 });
 
 // ---------------------------------------------------------------------------
@@ -636,6 +702,13 @@ test('deliveryRush: drop points sit outside colliders, near their anchors', () =
   assert.deepEqual(dropPoint({ x: -46, z: 20 }, []), { x: -46, z: 20 });
 });
 
+test('deliveryRush V3/G44 audit: swept ring catches a high-speed pass-through', () => {
+  const center = { x: 0, z: 0 };
+  assert.equal(segmentHitsDrop({ x: -10, z: 0 }, { x: 10, z: 0 }, center), true);
+  assert.equal(segmentHitsDrop({ x: -10, z: 5 }, { x: 10, z: 5 }, center), false);
+  assert.equal(segmentHitsDrop({ x: 0, z: 0 }, { x: 0, z: 0 }, center), true);
+});
+
 test('deliveryRush: roadPathBetween rejects non-road endpoints', () => {
   const grid = [
     [{ kind: 'road' }, { kind: 'road' }],
@@ -683,6 +756,14 @@ test('miniGolf: rollDistance/powerForDistance/rollTime are consistent', () => {
   }
   assert.equal(rollTimeToDistance(0.2, 50), Infinity, 'stops short → Infinity');
   assert.ok(rollDistance(GOLF.MAX_POWER) < 100, 'max putt stays on the course scale');
+});
+
+test('miniGolf V3/G44 audit: full power remains reachable at 320 px width', () => {
+  const compactDrag = maxDragPxForViewport(320, 568);
+  assert.ok(compactDrag < GOLF.MAX_DRAG_PX);
+  assert.ok(compactDrag >= GOLF.MIN_MAX_DRAG_PX);
+  assert.equal(powerFromDrag(compactDrag, 320, 568), GOLF.MAX_POWER);
+  assert.equal(powerFromDrag(GOLF.MAX_DRAG_PX), GOLF.MAX_POWER, 'legacy/default scale unchanged');
 });
 
 // ---------------------------------------------------------------------------
@@ -752,6 +833,19 @@ test('miniGolf: 6 seeded holes — fixed archetype order, seeded variation', () 
     many.add(`${c[1].cells[3][0]}|${c[3].bump.z}|${c[4].windmill.phase.toFixed(3)}`);
   }
   assert.ok(many.size > 10, `seeded variation (${many.size} distinct)`);
+});
+
+test('miniGolf V3/G44: Nougat-Loop is conditional hole 7 with moving imported-obstacle physics', () => {
+  const good = generateCourse(rngFrom(3)).map((h) => ({ strokes: h.par + 1, par: h.par, holed: true }));
+  assert.equal(qualifiesNougatLoop(good), true);
+  assert.equal(qualifiesNougatLoop(good.map((r, i) => i === 2 ? { ...r, strokes: r.par + 2 } : r)), false);
+  assert.equal(qualifiesNougatLoop(good.slice(0, 5)), false);
+  const hole = createNougatLoopHole(rngFrom(44));
+  assert.equal(hole.id, 'nougatLoop');
+  assert.equal(hole.par, 3);
+  assert.ok(canBeAt(hole, hole.start.x, hole.start.z));
+  assert.ok(canBeAt(hole, hole.hole.x, hole.hole.z));
+  assert.notEqual(nougatXAt(hole, 0), nougatXAt(hole, Math.PI / 2), 'obstacle moves across lane');
 });
 
 test('miniGolf: windmill gate blocks rhythmically, open windows exist', () => {

@@ -18,6 +18,11 @@ import {
   applyJudgment,
   danceScore,
   comboTier,
+  createFeverChain,
+  advanceFeverChain,
+  encoreActive,
+  encoreBonus,
+  noteLifecycle,
 } from '../src/minigames/games/danceParty.logic.js';
 import {
   FISHING,
@@ -30,6 +35,12 @@ import {
   fishSpeedFor,
   shouldSpawnBoot,
   applyCatch,
+  advanceReelElapsed,
+  RARE_SPECIES,
+  RARE_SET_BONUS,
+  rollSpeciesDetail,
+  speciesCollectionId,
+  rareSetBonus,
 } from '../src/minigames/games/fishingPond.logic.js';
 import {
   BUBBLE,
@@ -40,6 +51,11 @@ import {
   rollBubble,
   popResult,
   applyScore,
+  BUBBLE_STYLES,
+  createPopChain,
+  recordPopChain,
+  chainNeighborIndices,
+  touchRadiusFor,
 } from '../src/minigames/games/bubblePop.logic.js';
 import {
   TRAMP,
@@ -53,6 +69,10 @@ import {
   trickPoints,
   canTrick,
   trampolineScore,
+  createTrickChain,
+  recordTrick,
+  consumeLandingAction,
+  crossedMat,
 } from '../src/minigames/games/trampoline.logic.js';
 import { DANCE, COIN_TABLE } from '../src/data/constants.js';
 import { computeCoins } from '../src/data/minigames.js';
@@ -194,6 +214,39 @@ test('dance: comboTier thresholds drive the dance energy', () => {
   assert.equal(comboTier(t2), 2);
   assert.equal(comboTier(t3), 3);
   assert.equal(comboTier(t3 + 50), 3);
+});
+
+test('dance V3/G44: five consecutive fever perfects start a five-second Encore', () => {
+  const chain = createFeverChain();
+  const feverCombo = DANCE_TUNING.TIER_COMBOS[2];
+  for (let i = 0; i < DANCE_TUNING.ENCORE_PERFECTS - 1; i += 1) {
+    assert.deepEqual(advanceFeverChain(chain, 'perfect', feverCombo + i, 10 + i * 0.2), {
+      active: false,
+      started: false,
+    });
+  }
+  assert.deepEqual(
+    advanceFeverChain(chain, 'perfect', feverCombo + 4, 10.8),
+    { active: true, started: true }
+  );
+  assert.equal(chain.encores, 1);
+  assert.equal(encoreActive(chain, 15.799), true);
+  assert.equal(encoreActive(chain, 15.8), false);
+  assert.equal(encoreBonus('perfect', true), DANCE.PERFECT_PTS);
+  assert.equal(encoreBonus('good', true), DANCE.GOOD_PTS);
+  assert.equal(encoreBonus('miss', true), 0);
+});
+
+test('dance V3/G44: Fever chain resets and late notes never flash into view', () => {
+  const chain = createFeverChain();
+  const fever = DANCE_TUNING.TIER_COMBOS[2];
+  advanceFeverChain(chain, 'perfect', fever, 2);
+  advanceFeverChain(chain, 'perfect', fever + 1, 2.2);
+  advanceFeverChain(chain, 'good', fever + 2, 2.4);
+  assert.equal(chain.perfects, 0, 'a non-perfect breaks the five-perfect chain');
+  assert.equal(noteLifecycle(5, 5 - DANCE_TUNING.NOTE_TRAVEL_SEC - 0.01), 'future');
+  assert.equal(noteLifecycle(5, 5), 'visible');
+  assert.equal(noteLifecycle(5, 5 + DANCE.GOOD_MS / 1000 + 0.001), 'expired');
 });
 
 test('dance: typical raw score ≈ 96 pays ~16c; extremes clamp (§C6 row)', () => {
@@ -368,6 +421,44 @@ test('fishing: reel rules — ~5 taps inside 2 s or the fish escapes (§C6.1)', 
   assert.equal(FISHING.REEL_WINDOW_SEC, 2);
 });
 
+test('fishing V3/G44 audit: a render hitch cannot consume the reel window', () => {
+  assert.equal(advanceReelElapsed(1.5, 0.016), 1.516);
+  assert.equal(
+    advanceReelElapsed(1.5, 0.8),
+    1.5 + FISHING.REEL_MAX_FRAME_SEC,
+    'blocked frames are capped because no reel input was possible'
+  );
+});
+
+test('fishing V3/G44: three weighted rare species feed existing album ids and award +15', () => {
+  const ids = Object.keys(RARE_SPECIES);
+  assert.deepEqual(ids, ['pearlMinnow', 'sunsetKoi', 'gildedWhopper']);
+  for (const kind of ['S', 'M', 'L']) {
+    const detail = rollSpeciesDetail(kind, () => 0);
+    const expected = ids.find((id) => RARE_SPECIES[id].kind === kind);
+    assert.deepEqual(detail, {
+      species: expected,
+      collectionId: RARE_SPECIES[expected].collectionId,
+      rare: true,
+    });
+    assert.equal(speciesCollectionId(expected), RARE_SPECIES[expected].collectionId);
+  }
+  assert.equal(rareSetBonus(ids.slice(0, 2)), 0);
+  assert.equal(rareSetBonus([...ids, ids[0]]), RARE_SET_BONUS);
+  assert.equal(RARE_SET_BONUS, 15);
+});
+
+test('fishing V3/G44 audit: boot probability is gated and bounded per one-second check', () => {
+  const rng = mulberry32(4414);
+  let spawned = 0;
+  for (let i = 0; i < 10000; i += 1) {
+    if (shouldSpawnBoot(rng, FISHING.BOOT_MIN_GAP_SEC)) spawned += 1;
+  }
+  const rate = spawned / 10000;
+  assert.ok(Math.abs(rate - FISHING.BOOT_CHANCE) < 0.02, `boot rate ${rate}`);
+  assert.ok(FISHING.BOOT_MIN_GAP_SEC >= 14, 'boots remain occasional between crossings');
+});
+
 test('fishing: rarity roll is weighted S > M > L and deterministic', () => {
   const rng = mulberry32(7);
   const counts = { S: 0, M: 0, L: 0 };
@@ -482,6 +573,30 @@ test('bubble: score floors at 0 and typical raw ≈ 52 pays ~13c (§C6 row)', ()
   assert.equal(computeCoins(row, 9999, false), row.max);
 });
 
+test('bubble V3/G44: three same-style pops within two seconds trigger neighbor chain-pop', () => {
+  const chain = createPopChain();
+  assert.equal(recordPopChain(chain, 'carrot', 1).triggered, false);
+  assert.equal(recordPopChain(chain, 'carrot', 2.2).triggered, false);
+  assert.equal(recordPopChain(chain, 'carrot', 2.99).triggered, true);
+  assert.equal(chain.chains, 1);
+  recordPopChain(chain, 'apple', 4);
+  assert.equal(recordPopChain(chain, 'apple', 6.01).count, 1, 'expired chain restarts');
+  const neighbors = chainNeighborIndices([
+    { active: true, food: 'carrot', x: 0.5, y: 0 },
+    { active: true, food: 'apple', x: 0.2, y: 0 },
+    { active: true, food: 'carrot', x: 3, y: 0 },
+    { active: false, food: 'carrot', x: 0.1, y: 0 },
+  ], 'carrot', 0, 0);
+  assert.deepEqual(neighbors, [0]);
+});
+
+test('bubble V3/G44 audit: target styles are symbol-redundant and spikes use their visual radius', () => {
+  assert.deepEqual(Object.keys(BUBBLE_STYLES), BUBBLE.FOODS);
+  assert.equal(new Set(Object.values(BUBBLE_STYLES).map((s) => s.color)).size, BUBBLE.FOODS.length);
+  assert.equal(new Set(Object.values(BUBBLE_STYLES).map((s) => s.symbol)).size, BUBBLE.FOODS.length);
+  assert.ok(touchRadiusFor('spiky') > touchRadiusFor('food'));
+});
+
 // ===========================================================================
 // Trampoline Tricks (§C6.1 #12)
 // ===========================================================================
@@ -571,4 +686,24 @@ test('tramp: max-height apex stays inside the §C6.1 tier-3 band', () => {
   const maxApex = apexFor(TRAMP.MAX_VY);
   assert.ok(maxApex >= TRAMP.TIER3_APEX, 'the cap can reach ×3');
   assert.ok(apexFor(TRAMP.BASE_VY) < TRAMP.TIER2_APEX, 'the base bounce is ×1');
+});
+
+test('tramp V3/G44: three distinct tricks in one air award Combo-Flip +12 once', () => {
+  const chain = createTrickChain();
+  assert.deepEqual(recordTrick(chain, 'flip'), { triggered: false, bonus: 0 });
+  assert.deepEqual(recordTrick(chain, 'flip'), { triggered: false, bonus: 0 });
+  assert.deepEqual(recordTrick(chain, 'spin'), { triggered: false, bonus: 0 });
+  assert.deepEqual(recordTrick(chain, 'twist'), {
+    triggered: true,
+    bonus: TRAMP.COMBO_FLIP_POINTS,
+  });
+  assert.deepEqual(recordTrick(chain, 'twist'), { triggered: false, bonus: 0 });
+});
+
+test('tramp V3/G44 audit: armed landing is consumed once and high-tier contact is edge-triggered', () => {
+  assert.deepEqual(consumeLandingAction('boost'), { action: 'boost', armed: null });
+  assert.deepEqual(consumeLandingAction(null), { action: 'none', armed: null });
+  assert.equal(crossedMat(0.12, -0.2, -7.5), true);
+  assert.equal(crossedMat(0, -0.2, -7.5), false, 'already-at-mat frame cannot double fire');
+  assert.equal(crossedMat(0.12, -0.2, 1), false, 'upward motion is not a landing');
 });

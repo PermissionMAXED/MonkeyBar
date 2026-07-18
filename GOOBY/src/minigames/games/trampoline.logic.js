@@ -41,6 +41,9 @@ export const TRAMP = Object.freeze({
   MIN_VY: 4.2,
   /** No tricks when the landing is closer than this (s). */
   TRICK_MIN_AIR_SEC: 0.35,
+  /** V3/G44 (§C10.2): all three distinct tricks in one air. */
+  COMBO_TRICKS: 3,
+  COMBO_FLIP_POINTS: 12,
   /** Butt-landing stagger before bouncing resumes (s). */
   BUTT_STAGGER_SEC: 1.1,
 });
@@ -155,4 +158,33 @@ export function canTrick(airborne, tti, tricking) {
  */
 export function trampolineScore(points) {
   return points.reduce((s, p) => s + p, 0);
+}
+
+/** Fresh per-air trick chain. */
+export function createTrickChain() {
+  return { seen: [], awarded: false };
+}
+
+/**
+ * Record a trick in the current air. Repeats score normally but only the
+ * first flip+spin+twist set awards Combo-Flip +12.
+ */
+export function recordTrick(chain, kind) {
+  if (!chain.seen.includes(kind)) chain.seen.push(kind);
+  const triggered = !chain.awarded && chain.seen.length >= TRAMP.COMBO_TRICKS;
+  if (triggered) chain.awarded = true;
+  return { triggered, bonus: triggered ? TRAMP.COMBO_FLIP_POINTS : 0 };
+}
+
+/**
+ * Consume an armed landing exactly once. Keeping this transition pure pins
+ * the armed-boost double-fire audit even when one frame crosses the mat.
+ */
+export function consumeLandingAction(armed) {
+  return { action: armed ?? 'none', armed: null };
+}
+
+/** True only on the falling edge that crosses the trampoline plane. */
+export function crossedMat(previousH, nextH, nextVy) {
+  return previousH > 0 && nextH <= 0 && nextVy < 0;
 }

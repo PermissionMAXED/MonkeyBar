@@ -15,6 +15,8 @@ export const FISHING = Object.freeze({
   /** L fish reel-in wiggle (§C6.1: ~5 rapid taps in 2 s else it escapes). */
   REEL_TAPS: 5,
   REEL_WINDOW_SEC: 2,
+  /** V3/G44 audit: one render hitch may consume at most this much reel time. */
+  REEL_MAX_FRAME_SEC: 0.1,
   /** RELEASE hooks the nearest swimmer within this radius (wu). */
   CATCH_RADIUS: 0.55,
   // --- G10 tuning ---
@@ -109,6 +111,15 @@ export function reelResolve(tapCount, elapsedSec) {
 }
 
 /**
+ * Hitch-tolerant reel timer. Input cannot arrive during a blocked render
+ * frame, so charging an entire long frame against the two-second window
+ * unfairly made big fish escape.
+ */
+export function advanceReelElapsed(elapsedSec, dt) {
+  return elapsedSec + Math.min(Math.max(0, dt), FISHING.REEL_MAX_FRAME_SEC);
+}
+
+/**
  * Roll a fish size by rarity weight (S common … L rare).
  * @param {() => number} rng 0..1
  * @returns {'S'|'M'|'L'}
@@ -190,7 +201,23 @@ export const SPECIES_COLORS = Object.freeze({
   bigWhopper: '#4E6E8E',
   nightEel: '#6E5E9E',
   goldenFish: '#FFD24A',
+  pearlMinnow: '#D8F5F2',
+  sunsetKoi: '#FF8A6B',
+  gildedWhopper: '#F7C948',
 });
+
+/**
+ * V3/G44 (§C10.2): one rare visual variant per size. `weight` is its chance
+ * out of 100 size-matched spawns; collectionId deliberately maps into the
+ * existing v2 fish album so the collection catalog remains unchanged.
+ */
+export const RARE_SPECIES = Object.freeze({
+  pearlMinnow: Object.freeze({ kind: 'S', weight: 8, collectionId: 'tinyMinnow' }),
+  sunsetKoi: Object.freeze({ kind: 'M', weight: 5, collectionId: 'pinkKoi' }),
+  gildedWhopper: Object.freeze({ kind: 'L', weight: 2, collectionId: 'goldenFish' }),
+});
+
+export const RARE_SET_BONUS = 15;
 
 /**
  * Roll a species for a spawned fish (§C6, deterministic per rng stream):
@@ -209,5 +236,32 @@ export function rollSpecies(kind, rng, night = false) {
   }
   const options = FISH_SPECIES[kind] ?? FISH_SPECIES.S;
   return options[Math.min(options.length - 1, Math.floor(rng() * options.length))];
+}
+
+/**
+ * Roll the V3 rare variant first, then the unchanged v2 species table.
+ * @returns {{species:string, collectionId:string, rare:boolean}}
+ */
+export function rollSpeciesDetail(kind, rng, night = false) {
+  const rareEntry = Object.entries(RARE_SPECIES).find(([, def]) => def.kind === kind);
+  if (rareEntry && rng() * 100 < rareEntry[1].weight) {
+    return { species: rareEntry[0], collectionId: rareEntry[1].collectionId, rare: true };
+  }
+  const species = rollSpecies(kind, rng, night);
+  return { species, collectionId: species, rare: false };
+}
+
+/** Existing-album id for any base or rare species. */
+export function speciesCollectionId(species) {
+  return RARE_SPECIES[species]?.collectionId ?? species;
+}
+
+/**
+ * Set-of-three-in-one-run bonus (§C10.2). Returns 15 exactly when all three
+ * rare species have been caught; duplicates never substitute for a member.
+ */
+export function rareSetBonus(species) {
+  const caught = new Set(species);
+  return Object.keys(RARE_SPECIES).every((id) => caught.has(id)) ? RARE_SET_BONUS : 0;
 }
 // ══════════════════════════════════════════════════════════ end V2/G23 ═══

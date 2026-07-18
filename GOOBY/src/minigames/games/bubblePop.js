@@ -24,6 +24,11 @@ import {
   rollBubble,
   popResult,
   applyScore,
+  BUBBLE_STYLES,
+  createPopChain,
+  recordPopChain,
+  chainNeighborIndices,
+  touchRadiusFor,
 } from './bubblePop.logic.js';
 
 const BUBBLE_R = 0.42;
@@ -111,6 +116,8 @@ export default {
     this.autoT = 0.8;
     this.emotionT = 0;
     this.shakeT = 0;
+    this.elapsed = 0;
+    this.popChain = createPopChain();
 
     const camera = ctx.camera;
     camera.position.set(0, 0, 10);
@@ -188,8 +195,9 @@ export default {
 
     // --- bubble pools ---
     this.bubbleGeo = new THREE.SphereGeometry(BUBBLE_R, 18, 14);
+    this.spikyHitGeo = new THREE.SphereGeometry(touchRadiusFor('spiky'), 14, 10);
     this.spikeGeo = new THREE.ConeGeometry(0.07, 0.2, 6);
-    this.ownedGeos.push(this.bubbleGeo, this.spikeGeo);
+    this.ownedGeos.push(this.bubbleGeo, this.spikyHitGeo, this.spikeGeo);
     this.bubbleMat = new THREE.MeshStandardMaterial({
       color: 0xbfe9ff, transparent: true, opacity: 0.3, roughness: 0.15, metalness: 0.1,
       depthWrite: false,
@@ -200,6 +208,13 @@ export default {
     this.spikeMat = new THREE.MeshStandardMaterial({ color: 0x5e5378, roughness: 0.5 });
     this.shineMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.75 });
     this.ownedMats.push(this.bubbleMat, this.spikyBodyMat, this.spikeMat, this.shineMat);
+    this.hitMat = new THREE.MeshBasicMaterial({
+      transparent: true, opacity: 0, depthWrite: false, colorWrite: false,
+    });
+    this.ownedMats.push(this.hitMat);
+    this.bubbleMats = {};
+    this.markerMats = {};
+    this.markerTexs = [];
     this.shineGeo = new THREE.SphereGeometry(0.06, 8, 6);
     this.ownedGeos.push(this.shineGeo);
 
@@ -244,20 +259,21 @@ export default {
     if (idx === this.targetIdx) return;
     this.targetIdx = idx;
     const food = this.target();
+    const style = BUBBLE_STYLES[food];
     const g = this.bannerCanvas.getContext('2d');
     g.clearRect(0, 0, 512, 112);
     g.fillStyle = 'rgba(255,255,255,0.92)';
     g.beginPath();
     g.roundRect(6, 6, 500, 100, 50);
     g.fill();
-    g.strokeStyle = '#59C9B9';
+    g.strokeStyle = style.color;
     g.lineWidth = 7;
     g.stroke();
     g.font = '900 52px system-ui, sans-serif';
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     g.fillStyle = '#4A3B36';
-    g.fillText(t('mg.bubble.target', { food: t(`food.${food}`) }), 256, 58);
+    g.fillText(`${style.symbol} ${t('mg.bubble.target', { food: t(`food.${food}`) })}`, 256, 58);
     this.bannerTex.needsUpdate = true;
     // swap the floating preview mini next to the banner
     if (this.bannerFood) {
@@ -296,6 +312,47 @@ export default {
     this.foodPool.get(key).push(holder);
   },
 
+  /** Per-food shell tint (color) plus cached high-contrast symbol material. */
+  bubbleMaterial(food) {
+    if (!this.bubbleMats[food]) {
+      const mat = new THREE.MeshStandardMaterial({
+        color: BUBBLE_STYLES[food].color,
+        transparent: true,
+        opacity: 0.34,
+        roughness: 0.15,
+        metalness: 0.05,
+        depthWrite: false,
+      });
+      this.bubbleMats[food] = mat;
+      this.ownedMats.push(mat);
+    }
+    return this.bubbleMats[food];
+  },
+
+  markerMaterial(food) {
+    if (!this.markerMats[food]) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 64;
+      const g = canvas.getContext('2d');
+      g.fillStyle = 'rgba(255,255,255,0.9)';
+      g.beginPath();
+      g.arc(32, 32, 27, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = '#30263D';
+      g.font = '900 38px system-ui, sans-serif';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText(BUBBLE_STYLES[food].symbol, 32, 34);
+      const tex = new THREE.CanvasTexture(canvas);
+      const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+      this.markerTexs.push(tex);
+      this.markerMats[food] = mat;
+      this.ownedMats.push(mat);
+    }
+    return this.markerMats[food];
+  },
+
   /** Build/reuse a bubble and float it in from the bottom. */
   spawnBubble() {
     const { rng, scene } = this.ctx;
@@ -307,9 +364,10 @@ export default {
       grp = this.spikyPool.pop();
       if (!grp) {
         grp = new THREE.Group();
-        sphere = new THREE.Mesh(this.bubbleGeo, this.spikyBodyMat);
-        sphere.scale.setScalar(0.92);
-        grp.add(sphere);
+        const bodySphere = new THREE.Mesh(this.bubbleGeo, this.spikyBodyMat);
+        bodySphere.scale.setScalar(0.92);
+        sphere = new THREE.Mesh(this.spikyHitGeo, this.hitMat);
+        grp.add(bodySphere, sphere);
         for (let i = 0; i < 10; i += 1) {
           const spike = new THREE.Mesh(this.spikeGeo, this.spikeMat);
           const phi = Math.acos(1 - 2 * ((i + 0.5) / 10));
@@ -333,9 +391,20 @@ export default {
         grp.userData.sphere = sphere;
       }
       sphere = grp.userData.sphere;
+      sphere.material = this.bubbleMaterial(roll.food);
       foodHolder = this.takeFood(roll.food);
       grp.add(foodHolder);
       foodHolder.position.set(0, 0, 0);
+      let marker = grp.userData.marker;
+      if (!marker) {
+        marker = new THREE.Sprite(this.markerMaterial(roll.food));
+        marker.position.set(0.22, 0.22, 0.38);
+        marker.scale.set(0.22, 0.22, 1);
+        grp.userData.marker = marker;
+        grp.add(marker);
+      } else {
+        marker.material = this.markerMaterial(roll.food);
+      }
     }
     grp.visible = true;
     const x = (rng() * 2 - 1) * (this.halfW - 0.6);
@@ -384,12 +453,38 @@ export default {
     if (this.score !== prev) this.ctx.onScore(this.score - prev);
 
     if (res.result === 'match') {
+      const chain = recordPopChain(this.popChain, bubble.food, this.elapsed);
       this.ctx.audio.play('bubble.pop');
       this.particles.emit('bubbles', pos, { count: 5 });
       this.particles.emit('sparkles', pos, { count: 6 });
       this.floats.spawn(`+${BUBBLE.MATCH_PTS}`, pos, '#2E8B57');
       this.despawnBubble(bubble);
       this.reactGooby('ecstatic', 'happyBounce', pos);
+      if (chain.triggered) {
+        const candidates = this.bubbles.map((b) => ({
+          active: b.active && b.kind === 'food',
+          food: b.food,
+          x: b.grp.position.x,
+          y: b.grp.position.y,
+        }));
+        const neighbors = chainNeighborIndices(candidates, bubble.food, pos.x, pos.y)
+          .map((i) => this.bubbles[i])
+          .filter(Boolean);
+        let chained = 0;
+        for (const neighbor of neighbors) {
+          if (!neighbor.active) continue;
+          const npos = neighbor.grp.position.clone();
+          const before = this.score;
+          this.score = applyScore(this.score, BUBBLE.MATCH_PTS);
+          if (this.score !== before) this.ctx.onScore(this.score - before);
+          this.particles.emit('bubbles', npos, { count: 4 });
+          this.particles.emit('sparkles', npos, { count: 4 });
+          this.despawnBubble(neighbor);
+          chained += 1;
+        }
+        this.ctx.hud.banner(t('v3.depth.bubble.chain', { n: chained }));
+        this.floats.spawn(`+${chained * BUBBLE.MATCH_PTS}`, pos, '#D6428A');
+      }
     } else if (res.result === 'wrong') {
       this.ctx.audio.play('bubble.wrong');
       this.stunT = res.stunSec;
@@ -446,6 +541,7 @@ export default {
 
   update(dt, elapsed) {
     const ctx = this.ctx;
+    this.elapsed = elapsed;
     this.gooby.update(dt);
     this.particles.update(dt);
     this.floats.update(dt);
@@ -523,7 +619,9 @@ export default {
       this.gooby.setEmotion('ecstatic');
       this.gooby.play('happyBounce');
       this.particles.emit('confetti', this.gooby.group.position.clone().add(new THREE.Vector3(0, 1.2, 0)), { count: 16 });
-      if (this.autoplay) console.log(`[bubblePop] autoplay run ended — score ${this.score}`);
+      if (this.autoplay) {
+        console.log(`[bubblePop] autoplay run ended — score ${this.score}, chains ${this.popChain.chains}`);
+      }
     }
   },
 
@@ -533,6 +631,7 @@ export default {
     this.particles?.dispose();
     this.gooby?.dispose();
     this.bannerTex?.dispose();
+    for (const tex of this.markerTexs ?? []) tex.dispose();
     for (const geo of this.ownedGeos ?? []) geo.dispose();
     for (const mat of this.ownedMats ?? []) mat.dispose();
     // GLB clones share cached geometries/materials — the framework scene
@@ -543,6 +642,10 @@ export default {
     this.foodPool = null;
     this.spikyPool = [];
     this.shellPool = [];
+    this.markerMats = {};
+    this.bubbleMats = {};
+    this.markerTexs = [];
+    this.popChain = null;
     this.bannerFood = null;
     this.banner = null;
     this.bannerTex = null;

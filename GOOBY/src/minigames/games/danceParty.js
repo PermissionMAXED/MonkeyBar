@@ -31,6 +31,11 @@ import {
   applyJudgment,
   danceScore,
   comboTier,
+  createFeverChain,
+  advanceFeverChain,
+  encoreActive,
+  encoreBonus,
+  noteLifecycle,
 } from './danceParty.logic.js';
 
 /** Stage geometry (world units at the z=0 play plane, camera z=10 FOV 45). */
@@ -103,6 +108,7 @@ export default {
 
     this.phase = 'play'; // 'play' | 'ending' | 'done'
     this.tally = createTally();
+    this.feverChain = createFeverChain();
     this.shownScore = 0;
     this.endT = 0;
     this.grumpyT = 0;
@@ -260,7 +266,13 @@ export default {
     if (this.autoplay) {
       const rng = ctx.rng;
       this.plan = [];
-      for (const n of this.notes) {
+      for (const [i, n] of this.notes.entries()) {
+        // V3/G44: the opening streak deterministically demonstrates Fever →
+        // Encore in every autoplay proof; the rest keeps the human-ish model.
+        if (i < DANCE_TUNING.TIER_COMBOS[2] + DANCE_TUNING.ENCORE_PERFECTS - 1) {
+          this.plan.push({ at: n.time, lane: n.lane });
+          continue;
+        }
         if (rng() < 0.12) continue; // zoned out — the note will be a miss
         const err = (rng() + rng() + rng() - 1.5) * 0.25; // ~N(0, 0.125 s)
         this.plan.push({ at: n.time + err, lane: n.lane });
@@ -314,16 +326,25 @@ export default {
     note.hit = true;
     this.releaseNoteMesh(note);
     const kind = classifyHit(this.songTime - note.time) ?? 'good';
+    const doubled = encoreActive(this.feverChain, this.songTime);
     applyJudgment(this.tally, kind);
+    const bonus = encoreBonus(kind, doubled);
+    this.tally.bonus += bonus;
+    const fever = advanceFeverChain(this.feverChain, kind, this.tally.combo, this.songTime);
+    if (fever.started) {
+      this.ctx.hud.banner(t('v3.depth.dance.encore'));
+      this.ctx.audio.play('dance.tierUpAccent');
+      this.particles.emit('confetti', this.gooby.group.position.clone().add(new THREE.Vector3(0, 1.2, 0)), { count: 18 });
+    }
     this.syncScore();
     const pos = new THREE.Vector3(LANE_X[lane], HIT_Y + 0.35, 0.5);
     if (kind === 'perfect') {
       this.ctx.audio.play('dance.perfect');
-      this.floats.spawn(`+${DANCE.PERFECT_PTS} ${t('mg.dance.perfect')}`, pos, '#FFE08A');
+      this.floats.spawn(`+${DANCE.PERFECT_PTS + bonus} ${t('mg.dance.perfect')}`, pos, doubled ? '#FF7BA9' : '#FFE08A');
       this.particles.emit('sparkles', new THREE.Vector3(LANE_X[lane], HIT_Y, 0.4), { count: 8 });
     } else {
       this.ctx.audio.play('dance.good');
-      this.floats.spawn(`+${DANCE.GOOD_PTS} ${t('mg.dance.good')}`, pos, '#BFE6F7');
+      this.floats.spawn(`+${DANCE.GOOD_PTS + bonus} ${t('mg.dance.good')}`, pos, doubled ? '#FF7BA9' : '#BFE6F7');
       this.particles.emit('sparkles', new THREE.Vector3(LANE_X[lane], HIT_Y, 0.4), { count: 3 });
     }
     this.flashRing(lane, kind === 'perfect');
@@ -334,13 +355,16 @@ export default {
   },
 
   /** A note crossed the line un-hit → miss (§C6.1: combo reset, −2). */
-  missNote(note) {
+  missNote(note, quiet = false) {
     note.missed = true;
     this.releaseNoteMesh(note);
     applyJudgment(this.tally, 'miss');
+    advanceFeverChain(this.feverChain, 'miss', this.tally.combo, this.songTime);
     this.syncScore();
-    this.ctx.audio.play('dance.miss');
-    this.floats.spawn(t('mg.dance.miss'), new THREE.Vector3(LANE_X[note.lane], HIT_Y + 0.3, 0.5), '#8A8098');
+    if (!quiet) {
+      this.ctx.audio.play('dance.miss');
+      this.floats.spawn(t('mg.dance.miss'), new THREE.Vector3(LANE_X[note.lane], HIT_Y + 0.3, 0.5), '#8A8098');
+    }
     this.grumpyT = 0.8;
     this.gooby.setEmotion('grumpy');
     this.updateEnergy();
@@ -427,7 +451,8 @@ export default {
       s.light.target.position.x = Math.sin(s.phase) * 1.7;
       s.light.target.position.y = 1.0 + Math.cos(s.phase * 0.7) * 0.6;
     }
-    this.halo.material.opacity = 0.1 + 0.1 * pulse + this.tier * 0.03;
+    const encore = encoreActive(this.feverChain, this.songTime);
+    this.halo.material.opacity = 0.1 + 0.1 * pulse + this.tier * 0.03 + (encore ? 0.12 : 0);
     // dance energy: external bob/pulse on top of the (BPM-synced) dance clip
     const energy = this.tier / 3;
     this.danceGrp.position.y = Math.abs(Math.sin(elapsed * Math.PI / this.beatSec)) * 0.14 * energy;
@@ -461,12 +486,12 @@ export default {
     }
 
     // spawn note meshes entering the travel window
-    while (
-      this.nextSpawn < this.notes.length &&
-      this.notes[this.nextSpawn].time - this.songTime <= DANCE_TUNING.NOTE_TRAVEL_SEC
-    ) {
+    while (this.nextSpawn < this.notes.length) {
       const n = this.notes[this.nextSpawn];
-      n.mesh = this.takeNoteMesh(n.lane);
+      const lifecycle = noteLifecycle(n.time, this.songTime);
+      if (lifecycle === 'future') break;
+      if (lifecycle === 'expired') this.missNote(n, true);
+      else n.mesh = this.takeNoteMesh(n.lane);
       this.nextSpawn += 1;
     }
 
@@ -505,7 +530,8 @@ export default {
         const { perfect, good, miss, maxCombo } = this.tally;
         console.log(
           `[danceParty] autoplay run ended — score ${danceScore(this.tally)} ` +
-          `(perfect ${perfect}, good ${good}, miss ${miss}, maxCombo ${maxCombo}, notes ${this.notes.length})`
+          `(perfect ${perfect}, good ${good}, miss ${miss}, maxCombo ${maxCombo}, ` +
+          `encores ${this.feverChain.encores}, notes ${this.notes.length})`
         );
       }
     }
@@ -528,6 +554,7 @@ export default {
     this.spots = [];
     this.plan = null;
     this.songClock = null;
+    this.feverChain = null;
     this.gooby = null;
     this.particles = null;
     this.floats = null;

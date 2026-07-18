@@ -29,6 +29,10 @@ export const PIPE = Object.freeze({
   TEE_CHANCE: 0.28,
   /** Off-path decoy shape weights. */
   DECOY_WEIGHTS: Object.freeze({ straight: 0.38, bend: 0.42, tee: 0.2 }),
+  /** V3/G44 (§C10.2): puzzle 3+ has one leaking joint. */
+  LEAK_FROM_PUZZLE: 3,
+  LEAK_SEC: 25,
+  LEAK_PENALTY: 5,
 });
 
 /** Directions: 0=N (up), 1=E, 2=S (down), 3=W. Row 0 is the top row. */
@@ -129,6 +133,27 @@ export function hasConnection(tile, dir) {
  */
 export function rotateTile(tile) {
   return { shape: tile.shape, rot: (tile.rot + 1) % 4 };
+}
+
+/**
+ * Visual rotation target from an unbounded clockwise tap count. Using turns,
+ * not wrapped tile.rot, lets rapid taps cancel/restart their tween without
+ * the mesh desynchronizing from solver state.
+ */
+export function rotationTarget(turns) {
+  const safeTurns = Math.max(0, turns);
+  return safeTurns === 0 ? 0 : -safeTurns * (Math.PI / 2);
+}
+
+/** Deterministic dripping joint for puzzle 3+, or null before the variant. */
+export function leakJointFor(board, puzzleNo, tune = PIPE) {
+  if (puzzleNo < tune.LEAK_FROM_PUZZLE) return null;
+  return hash32(`leak:${board.seed}:${puzzleNo}`) % board.tiles.length;
+}
+
+/** Leak penalty fires once at the exact 25-second boundary. */
+export function leakPenaltyDue(puzzleElapsed, alreadyApplied, tune = PIPE) {
+  return !alreadyApplied && puzzleElapsed >= tune.LEAK_SEC;
 }
 
 /**
@@ -485,7 +510,12 @@ export function tapEfficiencyBonus(totalTaps, optimalTaps, tune = PIPE) {
  * @param {object} [tune]
  * @returns {number}
  */
-export function pipeScore(solved, totalTaps, optimalTaps, tune = PIPE) {
+export function pipeScore(solved, totalTaps, optimalTaps, tune = PIPE, leakPenalties = 0) {
   if (solved <= 0) return 0;
-  return tune.SOLVE_POINTS * solved + tapEfficiencyBonus(totalTaps, optimalTaps, tune);
+  return Math.max(
+    0,
+    tune.SOLVE_POINTS * solved +
+      tapEfficiencyBonus(totalTaps, optimalTaps, tune) -
+      Math.max(0, leakPenalties) * tune.LEAK_PENALTY
+  );
 }

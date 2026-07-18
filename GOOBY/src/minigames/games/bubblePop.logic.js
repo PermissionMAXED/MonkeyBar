@@ -28,8 +28,29 @@ export const BUBBLE = Object.freeze({
   TARGET_CHANCE: 0.52,
   /** Chance a spawn is a spiky bubble (never poppable). */
   SPIKY_CHANCE: 0.15,
+  /** V3/G44 (§C10.2): three same-style matches inside this window chain. */
+  CHAIN_WINDOW_SEC: 2,
+  CHAIN_COUNT: 3,
+  CHAIN_RADIUS: 1.25,
+  /** Audit: spikes extend beyond the old 0.42 body raycast sphere. */
+  FOOD_TOUCH_RADIUS: 0.42,
+  SPIKY_TOUCH_RADIUS: 0.6,
   /** Mini foods that ride in bubbles (Kenney food-kit keys). */
   FOODS: Object.freeze(['carrot', 'apple', 'banana', 'cheese', 'donut-sprinkles', 'cupcake']),
+});
+
+/**
+ * Color-blind-safe identity: color is redundant with a high-contrast symbol.
+ * A style maps one-to-one to food, so a same-color chain always pops the
+ * current target food rather than silently sweeping wrong-food bubbles.
+ */
+export const BUBBLE_STYLES = Object.freeze({
+  carrot: Object.freeze({ color: '#E76F51', symbol: '▲' }),
+  apple: Object.freeze({ color: '#2A9D8F', symbol: '●' }),
+  banana: Object.freeze({ color: '#E9C46A', symbol: '◆' }),
+  cheese: Object.freeze({ color: '#3A86FF', symbol: '+' }),
+  'donut-sprinkles': Object.freeze({ color: '#8338EC', symbol: '★' }),
+  cupcake: Object.freeze({ color: '#FF70A6', symbol: '≈' }),
 });
 
 /**
@@ -126,4 +147,44 @@ export function popResult(bubble, targetFood) {
  */
 export function applyScore(score, delta) {
   return Math.max(0, score + delta);
+}
+
+/** Fresh V3 chain tracker. */
+export function createPopChain() {
+  return { style: null, count: 0, lastAt: -Infinity, chains: 0 };
+}
+
+/**
+ * Record a successful target pop. Three same-style pops within two seconds
+ * trigger once and begin a fresh chain.
+ * @returns {{triggered:boolean, count:number}}
+ */
+export function recordPopChain(chain, style, atSec) {
+  const continues = chain.style === style && atSec - chain.lastAt <= BUBBLE.CHAIN_WINDOW_SEC;
+  chain.style = style;
+  chain.count = continues ? chain.count + 1 : 1;
+  chain.lastAt = atSec;
+  if (chain.count < BUBBLE.CHAIN_COUNT) return { triggered: false, count: chain.count };
+  chain.count = 0;
+  chain.chains += 1;
+  return { triggered: true, count: 0 };
+}
+
+/**
+ * Active same-style neighbors in the chain radius.
+ * @param {Array<{active:boolean, food:string, x:number, y:number}>} bubbles
+ */
+export function chainNeighborIndices(bubbles, style, x, y, radius = BUBBLE.CHAIN_RADIUS) {
+  const out = [];
+  for (let i = 0; i < bubbles.length; i += 1) {
+    const b = bubbles[i];
+    if (!b.active || b.food !== style) continue;
+    if (Math.hypot(b.x - x, b.y - y) <= radius) out.push(i);
+  }
+  return out;
+}
+
+/** Raycast radius audit helper (spikes must be as tappable as they look). */
+export function touchRadiusFor(kind) {
+  return kind === 'spiky' ? BUBBLE.SPIKY_TOUCH_RADIUS : BUBBLE.FOOD_TOUCH_RADIUS;
 }

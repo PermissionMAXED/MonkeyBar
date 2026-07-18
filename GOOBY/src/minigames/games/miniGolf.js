@@ -19,6 +19,7 @@ import { tween, easings } from '../../gfx/tween.js';
 import { createParticles } from '../../gfx/particles.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js';
+import { buildNougatschleuse } from '../../home/nougatMesh.js';
 import {
   GOLF,
   holeScore,
@@ -29,6 +30,9 @@ import {
   isStopped,
   stepBall,
   generateCourse,
+  createNougatLoopHole,
+  qualifiesNougatLoop,
+  nougatXAt,
   cellRoles,
   heightAt,
 } from './miniGolf.logic.js';
@@ -115,6 +119,7 @@ export default {
     'minigolf-kit/windmill',
     'minigolf-kit/tunnel-wide',
     'minigolf-kit/flag-red',
+    'food-kit/chocolate',
   ],
 
   /** @param {object} ctx §E8 game context */
@@ -129,6 +134,8 @@ export default {
     this.totalStrokes = 0;
     this.score = 0;
     this.holeInOnes = 0;
+    this.holeResults = [];
+    this.bonusUnlocked = false;
     this.state = 'aim'; // 'aim' | 'rolling' | 'celebrate' | 'ending' | 'done'
     this.stateT = 0;
     this.theta = 0;
@@ -148,6 +155,17 @@ export default {
       this.ownedGeos.push(mesh.geometry);
       this.ownedMats.push(mesh.material);
       return mesh;
+    };
+    this.own = own;
+    this.resourceTrack = {
+      geo: (geo) => {
+        this.ownedGeos.push(geo);
+        return geo;
+      },
+      mat: (mat) => {
+        this.ownedMats.push(mat);
+        return mat;
+      },
     };
 
     this.skyTex = makePastelSky();
@@ -313,6 +331,28 @@ export default {
       }
     }
 
+    if (hole.loop) {
+      const loop = own(new THREE.Mesh(
+        new THREE.TorusGeometry(0.5, 0.075, 10, 36),
+        new THREE.MeshStandardMaterial({
+          color: '#FF7BA9', emissive: '#6F2148', roughness: 0.35, metalness: 0.25,
+        })
+      ));
+      loop.name = 'nougat-loop';
+      loop.position.set(hole.loop.x, 0.52, hole.loop.z);
+      group.add(loop);
+      view.loop = loop;
+    }
+    if (hole.nougat) {
+      const machine = buildNougatschleuse(this.resourceTrack, assets);
+      machine.name = 'golf-nougatschleuse';
+      machine.scale.setScalar(1.35);
+      machine.position.set(nougatXAt(hole, 0), 0.72, hole.nougat.z);
+      machine.rotation.y = Math.PI;
+      group.add(machine);
+      view.nougat = machine;
+    }
+
     // flag in the cup
     const flag = assets.getModel('minigolf-kit/flag-red');
     flag.position.set(hole.hole.x, heightAt(hole, hole.hole.x, hole.hole.z), hole.hole.z);
@@ -402,7 +442,7 @@ export default {
     if (!this.chip) return;
     const hole = this.hole();
     if (!hole) return;
-    this.chip.textContent = `${t('mg.golf.hole', { n: this.holeIdx + 1, max: GOLF.HOLE_COUNT, par: hole.par })} · ${t('mg.golf.strokes', { n: this.strokes })}`;
+    this.chip.textContent = `${t('mg.golf.hole', { n: this.holeIdx + 1, max: this.course.length, par: hole.par })} · ${t('mg.golf.strokes', { n: this.strokes })}`;
   },
 
   /** Ball mesh ← physics state (world = island offset + local). */
@@ -423,7 +463,7 @@ export default {
     const dy = this.drag.y - this.drag.sy; // screen down drag → aim up-course
     const len = Math.hypot(dx, dy);
     if (len < 4) return null;
-    return { dx: dx / len, dz: dy / len, power: powerFromDrag(len) };
+    return { dx: dx / len, dz: dy / len, power: powerFromDrag(len, innerWidth, innerHeight) };
   },
 
   /** Dotted aim preview (§C1.2 #6) from the ball opposite the drag. */
@@ -466,6 +506,7 @@ export default {
     const hole = this.hole();
     const points = holed ? holeScore(this.strokes, hole.par) : GOLF.SCORE_OTHER;
     const ace = holed && this.strokes === 1;
+    this.holeResults.push({ strokes: this.strokes, par: hole.par, holed });
     if (ace) this.holeInOnes += 1;
     this.score += points;
     this.ctx.onScore(points);
@@ -565,6 +606,11 @@ export default {
     for (let i = 0; i < this.holeViews.length; i += 1) {
       const blades = this.holeViews[i].blades;
       if (blades) blades.rotation.z = -(this.theta + this.course[i].windmill.phase);
+      const nougat = this.holeViews[i].nougat;
+      if (nougat) {
+        nougat.position.x = nougatXAt(this.course[i], this.theta);
+        nougat.userData.update?.(dt);
+      }
     }
     for (let i = 0; i < this.clouds.length; i += 1) {
       this.clouds[i].position.x += dt * (0.12 + (i % 3) * 0.05);
@@ -582,13 +628,27 @@ export default {
     if (this.state === 'celebrate') {
       this.stateT += dt;
       if (this.stateT >= 1.25) {
-        if (this.holeIdx + 1 >= GOLF.HOLE_COUNT) {
+        if (
+          this.holeIdx === GOLF.HOLE_COUNT - 1 &&
+          this.course.length === GOLF.HOLE_COUNT &&
+          qualifiesNougatLoop(this.holeResults)
+        ) {
+          const bonus = createNougatLoopHole(this.ctx.rng);
+          this.course.push(bonus);
+          this.buildHoleView(bonus, GOLF.HOLE_COUNT, this.own);
+          this.bonusUnlocked = true;
+          this.ctx.hud.banner(t('v3.depth.golf.unlocked'));
+          this.setupHole(GOLF.HOLE_COUNT, false);
+        } else if (this.holeIdx + 1 >= this.course.length) {
           this.state = 'ending';
           this.stateT = 0;
           ctx.audio.play('ui.win');
           this.gooby.setEmotion('ecstatic');
           if (this.autoplay) {
-            console.log(`[miniGolf] round complete — strokes ${this.totalStrokes}, holeInOnes ${this.holeInOnes}, score ${this.score}`);
+            console.log(
+              `[miniGolf] round complete — strokes ${this.totalStrokes}, ` +
+              `holeInOnes ${this.holeInOnes}, bonus ${this.bonusUnlocked}, score ${this.score}`
+            );
           }
         } else {
           this.setupHole(this.holeIdx + 1, false);
@@ -607,7 +667,7 @@ export default {
           this.finishHole(true);
           break;
         }
-        if ((ev === 'bank' || ev === 'windmill' || ev === 'bump') && this.bankSoundT <= 0) {
+        if ((ev === 'bank' || ev === 'windmill' || ev === 'bump' || ev === 'nougat') && this.bankSoundT <= 0) {
           this.bankSoundT = 0.15;
           ctx.audio.play(ev === 'bump' ? 'golf.bump' : 'golf.bank');
         }
@@ -654,6 +714,9 @@ export default {
     this.dots = [];
     this.clouds = [];
     this.course = null;
+    this.holeResults = [];
+    this.resourceTrack = null;
+    this.own = null;
     this.ctx = null;
     this.gooby = null;
     this.particles = null;

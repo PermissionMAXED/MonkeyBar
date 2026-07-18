@@ -39,6 +39,10 @@ export const DANCE_TUNING = Object.freeze({
   TIER_COMBOS: Object.freeze([4, 8, 16]),
   /** Ending celebration length before the results screen (s). */
   END_DELAY_SEC: 1.6,
+  /** V3/G44 (§C10.2): five consecutive fever perfects trigger Encore. */
+  ENCORE_PERFECTS: 5,
+  /** V3/G44 (§C10.2): Encore doubles note points for five seconds. */
+  ENCORE_SEC: 5,
   /**
    * Song-clock stall tolerance (F4 P2-5, reworked by F6/RE5): real frame gaps
    * up to this long (s) are rendered-but-slow frames (GC/JIT/SwiftShader
@@ -248,7 +252,7 @@ export function judgeTap(notes, lane, songTime) {
 
 /** Fresh judgment tally. */
 export function createTally() {
-  return { perfect: 0, good: 0, miss: 0, combo: 0, maxCombo: 0 };
+  return { perfect: 0, good: 0, miss: 0, combo: 0, maxCombo: 0, bonus: 0 };
 }
 
 /**
@@ -278,7 +282,10 @@ export function applyJudgment(tally, kind) {
 export function danceScore(tally) {
   return Math.max(
     0,
-    tally.perfect * DANCE.PERFECT_PTS + tally.good * DANCE.GOOD_PTS - tally.miss * DANCE.MISS_PENALTY
+    tally.perfect * DANCE.PERFECT_PTS +
+      tally.good * DANCE.GOOD_PTS -
+      tally.miss * DANCE.MISS_PENALTY +
+      (tally.bonus ?? 0)
   );
 }
 
@@ -294,4 +301,68 @@ export function comboTier(combo) {
   if (combo >= t2) return 2;
   if (combo >= t1) return 1;
   return 0;
+}
+
+/**
+ * V3/G44 (§C10.2) Fever-chain state. Kept separate from the legacy tally so
+ * the DANCE chart/BPM seed contract remains untouched.
+ */
+export function createFeverChain() {
+  return { perfects: 0, encoreUntil: -Infinity, encores: 0 };
+}
+
+/** @returns {boolean} whether doubled note points are active at songTime. */
+export function encoreActive(chain, songTime) {
+  return songTime < chain.encoreUntil;
+}
+
+/**
+ * Advance the Fever chain after one judgment. Five consecutive perfects
+ * while combo tier 3 is active start a five-second Encore. A good/miss or
+ * dropping out of fever resets the pending chain; an active Encore cannot
+ * retrigger itself.
+ * @param {{perfects:number, encoreUntil:number, encores:number}} chain
+ * @param {'perfect'|'good'|'miss'} kind
+ * @param {number} combo combo AFTER applying the judgment
+ * @param {number} songTime
+ * @returns {{active:boolean, started:boolean}}
+ */
+export function advanceFeverChain(chain, kind, combo, songTime) {
+  if (encoreActive(chain, songTime)) return { active: true, started: false };
+  if (kind !== 'perfect' || comboTier(combo) < 3) {
+    chain.perfects = 0;
+    return { active: false, started: false };
+  }
+  chain.perfects += 1;
+  if (chain.perfects < DANCE_TUNING.ENCORE_PERFECTS) {
+    return { active: false, started: false };
+  }
+  chain.perfects = 0;
+  chain.encoreUntil = songTime + DANCE_TUNING.ENCORE_SEC;
+  chain.encores += 1;
+  return { active: true, started: true };
+}
+
+/**
+ * Extra points contributed by Encore. The base tally still owns the normal
+ * +4/+2 judgment points; this returns the second copy only.
+ * @param {'perfect'|'good'|'miss'} kind
+ * @param {boolean} active
+ */
+export function encoreBonus(kind, active) {
+  if (!active || kind === 'miss') return 0;
+  return kind === 'perfect' ? DANCE.PERFECT_PTS : DANCE.GOOD_PTS;
+}
+
+/**
+ * Late-frame note lifecycle. Expired notes are missed without briefly
+ * allocating/flashing a mesh; visible notes are inside the travel window.
+ * @param {number} noteTime
+ * @param {number} songTime
+ * @returns {'future'|'visible'|'expired'}
+ */
+export function noteLifecycle(noteTime, songTime) {
+  if (songTime - noteTime > DANCE.GOOD_MS / 1000) return 'expired';
+  if (noteTime - songTime <= DANCE_TUNING.NOTE_TRAVEL_SEC) return 'visible';
+  return 'future';
 }

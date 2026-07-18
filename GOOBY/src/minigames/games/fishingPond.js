@@ -27,8 +27,10 @@ import {
   fishSpeedFor,
   shouldSpawnBoot,
   applyCatch,
-  rollSpecies, // V2/G23: §C6 fish-set species roll
+  advanceReelElapsed,
+  rollSpeciesDetail,
   SPECIES_COLORS, // V2/G23: visible species tint
+  rareSetBonus,
 } from './fishingPond.logic.js';
 // ── V2/G23: §C6 species meta — night band gates the nightEel (§C10.3) ──
 import { bandAt } from '../../systems/dayNight.js';
@@ -151,6 +153,9 @@ export default {
     this.night = bandAt(now()).band === 'night'; // §C10.3: nightEel gate, fixed per round
     /** @type {string[]} §B3 meta.caught — species ids, in catch order */
     this.caught = [];
+    /** V3/G44 rare display ids caught this run (album receives mapped ids). */
+    this.rareCaught = [];
+    this.rareSetAwarded = false;
     /** @type {Record<string, THREE.MeshBasicMaterial>} lazy per-species tints */
     this.speciesMats = {};
     // ── end V2/G23 ──
@@ -359,10 +364,12 @@ export default {
     const holder = fitModel(assets.getModel('food-kit/fish'), FISHING.SIZES[kind].scale + 0.25);
     // ── V2/G23: §C6 species roll at spawn (seeded, deterministic) — the
     // species tint is visible in the pond; catches report meta.caught (§B3).
-    const species = rollSpecies(kind, rng, this.night);
+    const detail = rollSpeciesDetail(kind, rng, this.night);
+    const { species, collectionId, rare } = detail;
     holder.traverse((o) => {
       if (o.isMesh) o.material = this.speciesMat(species);
     });
+    if (rare) this.decorateRareFish(holder, species);
     // ── end V2/G23 ──
     const dir = rng() < 0.5 ? 1 : -1;
     const depth =
@@ -373,6 +380,8 @@ export default {
     const fish = {
       kind,
       species, // V2/G23: §C6 species id
+      collectionId,
+      rare,
       holder,
       x,
       depth,
@@ -404,6 +413,31 @@ export default {
     return this.speciesMats[species];
   },
   // ── end V2/G23 ──
+
+  /** V3/G44: silhouette-readable rare marker, not color alone. */
+  decorateRareFish(holder, species) {
+    let marker;
+    if (species === 'pearlMinnow') {
+      marker = new THREE.Mesh(
+        new THREE.SphereGeometry(0.085, 10, 8),
+        new THREE.MeshBasicMaterial({ color: '#FFFFFF' })
+      );
+    } else if (species === 'sunsetKoi') {
+      marker = new THREE.Mesh(
+        new THREE.TorusGeometry(0.12, 0.028, 7, 16),
+        new THREE.MeshBasicMaterial({ color: '#FFD166' })
+      );
+    } else {
+      marker = new THREE.Mesh(
+        new THREE.ConeGeometry(0.12, 0.16, 5),
+        new THREE.MeshBasicMaterial({ color: '#FFF0A8' })
+      );
+    }
+    this.ownedGeos.push(marker.geometry);
+    this.ownedMats.push(marker.material);
+    marker.position.set(0, 0.22, 0.12);
+    holder.add(marker);
+  },
 
   /** Spawn the drifting boot (procedural: shaft + foot boxes). */
   spawnBoot() {
@@ -481,7 +515,13 @@ export default {
       item.active = false;
       item.respawnT = Infinity; // removed below; respawn on landing
     }
-    this.hooked = { kind: item.kind, species: item.species, holder: item.holder }; // V2/G23: + species
+    this.hooked = {
+      kind: item.kind,
+      species: item.species,
+      collectionId: item.collectionId,
+      rare: item.rare,
+      holder: item.holder,
+    };
   },
 
   /** Hook reached the surface — resolve whatever is on it. */
@@ -491,7 +531,7 @@ export default {
       this.state = 'idle';
       return;
     }
-    const { kind, species, holder } = this.hooked; // V2/G23: + species
+    const { kind, species, collectionId, rare, holder } = this.hooked;
     const value = catchValue(kind);
     const prev = this.score;
     this.score = applyCatch(this.score, value);
@@ -506,15 +546,27 @@ export default {
       this.ctx.audio.play('fish.catch');
       // ── V2/G23: §C6 species meta — record the catch + species float text ──
       if (species) {
-        this.caught.push(species);
+        this.caught.push(collectionId ?? species);
+        if (rare) this.rareCaught.push(species);
+        const name = rare
+          ? t(`v3.depth.fish.${species}`)
+          : t(`sticker.fish.${species}.name`);
         this.floats.spawn(
-          t('mg.fish.species', { name: t(`sticker.fish.${species}.name`), pts: value }),
+          t('mg.fish.species', { name, pts: value }),
           pos,
           species === 'goldenFish' ? '#FFD24A' : kind === 'L' ? '#FFE08A' : '#BFF0C8'
         );
         if (species === 'goldenFish') {
           this.ctx.hud.banner(t('mg.fish.golden'));
           this.particles.emit('confetti', pos, { count: 14 });
+        }
+        if (!this.rareSetAwarded && rareSetBonus(this.rareCaught) > 0) {
+          this.rareSetAwarded = true;
+          const bonus = rareSetBonus(this.rareCaught);
+          this.score += bonus;
+          this.ctx.onScore(bonus);
+          this.ctx.hud.banner(t('v3.depth.fish.rareSet', { n: bonus }));
+          this.particles.emit('confetti', pos, { count: 20 });
         }
       } else {
         const key = kind === 'S' ? 'mg.fish.small' : kind === 'M' ? 'mg.fish.medium' : 'mg.fish.large';
@@ -692,7 +744,7 @@ export default {
       this.hookDepth = Math.max(0, this.hookDepth - FISHING.RAISE_SPEED * dt);
       if (this.hookDepth <= 0) this.landCatch();
     } else if (this.state === 'reeling') {
-      this.reel.t += dt;
+      this.reel.t = advanceReelElapsed(this.reel.t, dt);
       // hooked big fish thrashes at depth
       const f = this.reel.fish;
       f.holder.position.set(
@@ -737,7 +789,12 @@ export default {
       this.gooby.setEmotion('ecstatic');
       this.gooby.play('happyBounce');
       this.particles.emit('confetti', this.gooby.group.position.clone().add(new THREE.Vector3(0, 0.9, 0)), { count: 16 });
-      if (this.autoplay) console.log(`[fishingPond] autoplay run ended — score ${this.score}`);
+      if (this.autoplay) {
+        console.log(
+          `[fishingPond] autoplay run ended — score ${this.score}, ` +
+          `rares ${this.rareCaught.join(',') || 'none'}, setBonus ${this.rareSetAwarded}`
+        );
+      }
     }
   },
 
@@ -759,6 +816,7 @@ export default {
     this.ownedGeos = [];
     this.ownedMats = [];
     this.speciesMats = {}; // V2/G23: tints live in ownedMats, disposed above
+    this.rareCaught = [];
     this.swimmers = [];
     this.boot = null;
     this.hooked = null;

@@ -42,10 +42,14 @@ import { createParticles } from '../../gfx/particles.js';
 import {
   DELIVERY,
   pickDeliveries,
+  pickFragileParcel,
+  fragileCrashPenalty,
+  fragileDeliveryBonus,
   applyDrop,
   applyCrash,
   timeBonus,
   dropPoint,
+  segmentHitsDrop,
   nearestRoadTile,
   roadPathBetween,
 } from './deliveryRush.logic.js';
@@ -89,6 +93,8 @@ export default {
 
     // --- the delivery run (§C9.4: shop start, landmark curbside drops) -----
     this.deliveries = pickDeliveries(ctx.rng, layout.landmarks.map((l) => l.id));
+    this.fragileParcel = pickFragileParcel(ctx.rng);
+    this.fragileDamaged = false;
     this.drops = 0;
     this.score = 0;
     this.crashes = 0;
@@ -150,6 +156,18 @@ export default {
       this.car.group.add(box);
       this.parcels.push(box);
     }
+    const fragileBox = this.parcels[DELIVERY.PARCELS - 1 - this.fragileParcel];
+    if (fragileBox) {
+      const strapMat = new THREE.MeshBasicMaterial({ color: '#FF4F81' });
+      const strapGeoA = new THREE.BoxGeometry(0.08, 0.08, 0.8);
+      const strapGeoB = new THREE.BoxGeometry(0.8, 0.08, 0.08);
+      const strapA = new THREE.Mesh(strapGeoA, strapMat);
+      const strapB = new THREE.Mesh(strapGeoB, strapMat);
+      strapA.position.y = 0.35;
+      strapB.position.y = 0.35;
+      fragileBox.add(strapA, strapB);
+      fragileBox.userData.fragile = true;
+    }
 
     this.traffic = createTraffic({ scene, assets: ctx.assets, layout, rng: ctx.rng });
 
@@ -208,6 +226,16 @@ export default {
     };
     this.progress = 0;
     this.guides = buildRouteGuides(this.ctx.scene, this.legLayout);
+    // Audit fix: route ribbon sits nearly coplanar with the road. Polygon
+    // offset + render order removes dusk-road z-fighting without touching the
+    // shared cityDrive guide builder.
+    const ribbon = this.guides.group.children[0];
+    if (ribbon?.material) {
+      ribbon.material.polygonOffset = true;
+      ribbon.material.polygonOffsetFactor = -2;
+      ribbon.material.polygonOffsetUnits = -2;
+      ribbon.renderOrder = 2;
+    }
     this.updateChip();
   },
 
@@ -228,9 +256,12 @@ export default {
     if (!this.chip) return;
     const dest = this.destination();
     const ticket = t('mg.delivery.ticket', { n: this.drops, max: DELIVERY.PARCELS });
+    const fragile = this.drops === this.fragileParcel
+      ? ` · ${t(this.fragileDamaged ? 'v3.depth.delivery.damaged' : 'v3.depth.delivery.fragile')}`
+      : '';
     this.chip.textContent = dest
-      ? `${ticket} → ${t(`sticker.landmarks.${dest.id}.name`)}`
-      : ticket;
+      ? `${ticket}${fragile} → ${t(`sticker.landmarks.${dest.id}.name`)}`
+      : `${ticket}${fragile}`;
   },
 
   /** Track score with the §C1.2 #5 floor and mirror it into the HUD. */
@@ -248,8 +279,19 @@ export default {
     this.shake = 1;
     this.car.applyCrashPenalty();
     this.setScore(applyCrash(this.score));
+    const fragilePenalty = fragileCrashPenalty(
+      this.fragileParcel,
+      this.drops,
+      this.fragileDamaged
+    );
+    if (fragilePenalty > 0) {
+      this.fragileDamaged = true;
+      this.setScore(Math.max(0, this.score - fragilePenalty));
+      this.ctx.hud.banner(t('v3.depth.delivery.broken', { n: fragilePenalty }));
+      this.updateChip();
+    }
     this.ctx.audio.play('crash');
-    this.ctx.hud.banner(t('trip.crash'));
+    if (fragilePenalty === 0) this.ctx.hud.banner(t('trip.crash'));
     this.gooby.setEmotion('dizzy');
     this.emotionT = 1.5;
   },
@@ -258,8 +300,18 @@ export default {
   deliver(elapsed) {
     const dest = this.destination();
     if (!dest) return;
+    const deliveredParcel = this.drops;
     this.drops += 1;
     this.setScore(applyDrop(this.score));
+    const fragileBonus = fragileDeliveryBonus(
+      this.fragileParcel,
+      deliveredParcel,
+      this.fragileDamaged
+    );
+    if (fragileBonus > 0) {
+      this.setScore(this.score + fragileBonus);
+      this.ctx.hud.banner(t('v3.depth.delivery.clean', { n: fragileBonus }));
+    }
     this.ctx.audio.play('delivery.doorbell');
     this.ctx.audio.play('delivery.drop'); // G29's confetti pop rides the burst
     this.particles.emit?.('confetti', new THREE.Vector3(dest.x, T.ROAD_Y + 3, dest.z), { count: 22 });
@@ -268,7 +320,7 @@ export default {
     const parcel = this.parcels[DELIVERY.PARCELS - this.drops];
     if (parcel) parcel.visible = false;
     if (this.drops < DELIVERY.PARCELS) {
-      this.ctx.hud.banner(t('mg.delivery.delivered'));
+      if (fragileBonus === 0) this.ctx.hud.banner(t('mg.delivery.delivered'));
       this.buildLeg();
       if (this.autoplay) console.log(`[deliveryRush] drop ${this.drops} at ${dest.id} — score ${this.score}`);
       return;
@@ -391,6 +443,7 @@ export default {
 
     // --- driving --------------------------------------------------------------
     if (this.autoplay) this.drivePilot();
+    const frameStart = { x: this.car.position.x, z: this.car.position.z };
     this.car.update(dt);
     this.traffic.update(dt);
     this.particles.update?.(dt);
@@ -432,7 +485,7 @@ export default {
 
     // drop ring (§C1.2 #5: radius 4 m around the landmark curbside anchor)
     const dest = this.destination();
-    if (dest && Math.hypot(dest.x - p.x, dest.z - p.z) <= DELIVERY.DROP_RADIUS_M) {
+    if (dest && segmentHitsDrop(frameStart, p, dest)) {
       this.deliver(elapsed);
       if (this.phase !== 'drive') return;
     }
@@ -476,6 +529,7 @@ export default {
       crashes: this.crashes,
       distanceM: Math.round(this.distanceM),
       deliveries: this.drops,
+      fragileClean: !this.fragileDamaged,
     };
   },
 
@@ -507,5 +561,6 @@ export default {
     this.vanWheels = null;
     this.dropAnchors = null;
     this.colliders = null;
+    this.fragileParcel = null;
   },
 };

@@ -72,6 +72,14 @@ export const HOPPER = Object.freeze({
   MAX_SWEEP_STEP_M: 2.0,
   /** Post-shield-pop grace so the popping hit can't chain-kill (s). */
   SHIELD_POP_INVULN_SEC: 1.2,
+  /** V3/G44 (§C10.2): one rare wormhole gate per run at most. */
+  WORMHOLE_FIRST_SEC: 18,
+  WORMHOLE_CHANCE: 0.08,
+  WORMHOLE_SEC: 2,
+  WORMHOLE_TICK_SEC: 0.2,
+  WORMHOLE_TICK_POINTS: 1,
+  /** Suppress the tap synthesized at the end of a two-lane swipe. */
+  SWIPE_TAP_SUPPRESS_SEC: 0.18,
 });
 
 /**
@@ -143,6 +151,18 @@ export function laneAfterTap(lane, side, tune = HOPPER) {
 export function laneAfterSwipe(lane, dir, tune = HOPPER) {
   const next = lane + (dir === 'left' ? -2 : 2);
   return Math.max(0, Math.min(tune.LANES - 1, next));
+}
+
+/**
+ * Resolve one normalized gesture while honoring the swipe→tap suppression
+ * audit. Some pointer stacks emit a tap after swipeend; that tap must not
+ * undo a two-lane jump.
+ */
+export function laneAfterGesture(lane, gesture, suppressTap = false, tune = HOPPER) {
+  if (gesture.kind === 'tap') {
+    return suppressTap ? lane : laneAfterTap(lane, gesture.side, tune);
+  }
+  return laneAfterSwipe(lane, gesture.dir, tune);
 }
 
 /**
@@ -285,6 +305,21 @@ export function rollPickup(rng, tune = HOPPER) {
  */
 export function shouldSpawnShield(score, alreadySpawned, tune = HOPPER) {
   return !alreadySpawned && score >= tune.SHIELD_SCORE;
+}
+
+/** Seeded rare gate rule: eligible after 18 s, never more than once/run. */
+export function shouldSpawnWormhole(rng, elapsed, alreadySpawned, active, tune = HOPPER) {
+  return !alreadySpawned && !active && elapsed >= tune.WORMHOLE_FIRST_SEC && rng() < tune.WORMHOLE_CHANCE;
+}
+
+/**
+ * Frame-rate-independent +1 awards at each 0.2 s boundary of the two-second
+ * tunnel (exactly ten points for a complete traversal).
+ */
+export function wormholeAwards(previousSec, nextSec, tune = HOPPER) {
+  const a = Math.min(tune.WORMHOLE_SEC, Math.max(0, previousSec));
+  const b = Math.min(tune.WORMHOLE_SEC, Math.max(0, nextSec));
+  return Math.max(0, Math.floor((b + 1e-9) / tune.WORMHOLE_TICK_SEC) - Math.floor((a + 1e-9) / tune.WORMHOLE_TICK_SEC));
 }
 
 /**

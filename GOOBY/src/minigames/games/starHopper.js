@@ -18,12 +18,13 @@ import {
   HOPPER,
   speedAt,
   hopperScore,
-  laneAfterTap,
-  laneAfterSwipe,
+  laneAfterGesture,
   sweepHitsMeteor,
   generateRow,
   rollPickup,
   shouldSpawnShield,
+  shouldSpawnWormhole,
+  wormholeAwards,
   pickShowerLanes,
   resolveHit,
   laneOutlook,
@@ -185,6 +186,8 @@ export default {
     this.invulnT = 0;
     this.endT = 0;
     this.botT = 0;
+    this.swipeTapSuppressT = 0;
+    this.wormhole = { spawned: false, active: false, t: 0, stars: 0, gate: null };
     // shower state machine: 'idle' | 'telegraph' | 'active'
     this.shower = { state: 'idle', t: 0, lanes: null, dropT: 0, nextAt: HOPPER.SHOWER_EVERY_SEC };
     this.lastRowM = 26; // first row spawns a friendly bit ahead
@@ -308,6 +311,20 @@ export default {
     this.shieldRingMat = new THREE.MeshBasicMaterial({ color: '#63E0FF' });
     this.ownedGeos.push(this.shieldRingGeo);
     this.ownedMats.push(this.shieldRingMat);
+    this.wormholeGeo = new THREE.TorusGeometry(0.55, 0.075, 10, 28);
+    this.wormholeMat = new THREE.MeshBasicMaterial({
+      color: '#C77DFF', transparent: true, opacity: 0.85, depthWrite: false,
+    });
+    this.ownedGeos.push(this.wormholeGeo);
+    this.ownedMats.push(this.wormholeMat);
+    this.tunnelRings = [];
+    for (let i = 0; i < 8; i += 1) {
+      const ring = new THREE.Mesh(this.wormholeGeo, this.wormholeMat);
+      ring.visible = false;
+      ring.position.z = -0.4 - i * 0.15;
+      scene.add(ring);
+      this.tunnelRings.push(ring);
+    }
     /** @type {THREE.Material[]} gold-carrot cloned materials (per spawn) */
     this.goldMats = [];
 
@@ -323,11 +340,19 @@ export default {
     this.offSwipe = ctx.input.on('swipe', (p) => {
       if (this.autoplay || this.phase !== 'play') return;
       if (p.dir !== 'left' && p.dir !== 'right') return;
-      this.setLane(laneAfterSwipe(this.lane, p.dir));
+      if (this.wormhole.active) return;
+      this.setLane(laneAfterGesture(this.lane, { kind: 'swipe', dir: p.dir }));
+      this.swipeTapSuppressT = HOPPER.SWIPE_TAP_SUPPRESS_SEC;
     });
     this.offTap = ctx.input.on('tap', (p) => {
       if (this.autoplay || this.phase !== 'play') return;
-      this.setLane(laneAfterTap(this.lane, p.nx < 0 ? 'left' : 'right'));
+      if (this.wormhole.active) return;
+      const side = p.nx < 0 ? 'left' : 'right';
+      this.setLane(laneAfterGesture(
+        this.lane,
+        { kind: 'tap', side },
+        this.swipeTapSuppressT > 0
+      ));
     });
 
     ctx.hud.setScore(0);
@@ -461,7 +486,7 @@ export default {
 
   /** Spawn meteor rows + gap pickups ahead of the craft (§C1.5 spawn tables). */
   spawnAhead(elapsed) {
-    if (this.shower.state !== 'idle') return; // showers own the sky
+    if (this.shower.state !== 'idle' || this.wormhole.active) return; // special sequences own the sky
     while (this.lastRowM < this.traveled + LOOKAHEAD_M) {
       const row = generateRow(this.ctx.rng, elapsed, this.recentRows);
       this.recentRows.push(row);
@@ -470,8 +495,67 @@ export default {
       for (let lane = 0; lane < HOPPER.LANES; lane += 1) {
         if (row.blocked[lane]) this.spawnMeteor(lane, this.lastRowM, false);
       }
+      if (shouldSpawnWormhole(
+        this.ctx.rng,
+        elapsed,
+        this.wormhole.spawned,
+        this.wormhole.active
+      )) {
+        const safe = row.blocked.map((blocked, lane) => ({ blocked, lane }))
+          .filter((entry) => !entry.blocked);
+        const pick = safe[Math.floor(this.ctx.rng() * safe.length)]?.lane ?? 1;
+        this.spawnWormhole(pick, this.lastRowM + row.gap * 0.45);
+      }
       const roll = rollPickup(this.ctx.rng);
       if (roll) this.spawnPickup(roll.kind, this.lastRowM + row.gap * 0.5);
+    }
+  },
+
+  spawnWormhole(lane, m) {
+    const gate = new THREE.Mesh(this.wormholeGeo, this.wormholeMat);
+    gate.position.set(HOPPER.LANE_X[lane], this.yFor(m), 0.1);
+    this.ctx.scene.add(gate);
+    this.wormhole.spawned = true;
+    this.wormhole.gate = { holder: gate, lane, m };
+  },
+
+  enterWormhole() {
+    const wh = this.wormhole;
+    wh.gate?.holder?.parent?.remove(wh.gate.holder);
+    wh.gate = null;
+    wh.active = true;
+    wh.t = 0;
+    this.invulnT = HOPPER.WORMHOLE_SEC;
+    this.setLane(1);
+    for (const ring of this.tunnelRings) ring.visible = true;
+    this.ctx.audio.play('hopper.shield');
+    this.ctx.hud.banner(t('v3.depth.hopper.wormhole'));
+  },
+
+  updateWormhole(dt) {
+    const wh = this.wormhole;
+    if (!wh.active) return;
+    const before = wh.t;
+    wh.t = Math.min(HOPPER.WORMHOLE_SEC, wh.t + dt);
+    const awards = wormholeAwards(before, wh.t);
+    if (awards > 0) {
+      wh.stars += awards;
+      this.pickupPoints += awards;
+      this.ctx.onScore(awards);
+      this.particles.emit('sparkles', this.craft.position.clone(), { count: awards * 2 });
+    }
+    for (let i = 0; i < this.tunnelRings.length; i += 1) {
+      const ring = this.tunnelRings[i];
+      const phase = (wh.t * 4 + i / this.tunnelRings.length) % 1;
+      ring.position.set(this.craftX, CRAFT_Y + phase * (this.halfH - CRAFT_Y + 1), -0.5);
+      ring.scale.setScalar(0.65 + phase * 1.25);
+      ring.rotation.z += dt * (i % 2 ? 1.8 : -1.8);
+    }
+    if (wh.t >= HOPPER.WORMHOLE_SEC) {
+      wh.active = false;
+      this.invulnT = Math.max(this.invulnT, 0.5);
+      for (const ring of this.tunnelRings) ring.visible = false;
+      this.floats.spawn(`+${wh.stars}`, this.craft.position.clone(), '#C77DFF');
     }
   },
 
@@ -529,6 +613,7 @@ export default {
 
   /** Greedy autoplay (§C1.2 #8): highest-value safe lane per 0.4 s window. */
   autoplayTick(dt, speed) {
+    if (this.wormhole.active) return;
     this.botT -= dt;
     // threats close at climb speed (+ streak speed for shower meteors)
     const threats = [];
@@ -555,6 +640,10 @@ export default {
           if (Math.abs(p.holder.position.x - HOPPER.LANE_X[l]) < Math.abs(p.holder.position.x - HOPPER.LANE_X[nearest])) nearest = l;
         }
         if (nearest === i) value += p.kind === 'shield' ? 6 : p.points;
+      }
+      const gate = this.wormhole.gate;
+      if (gate && gate.m >= this.traveled && gate.m <= valueHorizon && gate.lane === i) {
+        value += 20;
       }
       lanes.push({ safe, value, transitSafe: outlook.transit[i], enter: outlook.enter[i] });
     }
@@ -621,6 +710,8 @@ export default {
     const remaining = HOPPER.DURATION_SEC - elapsed;
     ctx.hud.setTime(remaining);
     if (this.invulnT > 0) this.invulnT -= dt;
+    this.swipeTapSuppressT = Math.max(0, this.swipeTapSuppressT - dt);
+    this.updateWormhole(dt);
 
     if (this.autoplay) this.autoplayTick(dt, speed);
 
@@ -643,8 +734,10 @@ export default {
     this.engineGlow.scale.y = 1.0 + Math.sin(elapsed * 17) * 0.15;
     this.bubble.material.opacity = 0.22 + Math.sin(elapsed * 5) * 0.07;
 
-    this.updateShower(dt, elapsed, speed);
-    this.spawnAhead(elapsed);
+    if (!this.wormhole.active) {
+      this.updateShower(dt, elapsed, speed);
+      this.spawnAhead(elapsed);
+    }
 
     // §C1.2 #8: the one shield pickup spawns when the score reaches 60
     if (shouldSpawnShield(this.score(), this.shieldSpawned)) {
@@ -661,6 +754,7 @@ export default {
       const rel = dm + fallDist; // total closing distance this frame
       const hit =
         this.invulnT <= 0 &&
+        !this.wormhole.active &&
         sweepHitsMeteor({ lane: colLane, m: prevM }, meteor, rel);
       meteor.m -= fallDist;
       const h = meteor.holder;
@@ -711,6 +805,21 @@ export default {
     }
     this.pickups = this.pickups.filter((p) => p.active);
 
+    const gate = this.wormhole.gate;
+    if (gate) {
+      gate.holder.position.y = this.yFor(gate.m);
+      gate.holder.rotation.z += dt * 1.7;
+      if (
+        Math.abs(gate.m - this.traveled) < 4 &&
+        Math.abs(HOPPER.LANE_X[gate.lane] - this.craftX) < 0.6
+      ) {
+        this.enterWormhole();
+      } else if (gate.m < this.traveled - 12) {
+        gate.holder.parent?.remove(gate.holder);
+        this.wormhole.gate = null;
+      }
+    }
+
     if (remaining <= 0) {
       this.phase = 'ending';
       this.win = true;
@@ -718,7 +827,12 @@ export default {
       this.gooby.setEmotion('ecstatic');
       this.particles.emit('confetti', this.craft.position.clone().add(new THREE.Vector3(0, 1.2, 0)), { count: 16 });
       for (const stripe of this.stripes) stripe.material.opacity = 0;
-      if (this.autoplay) console.log(`[starHopper] autoplay run ended (survived) — score ${this.score()}`);
+      if (this.autoplay) {
+        console.log(
+          `[starHopper] autoplay run ended (survived) — score ${this.score()}, ` +
+          `wormholeStars ${this.wormhole.stars}`
+        );
+      }
     }
   },
 
@@ -738,6 +852,8 @@ export default {
     this.meteorPool = null;
     this.pickups = [];
     this.stripes = [];
+    this.tunnelRings = [];
+    this.wormhole = null;
     this.starLayers = [];
     this.ctx = null;
     this.gooby = null;

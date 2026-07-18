@@ -27,6 +27,9 @@ export const GOLF = Object.freeze({
   MAX_POWER: 6.5,
   /** Full-power drag length (px) — the in-game drag→power scale. */
   MAX_DRAG_PX: 150,
+  /** Small screens still need a reachable full-power gesture. */
+  MIN_MAX_DRAG_PX: 96,
+  MAX_DRAG_VIEWPORT_RATIO: 0.38,
   /** Cup capture: within HOLE_R and slower than CAPTURE_SPEED (else it skips). */
   HOLE_R: 0.13,
   CAPTURE_SPEED: 2.8,
@@ -48,6 +51,11 @@ export const GOLF = Object.freeze({
   SCORE_PAR: 20,
   SCORE_BOGEY: 12,
   SCORE_OTHER: 6,
+  /** V3/G44 (§C10.2): conditional par-3 seventh hole. */
+  BONUS_HOLE_COUNT: 7,
+  NOUGAT_R: 0.18,
+  NOUGAT_AMPLITUDE: 0.24,
+  NOUGAT_RESTITUTION: 0.88,
 });
 
 /**
@@ -144,8 +152,17 @@ export function powerForDistance(dist) {
  * @param {number} dragPx
  * @returns {number} m/s 0..MAX_POWER
  */
-export function powerFromDrag(dragPx) {
-  return Math.min(GOLF.MAX_POWER, Math.max(0, dragPx) * (GOLF.MAX_POWER / GOLF.MAX_DRAG_PX));
+export function maxDragPxForViewport(width, height, tune = GOLF) {
+  if (!(width > 0) || !(height > 0)) return tune.MAX_DRAG_PX;
+  return Math.min(
+    tune.MAX_DRAG_PX,
+    Math.max(tune.MIN_MAX_DRAG_PX, Math.min(width, height) * tune.MAX_DRAG_VIEWPORT_RATIO)
+  );
+}
+
+export function powerFromDrag(dragPx, width, height) {
+  const maxDrag = maxDragPxForViewport(width, height);
+  return Math.min(GOLF.MAX_POWER, Math.max(0, dragPx) * (GOLF.MAX_POWER / maxDrag));
 }
 
 /**
@@ -286,6 +303,45 @@ export function generateCourse(rng) {
 }
 
 /**
+ * Hole 7 "Nougat-Loop" (§C10.2), built separately so the legacy six-hole
+ * seeded course and its score row stay unchanged unless qualification opens
+ * the bonus.
+ */
+export function createNougatLoopHole(rng = Math.random) {
+  const hole = {
+    id: 'nougatLoop',
+    par: 3,
+    cells: [[0, 0], [0, 1], [0, 2], [0, 3], [0, 4], [0, 5]],
+    waypoints: [{ x: 0, z: 2 }, { x: 0.28, z: 3.25 }],
+    botPowerMul: 1,
+    loop: { x: 0, z: 2 },
+    nougat: {
+      centerX: 0,
+      z: 3.15,
+      amplitude: GOLF.NOUGAT_AMPLITUDE,
+      radius: GOLF.NOUGAT_R,
+      phase: rng() * Math.PI * 2,
+    },
+  };
+  hole.cellSet = cellSetOf(hole.cells);
+  hole.start = { x: 0, z: 0 };
+  hole.hole = { x: 0, z: 5 };
+  return hole;
+}
+
+/** All six base holes must finish at par+1 or better to open hole 7. */
+export function qualifiesNougatLoop(results, tune = GOLF) {
+  return results.length === tune.HOLE_COUNT &&
+    results.every((r) => r.holed !== false && r.strokes <= r.par + 1);
+}
+
+/** Moving Nougatschleuse x position for visual and physics sync. */
+export function nougatXAt(hole, theta) {
+  if (!hole.nougat) return Infinity;
+  return hole.nougat.centerX + Math.sin(theta + hole.nougat.phase) * hole.nougat.amplitude;
+}
+
+/**
  * Cell render roles for the game's tile placement: role + in/out travel
  * directions (unit cell steps) per path cell.
  * @param {GolfHole} hole
@@ -370,7 +426,7 @@ export function isStopped(hole, ball) {
  * @param {{x: number, z: number, vx: number, vz: number, done?: boolean}} ball
  * @param {number} dt seconds
  * @param {number} theta windmill rotation (rad) at frame start
- * @returns {string[]} any of 'bank'|'windmill'|'bump'|'holed'
+ * @returns {string[]} any of 'bank'|'windmill'|'bump'|'nougat'|'holed'
  */
 export function stepBall(hole, ball, dt, theta) {
   /** @type {string[]} */
@@ -421,7 +477,8 @@ export function stepBall(hole, ball, dt, theta) {
         mill &&
         Math.round(ball.x) === mill.cellX &&
         (ball.z - mill.gateZ) * (nz - mill.gateZ) <= 0;
-      if (crossesGate && windmillBlocked(theta + mill.phase)) {
+      const substepTheta = theta + Math.PI * 2 * GOLF.WINDMILL_RPS * h * (s + 0.5);
+      if (crossesGate && windmillBlocked(substepTheta + mill.phase)) {
         const r = reflect({ vx: ball.vx, vz: ball.vz }, 0, -Math.sign(ball.vz));
         ball.vx = r.vx;
         ball.vz = r.vz;
@@ -451,6 +508,26 @@ export function stepBall(hole, ball, dt, theta) {
           ball.vx -= (1 + GOLF.BUMP_RESTITUTION) * vdot * ux;
           ball.vz -= (1 + GOLF.BUMP_RESTITUTION) * vdot * uz;
           events.push('bump');
+        }
+      }
+    }
+    // moving Nougatschleuse obstacle on bonus hole 7
+    if (hole.nougat) {
+      const nx = nougatXAt(hole, theta + Math.PI * 2 * GOLF.WINDMILL_RPS * h * (s + 0.5));
+      const dx = ball.x - nx;
+      const dz = ball.z - hole.nougat.z;
+      const d = Math.hypot(dx, dz);
+      const minD = hole.nougat.radius + GOLF.BALL_R;
+      if (d < minD && d > 1e-6) {
+        const ux = dx / d;
+        const uz = dz / d;
+        ball.x = nx + ux * minD;
+        ball.z = hole.nougat.z + uz * minD;
+        const vdot = ball.vx * ux + ball.vz * uz;
+        if (vdot < 0) {
+          ball.vx -= (1 + GOLF.NOUGAT_RESTITUTION) * vdot * ux;
+          ball.vz -= (1 + GOLF.NOUGAT_RESTITUTION) * vdot * uz;
+          events.push('nougat');
         }
       }
     }

@@ -21,6 +21,9 @@ export const DELIVERY = Object.freeze({
   CRASH_PENALTY: 5,
   /** Time bonus window: +max(0, 120 − elapsedSec) after drop 3 (§C1.2 #5). */
   TIME_BONUS_FROM_SEC: 120,
+  /** V3/G44 (§C10.2): one marked parcel — damage or clean-delivery bonus. */
+  FRAGILE_CRASH_PENALTY: 20,
+  FRAGILE_CLEAN_BONUS: 15,
 });
 
 /**
@@ -43,6 +46,24 @@ export function pickDeliveries(rng, ids, count = DELIVERY.PARCELS) {
   const picks = pool.slice(0, count);
   if (picks[0] === 'shop' && picks.length > 1) picks.push(picks.shift());
   return picks;
+}
+
+/** Seeded marked parcel index (0..2), rolled after destination selection. */
+export function pickFragileParcel(rng, count = DELIVERY.PARCELS) {
+  return Math.min(count - 1, Math.floor(rng() * count));
+}
+
+/**
+ * A crash damages only the currently carried fragile parcel, and only once.
+ * The regular −5 crash rule remains separate and unchanged.
+ */
+export function fragileCrashPenalty(fragileIndex, currentParcel, alreadyDamaged) {
+  return fragileIndex === currentParcel && !alreadyDamaged ? DELIVERY.FRAGILE_CRASH_PENALTY : 0;
+}
+
+/** Clean +15 when the marked parcel reaches its destination undamaged. */
+export function fragileDeliveryBonus(fragileIndex, deliveredParcel, damaged) {
+  return fragileIndex === deliveredParcel && !damaged ? DELIVERY.FRAGILE_CLEAN_BONUS : 0;
 }
 
 /**
@@ -129,6 +150,22 @@ export function dropPoint(anchor, colliders, clearance = 1.6) {
     z += best.dz;
   }
   return { x, z };
+}
+
+/**
+ * Swept drop-ring check: detects a fast van crossing the 4 m circle between
+ * frames, where endpoint-only distance checks tunnelled past delivery.
+ */
+export function segmentHitsDrop(from, to, center, radius = DELIVERY.DROP_RADIUS_M) {
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  const len2 = dx * dx + dz * dz;
+  const t = len2 > 0
+    ? Math.max(0, Math.min(1, ((center.x - from.x) * dx + (center.z - from.z) * dz) / len2))
+    : 0;
+  const x = from.x + dx * t;
+  const z = from.z + dz * t;
+  return Math.hypot(center.x - x, center.z - z) <= radius;
 }
 
 // ---------------------------------------------------------------------------

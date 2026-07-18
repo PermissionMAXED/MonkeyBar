@@ -28,6 +28,10 @@ import {
   nextBounceVy,
   trickPoints,
   canTrick,
+  createTrickChain,
+  recordTrick,
+  consumeLandingAction,
+  crossedMat,
 } from './trampoline.logic.js';
 
 const MAT_Y = -2.5;
@@ -127,6 +131,7 @@ export default {
     this.airborne = false;
     this.armed = null; //   'boost' | 'butt' — first judged tap of this air
     this.tricking = false;
+    this.airTrickChain = createTrickChain();
     this.trickTween = null;
     this.staggerT = 0.4; // small settle before the first launch
     this.sag = 0;
@@ -282,6 +287,13 @@ export default {
     this.score += pts;
     this.tricksDone += 1; // V2/G27: meta.tricks (§B3 — every landed trick counts)
     this.ctx.onScore(pts);
+    const combo = recordTrick(this.airTrickChain, kind);
+    if (combo.triggered) {
+      this.score += combo.bonus;
+      this.ctx.onScore(combo.bonus);
+      this.ctx.hud.banner(t('v3.depth.tramp.combo', { n: combo.bonus }));
+      this.particles.emit('confetti', this.trickGrp.position.clone().add(new THREE.Vector3(0, 0.8, 0)), { count: 16 });
+    }
     this.ctx.audio.play('tramp.trick');
     const key = kind === 'flip' ? 'mg.tramp.flip' : kind === 'spin' ? 'mg.tramp.spin' : 'mg.tramp.twist';
     this.floats.spawn(
@@ -313,8 +325,9 @@ export default {
 
   /** Contact with the mat — resolve the bounce (§C6.1 rules). */
   resolveContact() {
-    const action = this.armed ?? 'none';
-    this.armed = null;
+    const consumed = consumeLandingAction(this.armed);
+    const action = consumed.action;
+    this.armed = consumed.armed;
     // cancel any mid-trick rotation cleanly
     if (this.trickTween) {
       this.trickTween.cancel();
@@ -331,6 +344,7 @@ export default {
       this.h = 0;
       this.vy = 0;
       this.launchVy = TRAMP.BASE_VY;
+      this.airTrickChain = createTrickChain();
       this.staggerT = TRAMP.BUTT_STAGGER_SEC;
       this.ctx.audio.play('tramp.butt');
       this.floats.spawn(t('mg.tramp.butt'), this.trickGrp.position.clone().add(new THREE.Vector3(0, 0.8, 0)), '#D64570');
@@ -353,6 +367,7 @@ export default {
     this.vy = vy;
     this.h = 0.001;
     this.airborne = true;
+    this.airTrickChain = createTrickChain();
     this.gooby.play('jump', { speed: 1.4 });
     if (action === 'boost') {
       this.ctx.audio.play('tramp.boost');
@@ -390,12 +405,12 @@ export default {
     } else {
       bot.tapAt = -1; // zones out — passive decay bounce
     }
+    const kinds = ['flip', 'spin', 'twist'].sort(() => rng() - 0.5);
+    const chaseCombo = airT > 1.65 && rng() < 0.45;
     let at = 0.18;
-    while (at < airT - TRAMP.TRICK_MIN_AIR_SEC - 0.25 && bot.tricks.length < 2) {
-      if (rng() < (bot.tricks.length === 0 ? 0.3 : 0.08)) {
-        const r = rng();
-        bot.tricks.push({ at, kind: r < 0.4 ? 'twist' : r < 0.7 ? 'flip' : 'spin' });
-      }
+    while (at < airT - TRAMP.TRICK_MIN_AIR_SEC && bot.tricks.length < 3) {
+      const chance = bot.tricks.length === 0 ? 0.38 : 0.22;
+      if (chaseCombo || rng() < chance) bot.tricks.push({ at, kind: kinds[bot.tricks.length] });
       at += 0.62;
     }
   },
@@ -456,9 +471,10 @@ export default {
 
     // --- bounce physics (pause-safe, dt-driven) ---
     if (this.airborne) {
+      const previousH = this.h;
       this.vy -= TRAMP.GRAVITY * dt;
       this.h += this.vy * dt;
-      if (this.h <= 0 && this.vy < 0) {
+      if (crossedMat(previousH, this.h, this.vy)) {
         this.h = 0;
         this.resolveContact();
       }
@@ -506,7 +522,9 @@ export default {
       ctx.audio.play('ui.win');
       this.gooby.setEmotion('ecstatic');
       this.particles.emit('confetti', this.trickGrp.position.clone().add(new THREE.Vector3(0, 0.8, 0)), { count: 18 });
-      if (this.autoplay) console.log(`[trampoline] autoplay run ended — score ${this.score}`);
+      if (this.autoplay) {
+        console.log(`[trampoline] autoplay run ended — score ${this.score}, tricks ${this.tricksDone}`);
+      }
     }
   },
 
@@ -530,6 +548,7 @@ export default {
     this.trickGrp = null;
     this.trickTween = null;
     this.bot = null;
+    this.airTrickChain = null;
     this.gooby = null;
     this.particles = null;
     this.floats = null;

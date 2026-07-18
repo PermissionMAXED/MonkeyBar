@@ -18,6 +18,9 @@ import {
   DIRS,
   connectionsOf,
   rotateTile,
+  rotationTarget,
+  leakJointFor,
+  leakPenaltyDue,
   generateBoard,
   waterReach,
   isSolved,
@@ -159,6 +162,8 @@ export default {
     this.solved = 0;
     this.totalTaps = 0;
     this.totalOptimal = 0;
+    this.currentOptimal = 0;
+    this.leakPenalties = 0;
     this.puzzleNo = 0;
     this.displayedScore = 0;
     this.endT = 0;
@@ -210,6 +215,12 @@ export default {
     this.ownedGeos.push(this.armGeo, this.hubGeo, this.baseGeo);
     this.baseMat = new THREE.MeshBasicMaterial({ color: COLORS.PIPE_EDGE, transparent: true, opacity: 0.5 });
     this.ownedMats.push(this.baseMat);
+    this.leakGeo = new THREE.SphereGeometry(0.065, 10, 8);
+    this.leakMat = new THREE.MeshBasicMaterial({
+      color: COLORS.WATER, transparent: true, opacity: 0.9, depthWrite: false,
+    });
+    this.ownedGeos.push(this.leakGeo);
+    this.ownedMats.push(this.leakMat);
     // V2/FIX-F P1-1: one merged geometry per shape — a tile is 1 draw call
     this.shapeGeos = {
       straight: buildShapeGeo('straight', this.armGeo, this.hubGeo),
@@ -275,7 +286,11 @@ export default {
     this.puzzleNo += 1;
     const seed = Math.floor(this.ctx.rng() * 2 ** 31);
     this.board = generateBoard(seed);
-    this.totalOptimal += this.board.optimalTaps;
+    this.currentOptimal = this.board.optimalTaps;
+    this.puzzleElapsed = 0;
+    this.leakApplied = false;
+    this.leakFxT = 0;
+    this.leakJoint = leakJointFor(this.board, this.puzzleNo);
     this.buildBoardMeshes();
     if (this.puzzleNo > 1) this.ctx.hud.banner(t('mg.pipe.puzzle', { n: this.puzzleNo }));
     if (this.autoplay) {
@@ -294,7 +309,10 @@ export default {
 
   /** Clear + rebuild tile meshes for the current board. */
   buildBoardMeshes() {
-    for (const view of this.tileViews) this.boardGroup.remove(view.group);
+    for (const view of this.tileViews) {
+      view.turnTween?.cancel();
+      this.boardGroup.remove(view.group);
+    }
     for (const mat of this.dealMats) mat.dispose();
     this.dealMats = [];
     this.tileViews = [];
@@ -325,7 +343,15 @@ export default {
       group.add(pipes);
 
       this.boardGroup.add(group);
-      this.tileViews.push({ group, mats: [pipeMat] });
+      const view = { group, mats: [pipeMat], turns: tiles[idx].rot, turnTween: null };
+      if (idx === this.leakJoint) {
+        const drip = new THREE.Mesh(this.leakGeo, this.leakMat);
+        drip.name = 'leak-joint';
+        drip.position.set(0.12, -0.08, 0.13);
+        group.add(drip);
+        view.leak = drip;
+      }
+      this.tileViews.push(view);
     }
 
     // --- fixtures: brass tap above the source, sprinkler below the goal ---
@@ -379,9 +405,18 @@ export default {
     this.totalTaps += 1;
     this.ctx.audio.play('pipe.rotate');
     const pipes = this.tileViews[idx].group.getObjectByName('pipes');
-    const target = pipes.rotation.z - Math.PI / 2;
-    tween({ from: pipes.rotation.z, to: target, duration: 0.16, ease: easings.easeOutQuad,
-      onUpdate: (v) => { pipes.rotation.z = v; } });
+    const view = this.tileViews[idx];
+    view.turns += 1;
+    const target = rotationTarget(view.turns);
+    view.turnTween?.cancel();
+    view.turnTween = tween({
+      from: pipes.rotation.z,
+      to: target,
+      duration: 0.16,
+      ease: easings.easeOutQuad,
+      onUpdate: (v) => { pipes.rotation.z = v; },
+      onComplete: () => { view.turnTween = null; },
+    });
     if (isSolved(this.board)) this.startFill();
   },
 
@@ -389,6 +424,7 @@ export default {
   startFill() {
     this.phase = 'fill';
     this.solved += 1;
+    this.totalOptimal += this.currentOptimal;
     this.ctx.audio.play('pipe.connect');
     this.ctx.hud.banner(t('mg.pipe.solved'));
     this.gooby.play('happyBounce');
@@ -453,7 +489,7 @@ export default {
       this.endT += dt;
       if (this.endT >= 1.2 && this.phase !== 'done') {
         this.phase = 'done';
-        const final = pipeScore(this.solved, this.totalTaps, this.totalOptimal);
+        const final = pipeScore(this.solved, this.totalTaps, this.totalOptimal, PIPE, this.leakPenalties);
         if (final !== this.displayedScore) ctx.onScore(final - this.displayedScore);
         ctx.onEnd({ score: final });
       }
@@ -463,6 +499,33 @@ export default {
     const remaining = PIPE.DURATION_SEC - elapsed;
     ctx.hud.setTime(remaining);
 
+    if (this.phase === 'play') {
+      this.puzzleElapsed += dt;
+      if (this.leakJoint != null) {
+        this.leakFxT -= dt;
+        const leakView = this.tileViews[this.leakJoint];
+        if (leakView?.leak) {
+          leakView.leak.position.y = -0.08 - ((this.puzzleElapsed * 1.8) % 1) * 0.2;
+          leakView.leak.scale.setScalar(0.7 + 0.3 * Math.sin(this.puzzleElapsed * 8) ** 2);
+          if (this.leakFxT <= 0) {
+            this.leakFxT = 0.55;
+            const world = leakView.leak.getWorldPosition(new THREE.Vector3());
+            this.particles.emit('bubbles', world, { count: 2 });
+          }
+        }
+        if (leakPenaltyDue(this.puzzleElapsed, this.leakApplied)) {
+          this.leakApplied = true;
+          this.leakPenalties += 1;
+          const delta = -Math.min(PIPE.LEAK_PENALTY, this.displayedScore);
+          if (delta !== 0) {
+            ctx.onScore(delta);
+            this.displayedScore += delta;
+          }
+          ctx.audio.play('pipe.fill');
+          ctx.hud.banner(t('v3.depth.pipe.leakPenalty', { n: PIPE.LEAK_PENALTY }));
+        }
+      }
+    }
     if (this.phase === 'fill') this.updateFill(dt);
     if (this.autoplay) this.autoplayTick(dt);
 
@@ -471,19 +534,23 @@ export default {
 
     if (remaining <= 0 && this.phase !== 'ending') {
       this.phase = 'ending';
-      const final = pipeScore(this.solved, this.totalTaps, this.totalOptimal);
+      const final = pipeScore(this.solved, this.totalTaps, this.totalOptimal, PIPE, this.leakPenalties);
       ctx.audio.play('ui.win');
       this.gooby.setEmotion(this.solved > 0 ? 'ecstatic' : 'sad');
       if (this.solved > 0) this.gooby.play('happyBounce');
       this.particles.emit('confetti', this.gooby.group.position.clone().add(new THREE.Vector3(0, 1, 0)), { count: 14 });
       if (this.autoplay) {
-        console.log(`[pipeFlow] autoplay run ended — solved ${this.solved}, taps ${this.totalTaps}/opt ${this.totalOptimal}, score ${final}`);
+        console.log(
+          `[pipeFlow] autoplay run ended — solved ${this.solved}, ` +
+          `taps ${this.totalTaps}/opt ${this.totalOptimal}, leaks ${this.leakPenalties}, score ${final}`
+        );
       }
     }
   },
 
   dispose() {
     this.offTap?.();
+    for (const view of this.tileViews ?? []) view.turnTween?.cancel();
     this.particles?.dispose();
     this.gooby?.dispose();
     this.baseIM?.dispose(); // V2/FIX-F P1-1: frees the instanceMatrix buffer
