@@ -1,8 +1,8 @@
 // Basket Bounce (§C6.1 #7, M): flick-to-throw an orange ball (procedural
 // sphere w/ seams) into a hoop (torus + backboard). Ballistic arc + rim/
 // backboard bounce (physics-lite, stepped by basketBounce.logic.js — the same
-// integrator the tests run). Hoop slides horizontally after 5 baskets; throw
-// distance ramps. Basket +3, bank shot +2 extra, swish streak +2. 60 s.
+// integrator the tests run). V3 moving phase starts after 10 baskets at ±1 m;
+// moving-hoop swishes score ×2. Distance still ramps. 60 s.
 // Gooby stands courtside reacting (cheer on basket, sad on a miss streak).
 //
 // Dev-only ?autoplay=1: random-ish competent play for headless verification.
@@ -18,10 +18,11 @@ import {
   hoopSlideX,
   hoopDistance,
   flickToVelocity,
-  stepBall,
+  stepBallSwept,
   scoreShot,
   simulateShot,
   solveBasketVelocity,
+  isMovingHoop,
 } from './basketBounce.logic.js';
 
 const SKY = 0xcfe8ff;
@@ -73,6 +74,7 @@ export default {
       baskets: 0,
       missStreak: 0,
       swishStreak: 0,
+      movingSwishes: 0,
       slideT: 0,
       hoop: { x: 0, z: BASKET.SPAWN.z - hoopDistance(0) },
       ball: null, // physics state while flying
@@ -213,11 +215,13 @@ export default {
     const shot = basket
       ? { basket: true, bank: S.ball.touchedBoard, swish: !S.ball.touchedRim && !S.ball.touchedBoard }
       : { basket: false, bank: false, swish: false };
-    const { points, swishStreak } = scoreShot(shot, S.swishStreak);
+    const moving = isMovingHoop(S.baskets);
+    const { points, swishStreak } = scoreShot(shot, S.swishStreak, moving);
     S.swishStreak = swishStreak;
     const rimPos = new THREE.Vector3(S.hoop.x, BASKET.RIM_Y + 0.4, S.hoop.z);
     if (basket) {
       S.baskets += 1;
+      if (moving && shot.swish) S.movingSwishes += 1;
       S.missStreak = 0;
       S.score += points;
       S.ctx.onScore(points);
@@ -225,6 +229,7 @@ export default {
       S.particles.emit('confetti', rimPos, { count: 10 });
       this.floatText(`+${points}`, '#59C9B9', rimPos);
       if (shot.bank) S.ctx.hud.banner(t('mg.basket.bank'));
+      else if (moving && shot.swish) S.ctx.hud.banner(t('mg.basket.movingSwish'));
       else if (shot.swish && points > BASKET.POINTS_BASKET) S.ctx.hud.banner(t('mg.basket.swish'));
       if (S.baskets === BASKET.SLIDE_AFTER_BASKETS) S.ctx.hud.banner(t('mg.basket.hoopMoves'));
       // Gooby cheers
@@ -254,7 +259,7 @@ export default {
     S.ctx.hud.setTime(BASKET.DURATION_SEC - elapsed);
 
     // --- hoop: distance ramp + horizontal slide after 5 baskets ---
-    if (S.baskets >= BASKET.SLIDE_AFTER_BASKETS) S.slideT += dt;
+    if (isMovingHoop(S.baskets)) S.slideT += dt;
     const targetZ = BASKET.SPAWN.z - hoopDistance(S.baskets);
     S.hoop.z += (targetZ - S.hoop.z) * Math.min(1, dt * 3);
     S.hoop.x = hoopSlideX(S.slideT, S.baskets);
@@ -262,24 +267,16 @@ export default {
 
     // --- ball physics (same integrator as the tests) ---
     if (S.ball) {
-      // sub-step for stable rim bounces at render dt
-      const steps = Math.max(1, Math.ceil(dt / BASKET.SIM_DT));
-      const h = dt / steps;
-      for (let i = 0; i < steps; i += 1) {
-        const ev = stepBall(S.ball, h, S.hoop);
-        if (ev.rim) {
-          S.ctx.audio.play('basket.rim');
-          S.shakeT = Math.max(S.shakeT, 0.25);
-        }
-        if (ev.board) S.ctx.audio.play('basket.board');
-        if (ev.basket) {
-          this.onShotResolved(true);
-          break;
-        }
-        if (ev.dead) {
-          this.onShotResolved(false);
-          break;
-        }
+      const ev = stepBallSwept(S.ball, dt, S.hoop);
+      if (ev.rim) {
+        S.ctx.audio.play('basket.rim');
+        S.shakeT = Math.max(S.shakeT, 0.25);
+      }
+      if (ev.board) S.ctx.audio.play('basket.board');
+      if (ev.basket) {
+        this.onShotResolved(true);
+      } else if (ev.dead) {
+        this.onShotResolved(false);
       }
       if (S.ball) {
         S.ballGrp.position.set(S.ball.pos.x, S.ball.pos.y, S.ball.pos.z);
@@ -362,7 +359,12 @@ export default {
     // --- round end (§C6.1 #7: 60 s) ---
     if (elapsed >= BASKET.DURATION_SEC) {
       S.done = true;
-      if (S.autoplay) console.log(`[autoplay] basketBounce score=${S.score} baskets=${S.baskets}`);
+      if (S.autoplay) {
+        console.log(
+          `[autoplay] basketBounce score=${S.score} baskets=${S.baskets} ` +
+          `movingSwishes=${S.movingSwishes}`
+        );
+      }
       S.ctx.onEnd({ score: S.score });
     }
   },

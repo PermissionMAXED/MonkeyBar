@@ -22,6 +22,12 @@ import {
   resolveDrop,
   isTowerDone,
   towerScore,
+  initialWobbleState,
+  stepWobble,
+  dampWobble,
+  wobbleTopX,
+  wobbleLocalX,
+  isFallenExpired,
 } from './pancakeTower.logic.js';
 
 const SKY = 0xffe9d6;
@@ -81,6 +87,8 @@ export default {
       floaters: [],
       settleT: 0, //     squash pulse on the stack after a landing
       shakeT: 0,
+      wobble: initialWobbleState(),
+      maxWobble: 0,
       camY: 0,
       done: false,
       endT: -1,
@@ -105,6 +113,9 @@ export default {
     );
     plate.position.y = PLATE_Y - 0.035;
     scene.add(plate);
+    S.stackGroup = new THREE.Group();
+    S.stackGroup.position.y = PLATE_Y;
+    scene.add(S.stackGroup);
 
     // shared pancake geometry (unit cylinder, scaled per layer)
     S.pancakeGeo = new THREE.CylinderGeometry(0.5, 0.53, PANCAKE.LAYER_HEIGHT, 26);
@@ -194,7 +205,9 @@ export default {
     const S = this.S;
     const dropX = S.slider.position.x;
     const topping = isToppingLayer(S.layerIndex);
-    const info = resolveDrop(S.stack, dropX, topping);
+    const height = S.stackTopY - PLATE_Y;
+    const movingCenter = wobbleTopX(S.stack.center, height, S.wobble.angle);
+    const info = resolveDrop({ center: movingCenter, width: S.stack.width }, dropX, topping);
     S.falling = {
       obj: S.slider,
       info,
@@ -227,8 +240,13 @@ export default {
       return;
     }
 
-    // place the landed piece
-    obj.position.set(info.center, S.stackTopY, 0);
+    // Place the landed piece in the rotating stack's local coordinates.
+    const height = S.stackTopY - PLATE_Y;
+    const localCenter = wobbleLocalX(info.center, height, S.wobble.angle);
+    S.ctx.scene.remove(obj);
+    S.stackGroup.add(obj);
+    obj.position.set(localCenter, height, 0);
+    obj.rotation.z = 0;
     if (!topping) {
       const mesh = obj.children[0];
       mesh.scale.x = info.width;
@@ -247,7 +265,7 @@ export default {
         });
         S.ctx.audio.play('pancake.slice');
       }
-      S.stack = { center: info.center, width: info.width };
+      S.stack = { center: localCenter, width: info.width };
       S.stackTopY += PANCAKE.LAYER_HEIGHT;
     } else {
       S.stackTopY += topping && (S.layerIndex / PANCAKE.TOPPING_EVERY) % 2 === 0 ? 0.3 : 0.12;
@@ -257,18 +275,22 @@ export default {
     S.layers += 1;
     S.bonusPoints += info.points;
     if (info.perfect) {
+      S.wobble = dampWobble(S.wobble);
+      S.stackGroup.rotation.z = S.wobble.angle;
       S.perfects += 1;
       S.ctx.audio.play('pancake.perfect');
       S.ctx.hud.banner(t('mg.pancake.perfect'));
-      S.particles.emit('sparkles', obj.position.clone().setY(S.stackTopY + 0.2), { count: 8 });
-      this.floatText(`+${info.points}`, '#59C9B9', obj.position.clone().setY(S.stackTopY + 0.5));
+      const world = obj.getWorldPosition(new THREE.Vector3());
+      S.particles.emit('sparkles', world.clone().setY(S.stackTopY + 0.2), { count: 8 });
+      this.floatText(`+${info.points}`, '#59C9B9', world.clone().setY(S.stackTopY + 0.5));
       S.gooby.setEmotion('ecstatic');
       S.gooby.play('happyBounce');
       S.recoverT = 1.2;
     } else if (topping) {
       S.ctx.audio.play('pancake.topping');
       S.ctx.hud.banner(t('mg.pancake.topping'));
-      this.floatText(`+${info.points}`, '#FF7BA9', obj.position.clone().setY(S.stackTopY + 0.5));
+      const world = obj.getWorldPosition(new THREE.Vector3());
+      this.floatText(`+${info.points}`, '#FF7BA9', world.clone().setY(S.stackTopY + 0.5));
       S.gooby.play('happyBounce');
     } else {
       S.ctx.audio.play('pancake.land');
@@ -320,6 +342,15 @@ export default {
     if (!S || S.done) return;
     S.ctx.hud.setTime(elapsed);
 
+    // V3 wobble: driven spring from height 8; perfect drops damp this state.
+    S.wobble = stepWobble(S.wobble, dt, S.layers);
+    S.maxWobble = Math.max(S.maxWobble, Math.abs(S.wobble.angle));
+    S.stackGroup.rotation.z = S.wobble.angle;
+    if (S.layers === PANCAKE.WOBBLE_START_LAYER && !S.wobbleBannerShown) {
+      S.wobbleBannerShown = true;
+      S.ctx.hud.banner(t('mg.pancake.wobble'));
+    }
+
     // --- slider oscillation ---
     if (S.slider) {
       S.slideT += dt;
@@ -331,7 +362,9 @@ export default {
       if (S.autoplay && !S.falling) {
         const period = slidePeriod(S.layerIndex);
         const vmax = (PANCAKE.SLIDE_AMPLITUDE * Math.PI * 2) / period;
-        const aim = S.stack.center + (S.autoTargetOff ?? 0);
+        const height = S.stackTopY - PLATE_Y;
+        const aim = wobbleTopX(S.stack.center, height, S.wobble.angle) +
+          (S.autoTargetOff ?? 0);
         const off = S.slider.position.x - aim;
         const vel = vmax * Math.cos(((S.slideT / period) + S.slidePhase) * Math.PI * 2);
         const eta = -off / (vel || 1e-6);
@@ -362,7 +395,7 @@ export default {
       c.vel.y -= 9 * dt;
       c.obj.position.addScaledVector(c.vel, dt);
       c.obj.rotation.z += c.spin * dt;
-      if (c.t > 1.4) {
+      if (isFallenExpired(c.t)) {
         S.ctx.scene.remove(c.obj);
         S.cuts.splice(i, 1);
       }
@@ -414,7 +447,8 @@ export default {
         const score = towerScore(S.layers, S.bonusPoints);
         if (S.autoplay) {
           console.log(
-            `[autoplay] pancakeTower score=${score} layers=${S.layers} perfects=${S.perfects} toppings=${S.toppings}`
+            `[autoplay] pancakeTower score=${score} layers=${S.layers} ` +
+            `perfects=${S.perfects} toppings=${S.toppings} wobble=${S.maxWobble.toFixed(3)}`
           );
         }
         S.ctx.onEnd({ score });

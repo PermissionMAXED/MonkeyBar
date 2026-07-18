@@ -32,6 +32,13 @@ export const HOP = Object.freeze({
   /** Max gap-center shift between consecutive pillars (fair-climb clamp). */
   GAP_MAX_CLIMB: 1.4,
   GAP_MAX_DIVE: 1.9,
+  /** V3 §C10.2 wind: warning, then one 0.4-lane vertical shove. */
+  GUST_FIRST_SEC: 6,
+  GUST_EVERY_SEC: 10,
+  GUST_TELEGRAPH_SEC: 1.5,
+  GUST_DURATION_SEC: 2,
+  GUST_SHIFT_LANES: 0.4,
+  LANE_HEIGHT: 1,
 });
 
 /**
@@ -114,4 +121,44 @@ export function rollGapCenter(rng, gapHeight, prevCenter) {
     hi = Math.min(hi, prevCenter + HOP.GAP_MAX_CLIMB);
   }
   return lo + rng() * (hi - lo);
+}
+
+/**
+ * Wind schedule. Directions alternate so a run cannot be biased toward one
+ * edge; elapsed is framework time, therefore pause/resume freezes the phase.
+ * @param {number} elapsed seconds
+ * @returns {{phase:'none'|'telegraph'|'gust', index:number, direction:-1|1}}
+ */
+export function gustPhaseAt(elapsed) {
+  const local = elapsed - HOP.GUST_FIRST_SEC;
+  const cycle = local + HOP.GUST_TELEGRAPH_SEC;
+  if (cycle < 0) return { phase: 'none', index: -1, direction: 1 };
+  const index = Math.floor(cycle / HOP.GUST_EVERY_SEC);
+  const start = HOP.GUST_FIRST_SEC + index * HOP.GUST_EVERY_SEC;
+  const direction = index % 2 === 0 ? 1 : -1;
+  if (elapsed >= start - HOP.GUST_TELEGRAPH_SEC && elapsed < start) {
+    return { phase: 'telegraph', index, direction };
+  }
+  if (elapsed >= start && elapsed < start + HOP.GUST_DURATION_SEC) {
+    return { phase: 'gust', index, direction };
+  }
+  return { phase: 'none', index, direction };
+}
+
+/**
+ * Apply the single gust shove, clamped so wind itself never causes an
+ * out-of-bounds instant death.
+ * @param {number} y Gooby body-center y
+ * @param {-1|1} direction
+ * @returns {number}
+ */
+export function applyGustShift(y, direction) {
+  const halfH = forgivingHalf(HOP.BODY_HALF_H);
+  const shifted = y + direction * HOP.GUST_SHIFT_LANES * HOP.LANE_HEIGHT;
+  return Math.max(HOP.FLOOR_Y + halfH + 0.01, Math.min(HOP.CEILING_Y - halfH, shifted));
+}
+
+/** Gates count double while the gust is active (§C10.2). */
+export function gatePoints(gusting) {
+  return gusting ? 2 : 1;
 }

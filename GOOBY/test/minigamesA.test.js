@@ -15,6 +15,11 @@ import {
   spawnIntervalAt as catchSpawnIntervalAt,
   rollItem,
   applyCatch,
+  goldenSpawnAt,
+  itemFallSpeed,
+  spawnXForRoll,
+  basketCatchesX,
+  applyCatchState,
 } from '../src/minigames/games/carrotCatch.logic.js';
 import {
   HOP,
@@ -24,6 +29,9 @@ import {
   stepPhysics,
   collides,
   rollGapCenter,
+  gustPhaseAt,
+  applyGustShift,
+  gatePoints,
 } from '../src/minigames/games/bunnyHop.logic.js';
 import {
   GUARD,
@@ -35,6 +43,9 @@ import {
   applyEscape,
   applyWhiff,
   isRoundOver,
+  isKingDue,
+  applyKingTap,
+  acceptsTapAfter,
 } from '../src/minigames/games/carrotGuard.logic.js';
 import {
   MEMORY,
@@ -44,6 +55,10 @@ import {
   timeBonus,
   memoryScore,
   isMatch,
+  advancePeekProgress,
+  canUsePeek,
+  canFlipCard,
+  gridExtents,
 } from '../src/minigames/games/memoryMatch.logic.js';
 import { MINIGAME, COIN_TABLE } from '../src/data/constants.js';
 import { computeCoins } from '../src/data/minigames.js';
@@ -134,10 +149,11 @@ test('carrotCatch: rollItem honors the junk ratio and rarity weights (seeded)', 
   let good = 0;
   for (let i = 0; i < N; i += 1) {
     const item = rollItem(rng, 0); // 10% junk at round start
-    if (item.kind === 'junk') {
+    if (item.kind === 'junk' || item.kind === 'rotten') {
       junk += 1;
       assert.equal(item.value, CATCH.JUNK_PENALTY);
-      assert.ok(JUNK_FOODS.includes(item.key));
+      if (item.kind === 'rotten') assert.equal(item.key, 'carrot');
+      else assert.ok(JUNK_FOODS.includes(item.key));
     } else {
       good += 1;
       goodValueSum += item.value;
@@ -158,6 +174,44 @@ test('carrotCatch: junk penalty math floors the score at 0', () => {
   assert.equal(applyCatch(1, CATCH.JUNK_PENALTY), 0);
   assert.equal(applyCatch(0, CATCH.JUNK_PENALTY), 0);
   assert.equal(applyCatch(7, 3), 10);
+});
+
+test('V3 carrotCatch: one golden carrot is scheduled +10 at 1.5× fall speed', () => {
+  const at = goldenSpawnAt(() => 0.25);
+  assert.equal(at, 20);
+  assert.ok(at >= CATCH.GOLDEN_WINDOW_START_SEC && at <= CATCH.GOLDEN_WINDOW_END_SEC);
+  assert.equal(goldenSpawnAt(() => 1, 30), 25, '30 s tutorial still gets one with flight time');
+  assert.equal(CATCH.GOLDEN_POINTS, 10);
+  assert.equal(itemFallSpeed(30, 'golden'), fallSpeedAt(30) * 1.5);
+  assert.equal(itemFallSpeed(30, 'good'), fallSpeedAt(30));
+});
+
+test('V3 carrotCatch: rotten carrot breaks the streak and applies −2', () => {
+  const good = applyCatchState({ score: 4, combo: 2 }, { kind: 'good', value: 2 });
+  assert.deepEqual(good, { score: 6, combo: 3, delta: 2 });
+  const golden = applyCatchState(good, { kind: 'golden', value: 10 });
+  assert.deepEqual(golden, { score: 16, combo: 4, delta: 10 });
+  const rotten = applyCatchState(golden, { kind: 'rotten', value: -2 });
+  assert.deepEqual(rotten, { score: 14, combo: 0, delta: -2 });
+});
+
+test('V3 carrotCatch audit: edge spawn mapping is uniform and basket hitbox is UI-scale independent', () => {
+  const halfW = 2.3;
+  const bins = new Array(10).fill(0);
+  const r = rngFrom(0x43);
+  for (let i = 0; i < 20000; i += 1) {
+    const x = spawnXForRoll(r(), halfW);
+    const norm = (x / (halfW - CATCH.SPAWN_EDGE_PAD) + 1) / 2;
+    bins[Math.min(9, Math.floor(norm * 10))] += 1;
+  }
+  for (const n of bins) assert.ok(Math.abs(n - 2000) < 150, `unbiased bin count ${n}`);
+  assert.equal(basketCatchesX(0.62, 0), true);
+  const edge = spawnXForRoll(0, halfW);
+  assert.equal(basketCatchesX(edge, edge + CATCH.BASKET_HALF_WIDTH), true);
+  assert.equal(basketCatchesX(0.62001, 0), false);
+  for (const uiScale of [0.85, 1, 1.3]) {
+    assert.equal(basketCatchesX(1.2, 0.7), true, `world hitbox unchanged at ${uiScale}`);
+  }
 });
 
 test('carrotCatch: a typical round lands the ~15c §C6 target', () => {
@@ -258,6 +312,31 @@ test('bunnyHop: consecutive gap centers stay within a fair climb/dive', () => {
   }
 });
 
+test('V3 bunnyHop: gust is telegraphed, shifts exactly 0.4 lane, gates count double', () => {
+  assert.deepEqual(gustPhaseAt(4.49).phase, 'none');
+  assert.deepEqual(gustPhaseAt(4.5), { phase: 'telegraph', index: 0, direction: 1 });
+  assert.deepEqual(gustPhaseAt(6), { phase: 'gust', index: 0, direction: 1 });
+  assert.deepEqual(gustPhaseAt(14.5), { phase: 'telegraph', index: 1, direction: -1 });
+  assert.deepEqual(gustPhaseAt(16), { phase: 'gust', index: 1, direction: -1 });
+  assert.equal(applyGustShift(0, 1), HOP.GUST_SHIFT_LANES * HOP.LANE_HEIGHT);
+  assert.equal(gatePoints(false), 1);
+  assert.equal(gatePoints(true), 2);
+});
+
+test('V3 bunnyHop audit: high-rate hops keep forgiving gate tolerance; pause freezes flap state', () => {
+  const pillar = { x: 0, gapCenterY: 0, gapHeight: HOP.GAP_MIN };
+  let s = { y: 0, vy: HOP.HOP_VY };
+  for (let i = 0; i < 8; i += 1) {
+    s = stepPhysics(s, 1 / 120);
+    if (i % 2 === 0) s.vy = HOP.HOP_VY;
+  }
+  assert.equal(collides({ x: 0, y: 0 }, pillar), false, 'center remains safe at high flap cadence');
+  const paused = { ...s };
+  assert.deepEqual(paused, s, 'no game update means no mid-flap integration');
+  const resumed = stepPhysics(paused, 1 / 60);
+  assert.ok(Number.isFinite(resumed.y) && Number.isFinite(resumed.vy));
+});
+
 test('bunnyHop: ~24 gates hits the ~12c §C6 target', () => {
   assert.equal(computeCoins(COIN_TABLE.bunnyHop, 24, false), 12);
   assert.equal(computeCoins(COIN_TABLE.bunnyHop, 0, false), 3); // min clamp
@@ -326,6 +405,33 @@ test('carrotGuard: round ends at 45 s OR when all carrots are gone (§C6.1)', ()
   assert.equal(isRoundOver({ elapsed: 44.9, carrots: 3 }), false);
   assert.equal(isRoundOver({ elapsed: 45, carrots: 3 }), true);
   assert.equal(isRoundOver({ elapsed: 10, carrots: 0 }), true);
+});
+
+test('V3 carrotGuard: mole king every 20 bonks needs 3 taps and pays +8 plus two coins-worth', () => {
+  assert.equal(isKingDue(19, 0), false);
+  assert.equal(isKingDue(20, 0), true);
+  assert.equal(isKingDue(39, 1), false);
+  assert.equal(isKingDue(40, 1), true);
+  let king = { score: 10, combo: 2, hp: GUARD.KING_TAPS };
+  king = applyKingTap(king);
+  assert.equal(king.complete, false);
+  assert.equal(king.hp, 2);
+  king = applyKingTap(king);
+  assert.equal(king.complete, false);
+  king = applyKingTap(king);
+  assert.equal(king.complete, true);
+  assert.equal(
+    king.gained,
+    GUARD.KING_POINTS + GUARD.KING_COIN_DROP * GUARD.KING_SCORE_PER_COIN
+  );
+});
+
+test('V3 carrotGuard audit: simultaneous duplicate taps and whiff spam are debounced', () => {
+  assert.equal(acceptsTapAfter(0), false, 'same-frame duplicate rejected');
+  assert.equal(acceptsTapAfter(GUARD.TAP_DEBOUNCE_SEC - 1e-6), false);
+  assert.equal(acceptsTapAfter(GUARD.TAP_DEBOUNCE_SEC), true);
+  assert.equal(acceptsTapAfter(0.1, GUARD.WHIFF_COOLDOWN_SEC), false);
+  assert.equal(acceptsTapAfter(GUARD.WHIFF_COOLDOWN_SEC, GUARD.WHIFF_COOLDOWN_SEC), true);
 });
 
 test('carrotGuard: a typical round lands the ~15c §C6 target', () => {
@@ -410,4 +516,38 @@ test('memoryMatch: typical scores clamp into the §C6 coin row (min 5)', () => {
 test('memoryMatch: isMatch compares pair ids', () => {
   assert.equal(isMatch(3, 3), true);
   assert.equal(isMatch(3, 4), false);
+});
+
+test('V3 memoryMatch: peek unlocks at 3 clean matches, resets on miss, and is one-shot', () => {
+  let s = { cleanMatches: 0, peekReady: false, peekUsed: false };
+  s = advancePeekProgress(s, true);
+  s = advancePeekProgress(s, true);
+  assert.equal(canUsePeek(s), false);
+  s = advancePeekProgress(s, true);
+  assert.equal(s.cleanMatches, 3);
+  assert.equal(canUsePeek(s), true);
+  s = { ...s, peekReady: false, peekUsed: true };
+  s = advancePeekProgress(s, false);
+  s = advancePeekProgress(s, true);
+  s = advancePeekProgress(s, true);
+  s = advancePeekProgress(s, true);
+  assert.equal(canUsePeek(s), false, 'cannot earn a second peek');
+  assert.equal(MEMORY.PEEK_SEC, 1);
+});
+
+test('V3 memoryMatch audit: rapid double-flip closes synchronously before a third card', () => {
+  assert.equal(canFlipCard({ phase: 'play', pickedCount: 0, cardState: 'down', peeking: false }), true);
+  assert.equal(canFlipCard({ phase: 'play', pickedCount: 1, cardState: 'down', peeking: false }), true);
+  assert.equal(canFlipCard({ phase: 'play', pickedCount: 2, cardState: 'down', peeking: false }), false);
+  assert.equal(canFlipCard({ phase: 'play', pickedCount: 0, cardState: 'up', peeking: false }), false);
+  assert.equal(canFlipCard({ phase: 'play', pickedCount: 0, cardState: 'down', peeking: true }), false);
+});
+
+test('V3 memoryMatch audit: 6×4 board fits 320×568 canvas even with 130% DOM UI', () => {
+  const ext = gridExtents(MEMORY.BIG);
+  const halfH = Math.tan((45 / 2) * Math.PI / 180) * 10;
+  const halfW = halfH * (320 / 568);
+  assert.ok(ext.width / 2 < halfW, `${ext.width} world-width fits ${halfW * 2}`);
+  assert.ok(ext.height < halfH * 2, `${ext.height} world-height fits ${halfH * 2}`);
+  assert.equal(MEMORY.BIG.cols * MEMORY.BIG.rows, 24);
 });

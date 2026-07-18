@@ -26,6 +26,16 @@ export const GUARD = Object.freeze({
   DOUBLE_CHANCE_END: 0.35,
   /** Mole pop-up / duck-down animation time (s) on top of the up-time. */
   POP_SEC: 0.16,
+  /** V3 §C10.2 mole king: after every 20 regular bonks, three taps. */
+  KING_EVERY_BONKS: 20,
+  KING_TAPS: 3,
+  KING_POINTS: 8,
+  KING_COIN_DROP: 2,
+  /** Two raw score points use the game's divisor-3 coin row. */
+  KING_SCORE_PER_COIN: 3,
+  /** Reject duplicate pointer/tap delivery and throttle empty-mound spam. */
+  TAP_DEBOUNCE_SEC: 0.075,
+  WHIFF_COOLDOWN_SEC: 0.18,
 });
 
 /**
@@ -111,4 +121,49 @@ export function applyWhiff(s) {
  */
 export function isRoundOver(s, duration = GUARD.DURATION_SEC) {
   return s.elapsed >= duration || s.carrots <= 0;
+}
+
+/**
+ * A king is queued after each block of 20 completed regular bonks.
+ * @param {number} bonks regular bonks this run
+ * @param {number} kingsSpawned
+ * @returns {boolean}
+ */
+export function isKingDue(bonks, kingsSpawned) {
+  return bonks >= (kingsSpawned + 1) * GUARD.KING_EVERY_BONKS;
+}
+
+/**
+ * Resolve one accepted king tap. Only tap three completes the bonk and pays
+ * +8 plus score equivalent to two coins (2 × divisor 3).
+ * @param {{score:number, combo:number, hp:number}} state
+ * @returns {{score:number, combo:number, hp:number, complete:boolean, bonus:number, gained:number}}
+ */
+export function applyKingTap(state) {
+  const hp = Math.max(0, state.hp - 1);
+  if (hp > 0) {
+    return { ...state, hp, complete: false, bonus: 0, gained: 0 };
+  }
+  const combo = state.combo + 1;
+  const bonus = comboBonus(combo);
+  const gained = GUARD.KING_POINTS + GUARD.KING_COIN_DROP * GUARD.KING_SCORE_PER_COIN + bonus;
+  return {
+    score: state.score + gained,
+    combo,
+    hp: 0,
+    complete: true,
+    bonus,
+    gained,
+  };
+}
+
+/**
+ * Shared debounce audit surface for simultaneous taps and whiff spam.
+ * @param {number} sinceLastSec
+ * @param {number} cooldownSec
+ * @returns {boolean}
+ */
+export function acceptsTapAfter(sinceLastSec, cooldownSec = GUARD.TAP_DEBOUNCE_SEC) {
+  return sinceLastSec === Infinity ||
+    (Number.isFinite(sinceLastSec) && sinceLastSec >= cooldownSec);
 }

@@ -7,6 +7,7 @@
 
 import * as THREE from 'three';
 import { UI_COLORS } from '../../data/constants.js';
+import { t } from '../../data/strings.js';
 import { tween, easings } from '../../gfx/tween.js';
 import { createParticles } from '../../gfx/particles.js';
 import { createGooby } from '../../character/gooby.js';
@@ -17,14 +18,16 @@ import {
   CATCH,
   GOOD_FOODS,
   JUNK_FOODS,
-  fallSpeedAt,
   spawnIntervalAt,
   rollItem,
-  applyCatch,
+  goldenSpawnAt,
+  itemFallSpeed,
+  spawnXForRoll,
+  basketCatchesX,
+  applyCatchState,
 } from './carrotCatch.logic.js';
 
 /** Basket catch geometry (world units at the z=0 play plane). */
-const BASKET_HALF_WIDTH = 0.62;
 const BASKET_Y = -2.55;
 const ITEM_SIZE = 0.52;
 
@@ -111,6 +114,11 @@ export default {
     this.minCoins = Number.isFinite(ctx.params?.minCoins) ? ctx.params.minCoins : null;
     this.phase = 'play'; // 'play' | 'ending' | 'done'
     this.score = 0;
+    this.combo = 0;
+    this.goldenAt = goldenSpawnAt(ctx.rng, this.durationSec);
+    this.goldenSpawned = false;
+    this.goldenCaught = false;
+    this.rottenCaught = 0;
     this.spawnT = 0.6; // small head start before the first item
     this.dizzyT = 0;
     this.endT = 0;
@@ -225,10 +233,32 @@ export default {
 
   spawnItem(elapsed) {
     const { rng } = this.ctx;
-    const roll = rollItem(rng, elapsed);
+    const roll = !this.goldenSpawned && elapsed >= this.goldenAt
+      ? { kind: 'golden', key: 'carrot', value: CATCH.GOLDEN_POINTS }
+      : rollItem(rng, elapsed);
+    if (roll.kind === 'golden') this.goldenSpawned = true;
     const holder = this.takeItem(roll.key);
+    const special = roll.kind === 'golden' || roll.kind === 'rotten';
+    if (special) {
+      const tint = new THREE.Color(roll.kind === 'golden' ? '#FFD54F' : '#719447');
+      holder.traverse((obj) => {
+        if (!obj.material) return;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        const cloned = mats.map((mat) => {
+          const next = mat.clone();
+          next.color?.lerp(tint, 0.75);
+          if (roll.kind === 'golden' && next.emissive) {
+            next.emissive.set('#8A5B00');
+            next.emissiveIntensity = 0.45;
+          }
+          return next;
+        });
+        obj.material = Array.isArray(obj.material) ? cloned : cloned[0];
+      });
+      holder.scale.multiplyScalar(roll.kind === 'golden' ? 1.28 : 1.08);
+    }
     holder.position.set(
-      (rng() * 2 - 1) * (this.halfW - 0.5),
+      spawnXForRoll(rng(), this.halfW),
       this.halfH + 0.7,
       0
     );
@@ -242,6 +272,7 @@ export default {
       value: roll.value,
       spinX: (rng() - 0.5) * 2.4,
       spinZ: (rng() - 0.5) * 1.6,
+      special,
       active: true,
     });
   },
@@ -250,29 +281,44 @@ export default {
     item.active = false;
     item.holder.visible = false;
     this.ctx.scene.remove(item.holder);
+    if (item.special) {
+      item.holder.traverse((obj) => {
+        if (!obj.material) return;
+        for (const mat of Array.isArray(obj.material) ? obj.material : [obj.material]) mat.dispose?.();
+      });
+      return;
+    }
     if (!this.pool.has(item.key)) this.pool.set(item.key, []);
     this.pool.get(item.key).push(item.holder);
   },
 
-  addScore(value, pos) {
-    const next = applyCatch(this.score, value);
-    const delta = next - this.score;
-    this.score = next;
-    if (delta !== 0) this.ctx.onScore(delta);
+  addItemScore(item, pos) {
+    const next = applyCatchState(
+      { score: this.score, combo: this.combo },
+      { kind: item.kind, value: item.value }
+    );
+    this.score = next.score;
+    this.combo = next.combo;
+    if (next.delta !== 0) this.ctx.onScore(next.delta);
     this.floats.spawn(
-      value > 0 ? `+${value}` : `${value}`,
+      item.value > 0 ? `+${item.value}` : `${item.value}`,
       pos,
-      value > 0 ? '#2E8B57' : '#D64570'
+      item.value > 0 ? '#2E8B57' : '#D64570'
     );
   },
 
   catchItem(item) {
     const pos = item.holder.position.clone();
     this.despawnItem(item);
-    if (item.kind === 'good') {
-      this.addScore(item.value, pos);
+    this.addItemScore(item, pos);
+    if (item.kind === 'good' || item.kind === 'golden') {
       this.ctx.audio.play('catch.good');
       this.particles.emit('sparkles', pos, { count: 6 });
+      if (item.kind === 'golden') {
+        this.goldenCaught = true;
+        this.ctx.hud.banner(t('mg.catch.golden'));
+        this.particles.emit('confetti', pos, { count: 12 });
+      }
       const basket = this.basket;
       tween({
         from: 1.25, to: 1, duration: 0.22, ease: easings.easeOutBack,
@@ -283,9 +329,12 @@ export default {
         this.particles.emit('hearts', this.gooby.group.position.clone().add(new THREE.Vector3(0, 1, 0)), { count: 3 });
       }
     } else {
-      this.addScore(item.value, pos);
       this.ctx.audio.play('catch.bad');
       this.dizzyT = CATCH.DIZZY_SEC;
+      if (item.kind === 'rotten') {
+        this.rottenCaught += 1;
+        this.ctx.hud.banner(t('mg.catch.rotten'));
+      }
       this.gooby.play('dizzy', { speed: 2.0 / CATCH.DIZZY_SEC }); // 2 s clip squeezed into the 0.5 s dizzy
       this.particles.emit('dizzyStars', this.basket.position.clone().add(new THREE.Vector3(0, 0.8, 0)));
     }
@@ -303,13 +352,13 @@ export default {
     }
     let best = null;
     for (const item of this.items) {
-      if (!item.active || item.kind !== 'good') continue;
+      if (!item.active || (item.kind !== 'good' && item.kind !== 'golden')) continue;
       const y = item.holder.position.y;
       if (y > BASKET_Y + 0.1 && (best == null || y < best.holder.position.y)) best = item;
     }
     let target = best ? best.holder.position.x : 0;
     for (const item of this.items) {
-      if (!item.active || item.kind !== 'junk') continue;
+      if (!item.active || (item.kind !== 'junk' && item.kind !== 'rotten')) continue;
       const p = item.holder.position;
       if (rng() < 0.55 && Math.abs(p.x - target) < 0.5 && p.y < BASKET_Y + 1.6) {
         target += p.x > target ? -0.9 : 0.9; // usually (not always) dodge junk
@@ -363,18 +412,17 @@ export default {
     }
 
     // falling items: gentle spin + §C6.1 speed ramp; catch at the basket band
-    const speed = fallSpeedAt(elapsed);
     for (const item of this.items) {
       if (!item.active) continue;
       const h = item.holder;
       const prevY = h.position.y;
-      h.position.y -= speed * dt;
+      h.position.y -= itemFallSpeed(elapsed, item.kind) * dt;
       h.rotation.x += item.spinX * dt;
       h.rotation.z += item.spinZ * dt;
       if (
         prevY > BASKET_Y + 0.15 &&
         h.position.y <= BASKET_Y + 0.15 &&
-        Math.abs(h.position.x - this.basketX) <= BASKET_HALF_WIDTH
+        basketCatchesX(h.position.x, this.basketX)
       ) {
         this.catchItem(item);
         continue;
@@ -389,7 +437,12 @@ export default {
       this.gooby.setEmotion('ecstatic');
       this.gooby.play('happyBounce');
       this.particles.emit('confetti', this.gooby.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)), { count: 16 });
-      if (this.autoplay) console.log(`[carrotCatch] autoplay run ended — score ${this.score}`);
+      if (this.autoplay) {
+        console.log(
+          `[carrotCatch] autoplay run ended — score ${this.score} ` +
+          `golden=${this.goldenCaught} rotten=${this.rottenCaught}`
+        );
+      }
     }
   },
 

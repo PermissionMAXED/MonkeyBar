@@ -21,8 +21,15 @@ export const MEMORY = Object.freeze({
   SMALL: Object.freeze({ cols: 4, rows: 4, pairs: 8 }),
   /** Big 6×4 layout: 12 pairs at level ≥6 (§C6.1/§C1.5). Portrait: 4 wide × 6 tall. */
   BIG: Object.freeze({ cols: 4, rows: 6, pairs: 12 }),
+  CARD_W: 0.82,
+  CARD_H: 1,
+  SPACING_X: 0.93,
+  SPACING_Y: 1.12,
   /** Unmatched pair stays revealed this long before flipping back (s). */
   REVEAL_SEC: 0.85,
+  /** V3 §C10.2: one 1 s peek, earned by three clean matches. */
+  PEEK_EARN_MATCHES: 3,
+  PEEK_SEC: 1,
 });
 
 /**
@@ -94,4 +101,49 @@ export function memoryScore(misses, elapsed, layout) {
  */
 export function isMatch(a, b) {
   return a === b;
+}
+
+/**
+ * Advance the clean-match streak that earns the one-shot peek.
+ * @param {{cleanMatches:number, peekReady:boolean, peekUsed:boolean}} state
+ * @param {boolean} matched whether the just-resolved pair matched
+ * @returns {{cleanMatches:number, peekReady:boolean, peekUsed:boolean}}
+ */
+export function advancePeekProgress(state, matched) {
+  const cleanMatches = matched ? state.cleanMatches + 1 : 0;
+  return {
+    cleanMatches,
+    peekReady: state.peekReady ||
+      (!state.peekUsed && cleanMatches >= MEMORY.PEEK_EARN_MATCHES),
+    peekUsed: state.peekUsed,
+  };
+}
+
+/** One peek per round, only after it has been earned. */
+export function canUsePeek(state) {
+  return state.peekReady && !state.peekUsed;
+}
+
+/**
+ * Synchronous flip admission closes the rapid double-flip race: once two
+ * unresolved cards are selected, no third card can enter before resolution.
+ * @param {{phase:string, pickedCount:number, cardState:string, peeking:boolean}} state
+ * @returns {boolean}
+ */
+export function canFlipCard(state) {
+  return state.phase === 'play' &&
+    !state.peeking &&
+    state.pickedCount < 2 &&
+    state.cardState === 'down';
+}
+
+/**
+ * Centered grid extents for narrow-viewport layout audits.
+ * @param {{cols:number,rows:number}} layout
+ */
+export function gridExtents(layout) {
+  return {
+    width: (layout.cols - 1) * MEMORY.SPACING_X + MEMORY.CARD_W,
+    height: (layout.rows - 1) * MEMORY.SPACING_Y + MEMORY.CARD_H,
+  };
 }

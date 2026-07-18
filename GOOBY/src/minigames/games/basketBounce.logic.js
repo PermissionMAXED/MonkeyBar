@@ -7,7 +7,7 @@
 // Binding §C6.1 #7 rules implemented here:
 //   · flick-to-throw an orange ball into a hoop (torus + backboard)
 //   · ballistic arc + rim/backboard bounce, physics-lite
-//   · hoop slides horizontally after 5 baskets; throw distance ramps
+//   · V3: hoop slides horizontally after 10 baskets; throw distance ramps
 //   · basket +3, bank shot (backboard first) +2 extra, swish streak +2
 //   · 60 s round
 
@@ -20,10 +20,12 @@ export const BASKET = Object.freeze({
   POINTS_SWISH_EXTRA: 2,
   /** Swish bonus applies from this many consecutive swishes on ("streak"). */
   SWISH_STREAK_FROM: 2,
-  /** Hoop slides horizontally after this many total baskets (§C6.1 #7). */
-  SLIDE_AFTER_BASKETS: 5,
-  SLIDE_AMPLITUDE: 1.15,
+  /** V3 §C10.2: moving phase starts after 10 baskets, exactly ±1 m. */
+  SLIDE_AFTER_BASKETS: 10,
+  SLIDE_AMPLITUDE: 1,
   SLIDE_PERIOD_SEC: 3.6,
+  /** Swishes during the moving-hoop phase score ×2. */
+  MOVING_SWISH_MULT: 2,
   /** Throw distance ramp: hoop starts DIST_START away, +DIST_PER_BASKET per
    *  basket up to DIST_MAX (§C6.1 #7 "throw distance ramps"). */
   DIST_START: 5.2,
@@ -58,6 +60,8 @@ export const BASKET = Object.freeze({
   /** Sim step + timeout for the pure predictor. */
   SIM_DT: 1 / 120,
   SIM_TIMEOUT_SEC: 5,
+  /** Max ball travel per collision sample (fast-throw rim tunneling audit). */
+  MAX_SWEEP_STEP_M: 0.1,
   /** Ball considered dead below this y (fell past the floor). */
   FLOOR_Y: 0.0,
 });
@@ -183,6 +187,31 @@ export function stepBall(ball, dt, hoop, tune = BASKET) {
 }
 
 /**
+ * Frame-level swept integrator: subdivides by actual ball travel, so even a
+ * fast throw on a hitched frame cannot tunnel through the thin torus rim.
+ * @param {{pos: {x,y,z}, vel: {x,y,z}, touchedRim: boolean, touchedBoard: boolean}} ball
+ * @param {number} dt seconds
+ * @param {{x:number,z:number}} hoop
+ * @param {object} [tune]
+ * @returns {{rim:boolean,board:boolean,basket:boolean,dead:boolean}}
+ */
+export function stepBallSwept(ball, dt, hoop, tune = BASKET) {
+  const travel = Math.hypot(ball.vel.x, ball.vel.y, ball.vel.z) * Math.max(0, dt);
+  const steps = Math.max(1, Math.ceil(travel / tune.MAX_SWEEP_STEP_M));
+  const h = dt / steps;
+  const total = { rim: false, board: false, basket: false, dead: false };
+  for (let i = 0; i < steps; i += 1) {
+    const ev = stepBall(ball, h, hoop, tune);
+    total.rim ||= ev.rim;
+    total.board ||= ev.board;
+    total.basket ||= ev.basket;
+    total.dead ||= ev.dead;
+    if (ev.basket || ev.dead) break;
+  }
+  return total;
+}
+
+/**
  * Distance + outward normal from the ball center to the rim ring circle.
  * @param {{x,y,z}} p ball center
  * @param {{x: number, z: number}} hoop ring center (y = RIM_Y)
@@ -227,7 +256,7 @@ export function simulateShot(vel, hoop, tune = BASKET) {
   };
   let t = 0;
   while (t < tune.SIM_TIMEOUT_SEC) {
-    const ev = stepBall(ball, tune.SIM_DT, hoop, tune);
+    const ev = stepBallSwept(ball, tune.SIM_DT, hoop, tune);
     t += tune.SIM_DT;
     if (ev.basket) {
       return {
@@ -252,7 +281,7 @@ export function simulateShot(vel, hoop, tune = BASKET) {
  * @param {object} [tune]
  * @returns {{points: number, swishStreak: number}} new streak included
  */
-export function scoreShot(shot, swishStreak, tune = BASKET) {
+export function scoreShot(shot, swishStreak, moving = false, tune = BASKET) {
   if (!shot.basket) return { points: 0, swishStreak: 0 };
   let points = tune.POINTS_BASKET;
   if (shot.bank) points += tune.POINTS_BANK_EXTRA;
@@ -261,7 +290,13 @@ export function scoreShot(shot, swishStreak, tune = BASKET) {
     streak = swishStreak + 1;
     if (streak >= tune.SWISH_STREAK_FROM) points += tune.POINTS_SWISH_EXTRA;
   }
+  if (moving && shot.swish) points *= tune.MOVING_SWISH_MULT;
   return { points, swishStreak: streak };
+}
+
+/** Moving phase starts on basket ten and later. */
+export function isMovingHoop(basketsMade, tune = BASKET) {
+  return basketsMade >= tune.SLIDE_AFTER_BASKETS;
 }
 
 /**

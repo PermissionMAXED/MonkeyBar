@@ -22,6 +22,11 @@ import {
   sweepHitsObstacle,
   passableLanes,
   generateRow,
+  rollMysteryPower,
+  activateMysteryPower,
+  mysteryCoinPoints,
+  magnetCollects,
+  resolveRunnerHit,
 } from './runner.logic.js';
 
 const CORRIDOR_LEN = 104; //  scenery conveyor loop length (m)
@@ -109,6 +114,8 @@ export default {
       coinPoints: 0,
       hits: 0,
       invulnT: 0,
+      pu: { magnetT: 0, x2T: 0, shield: false },
+      powerups: 0,
       shakeT: 0,
       shakeAmp: 0,
       // player
@@ -120,6 +127,8 @@ export default {
       scenery: [], //     {obj, z0} conveyor items
       obstacles: [], //   {kind, lane, z, obj, rowId}
       coinsArr: [], //    {lane, z, y, obj, taken}
+      mysteryArr: [], //  {lane,z,obj}
+      nextMysteryAt: RUNNER.MYSTERY_FIRST_M,
       knocked: [], //     {obj, vel, spin, t} stumble debris
       floaters: [], //    {sprite, t, life}
       distSinceRow: 0,
@@ -199,6 +208,18 @@ export default {
     S.gooby.setEmotion('happy');
     S.gooby.play('happyBounce', { loop: true, speed: 1.7 });
     scene.add(S.gooby.group);
+    S.shieldVis = new THREE.Mesh(
+      new THREE.SphereGeometry(0.72, 16, 12),
+      new THREE.MeshBasicMaterial({
+        color: 0x64b5f6,
+        transparent: true,
+        opacity: 0.24,
+        depthWrite: false,
+        wireframe: true,
+      })
+    );
+    S.shieldVis.visible = false;
+    scene.add(S.shieldVis);
 
     ctx.hud.setScore(0);
     ctx.hud.setTime(0);
@@ -301,6 +322,24 @@ export default {
     }
   },
 
+  spawnMysteryBox() {
+    const S = this.S;
+    const lane = S.lane;
+    const obj = ground(fitWidth(S.ctx.assets.getModel('car-kit/box'), 0.72));
+    const mark = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: floatTexture('?', '#FFD166'),
+      transparent: true,
+      depthWrite: false,
+    }));
+    mark.scale.set(0.7, 0.35, 1);
+    mark.position.y = 0.75;
+    obj.add(mark);
+    obj.position.set(RUNNER.LANE_X[lane], 0, SPAWN_Z);
+    S.ctx.scene.add(obj);
+    S.mysteryArr.push({ lane, z: SPAWN_Z, obj });
+    S.nextMysteryAt += RUNNER.MYSTERY_GAP_M;
+  },
+
   /** Floating "+N" text at a world position (dt-driven, pause-safe). */
   floatText(text, color, pos) {
     const S = this.S;
@@ -321,9 +360,15 @@ export default {
   // ------------------------------------------------------------- collisions
   onHit(ob) {
     const S = this.S;
-    S.hits += 1;
-    S.invulnT = RUNNER.STUMBLE_INVULN_SEC;
-    S.coinStreak = 0; // §C6.1 #6: stumble loses the combo/coin multiplier
+    const hit = resolveRunnerHit({
+      hits: S.hits,
+      shield: S.pu.shield,
+      invulnT: S.invulnT,
+    });
+    if (hit.outcome === 'ignored') return;
+    S.hits = hit.hits;
+    S.pu.shield = hit.shield;
+    S.invulnT = hit.invulnT;
     // knock the obstacle aside (juice)
     S.obstacles.splice(S.obstacles.indexOf(ob), 1);
     S.knocked.push({
@@ -332,7 +377,14 @@ export default {
       spin: (S.ctx.rng() - 0.5) * 14,
       t: 0,
     });
-    if (S.hits >= RUNNER.MAX_HITS) {
+    if (hit.outcome === 'shielded') {
+      S.ctx.audio.play('hopper.shieldPop');
+      S.ctx.hud.banner(t('mg.runner.shieldSaved'));
+      S.particles.emit('sparkles', S.gooby.group.position.clone().setY(1), { count: 10 });
+      return;
+    }
+    S.coinStreak = 0; // §C6.1 #6: stumble loses the combo/coin multiplier
+    if (hit.outcome === 'wipeout') {
       // wipe-out: short fall sequence, then results
       S.ending = 1.3;
       S.ctx.audio.play('crash');
@@ -357,6 +409,13 @@ export default {
     for (const ob of S.obstacles) {
       if (ob.z > -1 || ob.rowId <= S.auto.handledRow) continue;
       if (!row || ob.z > row.z) row = ob;
+    }
+    const box = S.mysteryArr
+      .filter((p) => p.z < -0.5)
+      .sort((a, b) => b.z - a.z)[0];
+    if (box && box.z > -speed * 1.5 && (!row || box.z > row.z + 2)) {
+      if (box.lane !== S.lane) this.changeLane(Math.sign(box.lane - S.lane));
+      return;
     }
     if (!row) return;
     const reactDist = speed * 0.95;
@@ -393,9 +452,17 @@ export default {
     const speed = S.ending ? 0 : speedAt(elapsed);
     S.meters += speed * dt;
     S.ctx.hud.setTime(elapsed);
+    S.pu.magnetT = Math.max(0, S.pu.magnetT - dt);
+    S.pu.x2T = Math.max(0, S.pu.x2T - dt);
+    S.shieldVis.visible = S.pu.shield;
+    if (S.shieldVis.visible) {
+      S.shieldVis.position.copy(S.gooby.group.position).add(new THREE.Vector3(0, 0.75, 0));
+      S.shieldVis.rotation.y += dt * 1.5;
+    }
 
     // --- spawn obstacle rows by traveled distance ---
     if (!S.ending) {
+      if (S.meters >= S.nextMysteryAt) this.spawnMysteryBox();
       S.distSinceRow += speed * dt;
       if (!S.pendingRow) {
         S.pendingRow = generateRow(S.ctx.rng, elapsed, S.recentRows);
@@ -503,8 +570,14 @@ export default {
         S.coinsArr.splice(i, 1);
         continue;
       }
-      if (!S.ending && !c.taken && Math.abs(c.z) < 0.55 && c.lane === laneNow &&
-          Math.abs(y + 0.55 - c.y) < 0.8) {
+      const magnet = magnetCollects(
+        { x: RUNNER.LANE_X[c.lane], y: c.y, z: c.z },
+        { x: S.laneX, y: y + 0.55, z: 0 },
+        S.pu.magnetT > 0
+      );
+      if (!S.ending && !c.taken &&
+          (magnet || (Math.abs(c.z) < 0.55 && c.lane === laneNow &&
+            Math.abs(y + 0.55 - c.y) < 0.8))) {
         c.taken = true;
         S.ctx.scene.remove(c.obj);
         S.coinsArr.splice(i, 1);
@@ -512,14 +585,38 @@ export default {
         const prevMult = comboMultiplier(S.coinStreak);
         S.coinStreak += 1;
         const mult = comboMultiplier(S.coinStreak);
-        S.coinPoints += RUNNER.COIN_SCORE_BONUS * mult;
+        const points = mysteryCoinPoints(mult, S.pu.x2T > 0);
+        S.coinPoints += points;
         S.ctx.audio.play('coin.get');
-        this.floatText(`+${RUNNER.COIN_SCORE_BONUS * mult}`, '#FFD166', c.obj.position.clone().setY(c.y + 0.5));
+        this.floatText(`+${points}`, '#FFD166', c.obj.position.clone().setY(c.y + 0.5));
         S.particles.emit('sparkles', c.obj.position, { count: 4 });
         if (mult > prevMult) {
           S.ctx.hud.banner(t('mg.runner.combo', { mult }));
           S.ctx.audio.play('combo.up');
         }
+      }
+    }
+
+    // --- V3 mystery boxes: random Magnet / ×2 / stumble shield ---
+    for (let i = S.mysteryArr.length - 1; i >= 0; i -= 1) {
+      const box = S.mysteryArr[i];
+      box.z += speed * dt;
+      box.obj.position.z = box.z;
+      box.obj.rotation.y += dt * 2;
+      if (box.z > DESPAWN_Z) {
+        S.ctx.scene.remove(box.obj);
+        S.mysteryArr.splice(i, 1);
+        continue;
+      }
+      if (!S.ending && Math.abs(box.z) < 0.7 && box.lane === laneNow && y < 0.8) {
+        const kind = rollMysteryPower(S.ctx.rng);
+        S.pu = activateMysteryPower(S.pu, kind);
+        S.powerups += 1;
+        S.ctx.audio.play(kind === 'shield' ? 'hopper.shield' : 'hopper.star');
+        S.ctx.hud.banner(t(`mg.runner.${kind}`));
+        S.particles.emit('confetti', box.obj.position.clone().setY(1), { count: 9 });
+        S.ctx.scene.remove(box.obj);
+        S.mysteryArr.splice(i, 1);
       }
     }
 
@@ -575,7 +672,11 @@ export default {
       S.ending -= dt;
       if (S.ending <= 0) {
         S.ending = 0;
-        if (S.autoplay) console.log(`[autoplay] runner score=${score} coins=${S.coins}`);
+        if (S.autoplay) {
+          console.log(
+            `[autoplay] runner score=${score} coins=${S.coins} powerups=${S.powerups}`
+          );
+        }
         S.ctx.onEnd({ score });
       }
     }

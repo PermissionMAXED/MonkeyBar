@@ -65,6 +65,14 @@ export const RUNNER = Object.freeze({
   STUMBLE_INVULN_SEC: 1.6,
   /** Max hits — first = stumble, second = end (§C6.1 #6). */
   MAX_HITS: 2,
+  /** V3 §C10.2 mystery-box powerups (shoppingSurf-aligned set). */
+  MYSTERY_POWERS: Object.freeze({
+    magnet: Object.freeze({ sec: 4, radius: 3 }),
+    x2: Object.freeze({ sec: 6 }),
+    shield: Object.freeze({}),
+  }),
+  MYSTERY_FIRST_M: 45,
+  MYSTERY_GAP_M: 70,
   /**
    * Anti-tunneling (F4 P2-4): largest obstacle advance between collision
    * samples (m). The smallest full collision window is a cone/barrier:
@@ -200,6 +208,70 @@ export function sweepHitsObstacle(player, obstacle, dz, tune = RUNNER) {
     }
   }
   return false;
+}
+
+/** Seeded mystery-box roll: Magnet / ×2 / stumble shield. */
+export function rollMysteryPower(rng) {
+  const kinds = /** @type {const} */ (['magnet', 'x2', 'shield']);
+  return kinds[Math.min(kinds.length - 1, Math.floor(rng() * kinds.length))];
+}
+
+/**
+ * Activate one mystery powerup without disturbing the other active effects.
+ * @param {{magnetT:number, x2T:number, shield:boolean}} state
+ * @param {'magnet'|'x2'|'shield'} kind
+ * @param {object} [tune]
+ * @returns {{magnetT:number, x2T:number, shield:boolean}}
+ */
+export function activateMysteryPower(state, kind, tune = RUNNER) {
+  if (kind === 'magnet') return { ...state, magnetT: tune.MYSTERY_POWERS.magnet.sec };
+  if (kind === 'x2') return { ...state, x2T: tune.MYSTERY_POWERS.x2.sec };
+  return { ...state, shield: true };
+}
+
+/** ×2 doubles each collected coin's existing combo-scaled score value. */
+export function mysteryCoinPoints(comboMult, x2Active, tune = RUNNER) {
+  return tune.COIN_SCORE_BONUS * comboMult * (x2Active ? 2 : 1);
+}
+
+/**
+ * Magnet pickup radius, aligned with shoppingSurf's 3 m magnet.
+ * @param {{x:number,y:number,z:number}} coin
+ * @param {{x:number,y:number,z:number}} player
+ * @param {boolean} active
+ * @param {object} [tune]
+ * @returns {boolean}
+ */
+export function magnetCollects(coin, player, active, tune = RUNNER) {
+  return active &&
+    Math.hypot(coin.x - player.x, coin.y - player.y, coin.z - player.z) <=
+      tune.MYSTERY_POWERS.magnet.radius;
+}
+
+/**
+ * Resolve an obstacle hit atomically. Invulnerability rejects a second hit;
+ * a stumble shield consumes itself and grants the same safety window.
+ * @param {{hits:number, shield:boolean, invulnT:number}} state
+ * @param {object} [tune]
+ * @returns {{hits:number, shield:boolean, invulnT:number, outcome:'ignored'|'shielded'|'stumble'|'wipeout'}}
+ */
+export function resolveRunnerHit(state, tune = RUNNER) {
+  if (state.invulnT > 0) return { ...state, outcome: 'ignored' };
+  if (state.shield) {
+    return {
+      hits: state.hits,
+      shield: false,
+      invulnT: tune.STUMBLE_INVULN_SEC,
+      outcome: 'shielded',
+    };
+  }
+  const hits = state.hits + 1;
+  return {
+    hits,
+    shield: false,
+    invulnT: tune.STUMBLE_INVULN_SEC,
+    outcome: hits >= tune.MAX_HITS ? 'wipeout' : 'stumble',
+  };
 }
 
 // ---------------------------------------------------------------------------

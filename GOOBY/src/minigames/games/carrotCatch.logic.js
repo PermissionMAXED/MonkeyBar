@@ -18,6 +18,18 @@ export const CATCH = Object.freeze({
   /** Junk catch: −2 points and 0.5 s dizzy (§C6.1). */
   JUNK_PENALTY: -2,
   DIZZY_SEC: 0.5,
+  /** V3 §C10.2: one +10 golden carrot per run, falling 1.5× speed. */
+  GOLDEN_POINTS: 10,
+  GOLDEN_SPEED_MULT: 1.5,
+  GOLDEN_WINDOW_START_SEC: 15,
+  GOLDEN_WINDOW_END_SEC: 35,
+  /** Leave enough flight time for the golden carrot in the 30 s tutorial run. */
+  GOLDEN_FALL_LEAD_SEC: 5,
+  /** Rotten carrots share the junk budget and break the good-catch streak. */
+  ROTTEN_RATIO_OF_JUNK: 0.35,
+  /** Catch/spawn geometry stays in world space and is independent of UI scale. */
+  BASKET_HALF_WIDTH: 0.62,
+  SPAWN_EDGE_PAD: 0.5,
   /** G8 tuning: base fall speed (world units/s) and spawn cadence. */
   FALL_BASE_SPEED: 2.3,
   SPAWN_BASE_SEC: 1.05,
@@ -100,6 +112,9 @@ export function spawnIntervalAt(elapsed, duration = CATCH.DURATION_SEC) {
  */
 export function rollItem(rng, elapsed) {
   if (rng() < junkRatioAt(elapsed)) {
+    if (rng() < CATCH.ROTTEN_RATIO_OF_JUNK) {
+      return { kind: 'rotten', key: 'carrot', value: CATCH.JUNK_PENALTY };
+    }
     const key = JUNK_FOODS[Math.min(JUNK_FOODS.length - 1, Math.floor(rng() * JUNK_FOODS.length))];
     return { kind: 'junk', key, value: CATCH.JUNK_PENALTY };
   }
@@ -122,4 +137,67 @@ export function rollItem(rng, elapsed) {
  */
 export function applyCatch(score, value) {
   return Math.max(0, score + value);
+}
+
+/**
+ * Seed the guaranteed golden-carrot spawn inside the middle of the run.
+ * @param {() => number} rng
+ * @param {number} [duration] run length (the onboarding variant is 30 s)
+ * @returns {number} elapsed seconds
+ */
+export function goldenSpawnAt(rng, duration = CATCH.DURATION_SEC) {
+  const latest = Math.max(
+    0,
+    Math.min(CATCH.GOLDEN_WINDOW_END_SEC, duration - CATCH.GOLDEN_FALL_LEAD_SEC)
+  );
+  const earliest = Math.min(CATCH.GOLDEN_WINDOW_START_SEC, latest);
+  return earliest + rng() * (latest - earliest);
+}
+
+/**
+ * Per-kind falling speed. The one golden carrot falls exactly 1.5×.
+ * @param {number} elapsed
+ * @param {'good'|'junk'|'rotten'|'golden'} kind
+ * @returns {number}
+ */
+export function itemFallSpeed(elapsed, kind) {
+  return fallSpeedAt(elapsed) * (kind === 'golden' ? CATCH.GOLDEN_SPEED_MULT : 1);
+}
+
+/**
+ * Uniform edge-to-edge spawn mapping used by the runtime and bias audit.
+ * @param {number} roll rng sample 0..1
+ * @param {number} halfW visible world half-width
+ * @returns {number}
+ */
+export function spawnXForRoll(roll, halfW) {
+  const bound = Math.max(0, halfW - CATCH.SPAWN_EDGE_PAD);
+  return (Math.min(1, Math.max(0, roll)) * 2 - 1) * bound;
+}
+
+/**
+ * Basket hitbox audit surface. UI scale cannot affect this world-space test.
+ * @param {number} itemX
+ * @param {number} basketX
+ * @returns {boolean}
+ */
+export function basketCatchesX(itemX, basketX) {
+  return Math.abs(itemX - basketX) <= CATCH.BASKET_HALF_WIDTH + Number.EPSILON * 8;
+}
+
+/**
+ * Apply an item to score/streak state. Rotten carrots are the named V3
+ * streak-breaker; other junk also cannot extend a clean catch streak.
+ * @param {{score: number, combo: number}} state
+ * @param {{kind: 'good'|'junk'|'rotten'|'golden', value: number}} item
+ * @returns {{score: number, combo: number, delta: number}}
+ */
+export function applyCatchState(state, item) {
+  const score = applyCatch(state.score, item.value);
+  const good = item.kind === 'good' || item.kind === 'golden';
+  return {
+    score,
+    combo: good ? state.combo + 1 : 0,
+    delta: score - state.score,
+  };
 }

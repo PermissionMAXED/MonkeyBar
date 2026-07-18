@@ -20,6 +20,9 @@ import {
   stepPhysics,
   collides,
   rollGapCenter,
+  gustPhaseAt,
+  applyGustShift,
+  gatePoints,
 } from './bunnyHop.logic.js';
 
 const GOOBY_X = -0.85;
@@ -98,6 +101,7 @@ export default {
 
     this.phase = 'play'; // 'play' | 'crashed' | 'done'
     this.gates = 0;
+    this.gatesPassed = 0;
     this.y = 0.4;
     this.vy = 0.8;
     this.started = false; // gravity waits for the first hop
@@ -105,6 +109,9 @@ export default {
     this.autoT = 0;
     this.autoLapseGate = 15 + Math.floor(ctx.rng() * 21); // autoplay run length draw
     this.lastGapCenterY = undefined;
+    this.gustAppliedIndex = -1;
+    this.gusts = 0;
+    this.lastGustCue = '';
     this.celebrated = false;
 
     const camera = ctx.camera;
@@ -148,6 +155,31 @@ export default {
     const dir = new THREE.DirectionalLight(0xfff2dd, 0.95);
     dir.position.set(2, 5, 4);
     scene.add(dir);
+
+    // --- wind cue: three chunky arrows telegraph each vertical shove ---
+    this.windCue = new THREE.Group();
+    const windMat = new THREE.MeshBasicMaterial({
+      color: '#FFF6EC',
+      transparent: true,
+      opacity: 0.8,
+      depthWrite: false,
+    });
+    const shaftGeo = new THREE.BoxGeometry(0.08, 0.42, 0.03);
+    const tipGeo = new THREE.ConeGeometry(0.16, 0.28, 8);
+    this.ownedGeos.push(shaftGeo, tipGeo);
+    this.ownedMats.push(windMat);
+    for (let i = 0; i < 3; i += 1) {
+      const arrow = new THREE.Group();
+      const shaft = new THREE.Mesh(shaftGeo, windMat);
+      const tip = new THREE.Mesh(tipGeo, windMat);
+      tip.position.y = 0.32;
+      arrow.add(shaft, tip);
+      arrow.position.x = (i - 1) * 0.38;
+      this.windCue.add(arrow);
+    }
+    this.windCue.position.set(this.halfW - 0.75, 2.65, 0.2);
+    this.windCue.visible = false;
+    scene.add(this.windCue);
 
     // --- scrolling meadow props (flowers, bushes, grass) ---
     this.props = [];
@@ -220,7 +252,7 @@ export default {
   /** Build one pillar pair (bottom + top columns with a gap). */
   spawnPillar() {
     const { rng, scene, assets } = this.ctx;
-    const gapHeight = gapAtGate(this.gates);
+    const gapHeight = gapAtGate(this.gatesPassed);
     const gapCenterY = rollGapCenter(rng, gapHeight, this.lastGapCenterY);
     this.lastGapCenterY = gapCenterY;
     const group = new THREE.Group();
@@ -278,7 +310,7 @@ export default {
     // human-ish skill budget: a full attention lapse (no taps) after ~15–35
     // gates ends runs in the §C6 typical band (≈ 24 gates); edge clips on
     // fast dives supply the natural early deaths
-    if (this.gates >= this.autoLapseGate) return;
+    if (this.gatesPassed >= this.autoLapseGate) return;
     this.autoT -= dt;
     if (this.autoT > 0) return;
     this.autoT = 0.03;
@@ -295,7 +327,7 @@ export default {
     // (don't clip the top edge) and don't approach below the bottom edge
     const halfH = HOP.BODY_HALF_H * HOP.HITBOX_SCALE;
     const hitDist = HOP.PILLAR_HALF_W + HOP.BODY_HALF_W;
-    const speed = speedAtGate(this.gates);
+    const speed = speedAtGate(this.gatesPassed);
     const horizon = hitDist + speed * 0.45;
     let capOk = true;
     for (const p of this.pillars) {
@@ -350,6 +382,27 @@ export default {
 
     if (this.autoplay) this.autoplayTick(dt);
 
+    // V3 wind gust: telegraph, then one clamped 0.4-lane vertical shift.
+    const gust = gustPhaseAt(elapsed);
+    const cueKey = `${gust.phase}:${gust.index}`;
+    this.windCue.visible = gust.phase !== 'none';
+    if (this.windCue.visible) {
+      this.windCue.rotation.z = gust.direction > 0 ? 0 : Math.PI;
+      this.windCue.scale.setScalar(gust.phase === 'gust' ? 1.15 : 0.9 + Math.sin(elapsed * 12) * 0.08);
+    }
+    if (gust.phase === 'telegraph' && cueKey !== this.lastGustCue) {
+      ctx.hud.banner(t(gust.direction > 0 ? 'mg.hop.gustUpWarn' : 'mg.hop.gustDownWarn'));
+    }
+    if (gust.phase === 'gust' && gust.index !== this.gustAppliedIndex) {
+      this.y = applyGustShift(this.y, gust.direction);
+      this.gustAppliedIndex = gust.index;
+      this.gusts += 1;
+      ctx.audio.play('whoosh');
+      ctx.hud.banner(t('mg.hop.gust'));
+      this.particles.emit('sparkles', this.gooby.group.position.clone(), { count: 7 });
+    }
+    this.lastGustCue = cueKey;
+
     // physics (gravity + world scroll wait for the first hop, so neither the
     // countdown nor a hesitant player leaks free gates)
     if (this.started) {
@@ -368,7 +421,7 @@ export default {
     }
 
     // scroll world (§C6.1: speed +2%/gate)
-    const speed = speedAtGate(this.gates);
+    const speed = speedAtGate(this.gatesPassed);
     for (const p of this.pillars) {
       p.x -= speed * dt;
       p.group.position.x = p.x;
@@ -384,10 +437,12 @@ export default {
     for (const p of this.pillars) {
       if (!p.passed && p.x + HOP.PILLAR_HALF_W < GOOBY_X - HOP.BODY_HALF_W) {
         p.passed = true;
-        this.gates += 1;
-        ctx.onScore(1);
+        this.gatesPassed += 1;
+        const points = gatePoints(gust.phase === 'gust');
+        this.gates += points;
+        ctx.onScore(points);
         ctx.audio.play('hop.gate');
-        this.floats.spawn('+1', new THREE.Vector3(GOOBY_X + 0.5, this.y + 0.6, 0), '#2E8B57');
+        this.floats.spawn(`+${points}`, new THREE.Vector3(GOOBY_X + 0.5, this.y + 0.6, 0), '#2E8B57');
         this.particles.emit('sparkles', new THREE.Vector3(p.x, p.gapCenterY, 0), { count: 4 });
       }
       if (this.started && collides({ x: GOOBY_X, y: this.y }, p)) {

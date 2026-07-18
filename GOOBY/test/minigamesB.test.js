@@ -19,6 +19,11 @@ import {
   passableLanes,
   isPatternSurvivable,
   generateRow,
+  rollMysteryPower,
+  activateMysteryPower,
+  mysteryCoinPoints,
+  magnetCollects,
+  resolveRunnerHit,
 } from '../src/minigames/games/runner.logic.js';
 import {
   BASKET,
@@ -26,10 +31,12 @@ import {
   hoopDistance,
   flickToVelocity,
   stepBall,
+  stepBallSwept,
   ringDistance,
   simulateShot,
   scoreShot,
   solveBasketVelocity,
+  isMovingHoop,
 } from '../src/minigames/games/basketBounce.logic.js';
 import {
   PANCAKE,
@@ -39,6 +46,12 @@ import {
   resolveDrop,
   isTowerDone,
   towerScore,
+  initialWobbleState,
+  stepWobble,
+  dampWobble,
+  wobbleTopX,
+  wobbleLocalX,
+  isFallenExpired,
 } from '../src/minigames/games/pancakeTower.logic.js';
 import { COIN_TABLE } from '../src/data/constants.js';
 import { computeCoins } from '../src/data/minigames.js';
@@ -157,6 +170,50 @@ test('runner: overhead needs a grounded slide; cars always hit in-lane', () => {
   assert.equal(hitsObstacle({ lane: 0, y: 0, sliding: true }, car), true, 'car unslideable');
 });
 
+test('V3 runner audit: slide uses the squashed height, not standing height', () => {
+  const bar = { lane: 1, kind: 'overhead', z: 0 };
+  assert.ok(RUNNER.SLIDE_HEIGHT < RUNNER.OBSTACLES.overhead.gapY);
+  assert.ok(RUNNER.STAND_HEIGHT > RUNNER.OBSTACLES.overhead.gapY);
+  assert.equal(hitsObstacle({ lane: 1, y: 0, sliding: true }, bar), false);
+  assert.equal(hitsObstacle({ lane: 1, y: 0, sliding: false }, bar), true);
+});
+
+test('V3 runner: mystery box rolls Magnet 4 s / ×2 6 s / stumble shield', () => {
+  assert.equal(rollMysteryPower(() => 0), 'magnet');
+  assert.equal(rollMysteryPower(() => 0.5), 'x2');
+  assert.equal(rollMysteryPower(() => 0.999), 'shield');
+  let pu = { magnetT: 0, x2T: 0, shield: false };
+  pu = activateMysteryPower(pu, 'magnet');
+  assert.equal(pu.magnetT, 4);
+  pu = activateMysteryPower(pu, 'x2');
+  assert.equal(pu.x2T, 6);
+  pu = activateMysteryPower(pu, 'shield');
+  assert.equal(pu.shield, true);
+  assert.equal(mysteryCoinPoints(3, false), 6);
+  assert.equal(mysteryCoinPoints(3, true), 12);
+  assert.equal(magnetCollects({ x: 2.9, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, true), true);
+  assert.equal(magnetCollects({ x: 3.1, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, true), false);
+});
+
+test('V3 runner audit: stumble is atomic; shield and invulnerability prevent double-hit', () => {
+  const shielded = resolveRunnerHit({ hits: 0, shield: true, invulnT: 0 });
+  assert.deepEqual(shielded, {
+    hits: 0,
+    shield: false,
+    invulnT: RUNNER.STUMBLE_INVULN_SEC,
+    outcome: 'shielded',
+  });
+  const ignored = resolveRunnerHit(shielded);
+  assert.equal(ignored.outcome, 'ignored');
+  assert.equal(ignored.hits, 0);
+  const first = resolveRunnerHit({ hits: 0, shield: false, invulnT: 0 });
+  assert.equal(first.outcome, 'stumble');
+  assert.equal(resolveRunnerHit(first).hits, 1, 'same stumble window cannot add hit two');
+  const second = resolveRunnerHit({ ...first, invulnT: 0 });
+  assert.equal(second.outcome, 'wipeout');
+  assert.equal(second.hits, 2);
+});
+
 test('runner: maxLaneShift grows with gap and shrinks with speed', () => {
   assert.equal(maxLaneShift(0.5, 13), 0); // almost no room
   assert.ok(maxLaneShift(10, 6) >= 2); // huge gap, slow → full freedom
@@ -232,10 +289,14 @@ test('runner: typical round lands the §C6 coin target (~240 raw → ~16c)', () 
 // Basket Bounce (§C6.1 #7)
 // ===========================================================================
 
-test('basket: hoop stays put before 5 baskets, slides after (§C6.1 #7)', () => {
+test('V3 basket: hoop stays put before 10 baskets, then slides exactly ±1 m', () => {
   assert.equal(hoopSlideX(2.5, BASKET.SLIDE_AFTER_BASKETS - 1), 0);
   const x = hoopSlideX(BASKET.SLIDE_PERIOD_SEC / 4, BASKET.SLIDE_AFTER_BASKETS);
   assert.ok(Math.abs(x - BASKET.SLIDE_AMPLITUDE) < 1e-9, 'peaks at the amplitude');
+  assert.equal(BASKET.SLIDE_AFTER_BASKETS, 10);
+  assert.equal(BASKET.SLIDE_AMPLITUDE, 1);
+  assert.equal(isMovingHoop(9), false);
+  assert.equal(isMovingHoop(10), true);
 });
 
 test('basket: throw distance ramps with baskets and caps (§C6.1 #7)', () => {
@@ -306,6 +367,22 @@ test('basket: rim contact flags touchedRim and bounces outward', () => {
   assert.ok(ball.vel.x > -3, 'x velocity reflected/damped by the rim');
 });
 
+test('V3 basket audit: swept frame catches a fast throw that tunnels through the rim', () => {
+  const hoop = { x: 0, z: 0 };
+  const makeBall = () => ({
+    pos: { x: BASKET.RIM_R, y: BASKET.RIM_Y + 0.5, z: 0 },
+    vel: { x: 0, y: -20, z: 0 },
+    touchedRim: false,
+    touchedBoard: false,
+  });
+  const naive = makeBall();
+  assert.equal(stepBall(naive, 0.05, hoop).rim, false, 'single endpoint skips the torus');
+  const swept = makeBall();
+  const ev = stepBallSwept(swept, 0.05, hoop);
+  assert.equal(ev.rim, true, 'swept integrator resolves the crossing');
+  assert.equal(swept.touchedRim, true);
+});
+
 test('basket: scoring rules — +3 basket, +2 bank, swish streak +2 (§C6.1 #7)', () => {
   // plain basket
   assert.deepEqual(scoreShot({ basket: true, bank: false, swish: false }, 0), {
@@ -327,6 +404,11 @@ test('basket: scoring rules — +3 basket, +2 bank, swish streak +2 (§C6.1 #7)'
     points: 0,
     swishStreak: 0,
   });
+  assert.deepEqual(
+    scoreShot({ basket: true, bank: false, swish: true }, 1, true),
+    { points: 10, swishStreak: 2 },
+    'moving-hoop swish doubles the full swish score'
+  );
 });
 
 test('basket: typical round lands the §C6 coin target (~42 raw → 14c)', () => {
@@ -442,4 +524,40 @@ test('pancake: a simulated average round reaches the coin band (integration of p
   const score = towerScore(layers, bonus);
   const coins = computeCoins(COIN_TABLE.pancakeTower, score, false);
   assert.ok(coins >= 8 && coins <= 26, `decent round pays sensibly, got ${coins} (score ${score})`);
+});
+
+test('V3 pancake: wobble starts at height 8 and perfect drops damp it', () => {
+  let still = initialWobbleState();
+  for (let i = 0; i < 120; i += 1) still = stepWobble(still, 1 / 60, 7);
+  assert.ok(Math.abs(still.angle) < 1e-9, 'no driven sway below height 8');
+  let wobble = initialWobbleState();
+  for (let i = 0; i < 120; i += 1) wobble = stepWobble(wobble, 1 / 60, 8);
+  assert.ok(Math.abs(wobble.angle) > 0.001, 'height 8 is actively driven');
+  const energy = Math.abs(wobble.angle) + Math.abs(wobble.velocity);
+  const damped = dampWobble(wobble);
+  assert.ok(Math.abs(damped.angle) + Math.abs(damped.velocity) < energy);
+  assert.ok(Math.abs(wobble.angle) <= PANCAKE.WOBBLE_MAX_RAD);
+});
+
+test('V3 pancake: wobble world/local center transforms round-trip', () => {
+  const local = 0.23;
+  const height = 2.4;
+  const angle = 0.12;
+  const world = wobbleTopX(local, height, angle);
+  assert.ok(Math.abs(wobbleLocalX(world, height, angle) - local) < 1e-9);
+});
+
+test('V3 pancake audit: extreme slice offsets stay bounded and fallen toppings despawn', () => {
+  const stack = { center: 0.4, width: 0.8 };
+  for (const sign of [-1, 1]) {
+    const offset = sign * (stack.width - 1e-8);
+    const r = resolveDrop(stack, stack.center + offset, false);
+    assert.equal(r.landed, true);
+    assert.ok(r.width > 0 && r.width < 1e-7);
+    assert.ok(Number.isFinite(r.center));
+    assert.ok(r.cut.size <= stack.width);
+  }
+  assert.equal(resolveDrop(stack, stack.center + stack.width, false).landed, false);
+  assert.equal(isFallenExpired(PANCAKE.FALLEN_DESPAWN_SEC - 1e-6), false);
+  assert.equal(isFallenExpired(PANCAKE.FALLEN_DESPAWN_SEC), true);
 });

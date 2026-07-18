@@ -21,12 +21,10 @@ import {
   buildDeck,
   memoryScore,
   isMatch,
+  advancePeekProgress,
+  canUsePeek,
+  canFlipCard,
 } from './memoryMatch.logic.js';
-
-const CARD_W = 0.82;
-const CARD_H = 1.0;
-const SPACING_X = 0.93;
-const SPACING_Y = 1.12;
 
 /** Procedural pastel card-back texture (dots on pink, shared per round). */
 function makeBackTexture() {
@@ -71,6 +69,12 @@ export default {
     this.finished = 0; // elapsed at completion (for the time bonus)
     this.endT = 0;
     this.revealT = 0;
+    this.peekT = 0;
+    this.peekUsed = false;
+    this.peekReady = false;
+    this.cleanMatches = 0;
+    this.peekUses = 0;
+    this.peekedIndices = [];
     this.autoT = 0.6;
     /** @type {number[]} indices of the currently face-up unresolved cards */
     this.picked = [];
@@ -96,7 +100,7 @@ export default {
 
     // --- shared card geometry/materials ---
     this.backTex = makeBackTexture();
-    const cardGeo = new THREE.PlaneGeometry(CARD_W, CARD_H);
+    const cardGeo = new THREE.PlaneGeometry(MEMORY.CARD_W, MEMORY.CARD_H);
     const backMat = new THREE.MeshStandardMaterial({ map: this.backTex, roughness: 0.85 });
     const faceMat = new THREE.MeshStandardMaterial({ color: '#FFFFFF', roughness: 0.9 });
     const matchedMat = new THREE.MeshStandardMaterial({ color: '#DFF3D8', roughness: 0.9 });
@@ -107,9 +111,9 @@ export default {
     // --- deck + grid ---
     const { cols, rows, pairs } = this.layout;
     const deck = buildDeck(pairs, ctx.rng);
-    const gridH = (rows - 1) * SPACING_Y;
+    const gridH = (rows - 1) * MEMORY.SPACING_Y;
     const originY = gridH / 2 - 0.75; // shifted down, Gooby watches from the top
-    const originX = -((cols - 1) * SPACING_X) / 2;
+    const originX = -((cols - 1) * MEMORY.SPACING_X) / 2;
 
     /** @type {Array<{group: THREE.Group, flipper: THREE.Group, pairId: number, state: 'down'|'up'|'matched'}>} */
     this.cards = [];
@@ -117,7 +121,11 @@ export default {
       const col = i % cols;
       const row = Math.floor(i / cols);
       const group = new THREE.Group();
-      group.position.set(originX + col * SPACING_X, originY - row * SPACING_Y, 0);
+      group.position.set(
+        originX + col * MEMORY.SPACING_X,
+        originY - row * MEMORY.SPACING_Y,
+        0
+      );
 
       const flipper = new THREE.Group();
       const back = new THREE.Mesh(cardGeo, backMat);
@@ -159,9 +167,36 @@ export default {
     this.gooby.setEmotion('happy');
     scene.add(this.gooby.group);
 
+    // --- V3 peek powerup: earned after three matches without a miss ---
+    this.peekToken = new THREE.Group();
+    const peekRing = new THREE.Mesh(
+      new THREE.TorusGeometry(0.22, 0.08, 8, 18),
+      new THREE.MeshStandardMaterial({
+        color: '#FFD54F',
+        emissive: '#7A4B00',
+        emissiveIntensity: 0.35,
+        roughness: 0.35,
+      })
+    );
+    const peekEye = new THREE.Mesh(
+      new THREE.SphereGeometry(0.08, 10, 8),
+      new THREE.MeshStandardMaterial({ color: '#4A3B36', roughness: 0.5 })
+    );
+    peekEye.position.z = 0.03;
+    this.peekToken.add(peekRing, peekEye);
+    this.peekToken.position.set(-this.halfW + 0.5, originY + 0.85, 0.15);
+    this.peekToken.visible = false;
+    scene.add(this.peekToken);
+    this.ownedGeos.push(peekRing.geometry, peekEye.geometry);
+    this.ownedMats.push(peekRing.material, peekEye.material);
+
     // --- input: tap a face-down card ---
     this.offTap = ctx.input.on('tap', (p) => {
       if (this.autoplay) return;
+      if (this.peekToken.visible && ctx.input.pick(ctx.camera, [this.peekToken], p)) {
+        this.usePeek();
+        return;
+      }
       const targets = this.cards.filter((c) => c.state === 'down').map((c) => c.group);
       const hit = ctx.input.pick(ctx.camera, targets, p);
       if (!hit) return;
@@ -175,9 +210,13 @@ export default {
   },
 
   flipUp(index) {
-    if (this.phase !== 'play' || this.picked.length >= 2) return;
     const card = this.cards[index];
-    if (card.state !== 'down') return;
+    if (!card || !canFlipCard({
+      phase: this.phase,
+      pickedCount: this.picked.length,
+      cardState: card.state,
+      peeking: this.peekT > 0,
+    })) return;
     card.state = 'up';
     this.picked.push(index);
     this.ctx.audio.play('card.flip');
@@ -222,6 +261,16 @@ export default {
     }
     this.picked = [];
     this.matched += 1;
+    const progress = advancePeekProgress({
+      cleanMatches: this.cleanMatches,
+      peekReady: this.peekReady,
+      peekUsed: this.peekUsed,
+    }, true);
+    this.cleanMatches = progress.cleanMatches;
+    const justEarned = !this.peekReady && progress.peekReady;
+    this.peekReady = progress.peekReady;
+    this.peekToken.visible = canUsePeek(this);
+    if (justEarned) this.ctx.hud.banner(t('mg.memory.peekReady'));
     this.ctx.audio.play('card.match');
     this.gooby.play('happyBounce');
   },
@@ -243,14 +292,59 @@ export default {
     }
     this.picked = [];
     this.misses += 1;
+    const progress = advancePeekProgress({
+      cleanMatches: this.cleanMatches,
+      peekReady: this.peekReady,
+      peekUsed: this.peekUsed,
+    }, false);
+    this.cleanMatches = progress.cleanMatches;
+    this.peekReady = progress.peekReady;
     this.ctx.hud.setScore(Math.max(0, MEMORY.SCORE_BASE - this.misses));
     this.ctx.audio.play('card.nomatch');
     this.gooby.play('refuse');
   },
 
+  usePeek() {
+    if (!canUsePeek(this) || this.phase !== 'play' || this.picked.length > 0) return;
+    this.peekReady = false;
+    this.peekUsed = true;
+    this.peekUses += 1;
+    this.peekT = MEMORY.PEEK_SEC;
+    this.peekToken.visible = false;
+    this.peekedIndices = [];
+    for (let i = 0; i < this.cards.length; i += 1) {
+      const card = this.cards[i];
+      if (card.state !== 'down') continue;
+      this.peekedIndices.push(i);
+      card.flipper.rotation.y = Math.PI;
+      card.food.visible = true;
+      if (!this.memoryMap.has(card.pairId)) this.memoryMap.set(card.pairId, []);
+      const seen = this.memoryMap.get(card.pairId);
+      if (!seen.includes(i)) seen.push(i);
+    }
+    this.ctx.audio.play('card.flip');
+    this.ctx.hud.banner(t('mg.memory.peek'));
+    this.particles.emit('sparkles', this.peekToken.position.clone(), { count: 10 });
+  },
+
+  endPeek() {
+    for (const i of this.peekedIndices) {
+      const card = this.cards[i];
+      if (card?.state !== 'down') continue;
+      card.flipper.rotation.y = 0;
+      card.flipper.position.z = 0;
+      card.food.visible = false;
+    }
+    this.peekedIndices = [];
+  },
+
   /** Dev-only autoplay: good-not-perfect memory with human-ish flip cadence. */
   autoplayTick(dt) {
     if (this.picked.length >= 2) return;
+    if (canUsePeek(this) && this.picked.length === 0) {
+      this.usePeek();
+      return;
+    }
     this.autoT -= dt;
     if (this.autoT > 0) return;
     this.autoT = 0.55 + this.ctx.rng() * 0.4;
@@ -309,6 +403,12 @@ export default {
 
     ctx.hud.setTime(elapsed);
 
+    if (this.peekT > 0) {
+      this.peekT -= dt;
+      this.peekToken.rotation.z += dt * 5;
+      if (this.peekT <= 0) this.endPeek();
+    }
+
     // pending flip-back (dt-driven, pause-safe §E8)
     if (this.picked.length === 2 && this.revealT > 0) {
       this.revealT -= dt;
@@ -328,7 +428,11 @@ export default {
       this.gooby.play('happyBounce');
       this.particles.emit('confetti', this.gooby.group.position.clone().add(new THREE.Vector3(0, 0.9, 0)), { count: 16 });
       if (this.autoplay) {
-        console.log(`[memoryMatch] autoplay run ended — score ${score} (misses ${this.misses}, ${this.finished.toFixed(1)}s, ${this.layout.pairs} pairs)`);
+        console.log(
+          `[memoryMatch] autoplay run ended — score ${score} ` +
+          `(misses ${this.misses}, ${this.finished.toFixed(1)}s, ` +
+          `${this.layout.pairs} pairs, peek ${this.peekUses})`
+        );
       }
     }
   },

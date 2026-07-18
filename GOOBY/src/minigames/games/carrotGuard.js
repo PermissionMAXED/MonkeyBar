@@ -21,6 +21,9 @@ import {
   applyEscape,
   applyWhiff,
   isRoundOver,
+  isKingDue,
+  applyKingTap,
+  acceptsTapAfter,
 } from './carrotGuard.logic.js';
 
 const GRID_SPACING = 1.5;
@@ -95,10 +98,15 @@ export default {
     this.phase = 'play';
     this.score = 0;
     this.combo = 0;
+    this.bonks = 0;
+    this.kingsSpawned = 0;
+    this.kingsDefeated = 0;
     this.carrots = GUARD.CARROTS;
     this.spawnT = 0.8;
     this.endT = 0;
     this.autoT = 0;
+    this.tapClock = 0;
+    this.lastWhiffAt = -Infinity;
 
     // Portrait framing: vFOV 45 on a phone leaves a narrow ~22° horizontal
     // FOV, so the camera sits high and far to fit the 3-mound width.
@@ -160,13 +168,21 @@ export default {
     const moleNose = new THREE.SphereGeometry(0.06, 10, 8);
     const moleEye = new THREE.SphereGeometry(0.045, 8, 6);
     const molePaw = new THREE.SphereGeometry(0.09, 8, 6);
+    const kingCrown = new THREE.ConeGeometry(0.28, 0.34, 5);
     const grayMat = new THREE.MeshStandardMaterial({ color: '#8B8680', roughness: 0.9 });
     const darkMat = new THREE.MeshStandardMaterial({ color: '#3A2E2E', roughness: 0.4 });
     const noseMat = new THREE.MeshStandardMaterial({ color: '#E88BA0', roughness: 0.6 });
-    this.ownedGeos.push(moleBody, moleNose, moleEye, molePaw);
-    this.ownedMats.push(grayMat, darkMat, noseMat);
+    const crownMat = new THREE.MeshStandardMaterial({
+      color: '#FFD54F',
+      emissive: '#7A4B00',
+      emissiveIntensity: 0.25,
+      roughness: 0.35,
+      metalness: 0.4,
+    });
+    this.ownedGeos.push(moleBody, moleNose, moleEye, molePaw, kingCrown);
+    this.ownedMats.push(grayMat, darkMat, noseMat, crownMat);
 
-    /** @type {Array<{mound: THREE.Group, mole: THREE.Group, carrot: THREE.Group, up: boolean, timer: number, upFor: number, hit: boolean}>} */
+    /** @type {Array<{mound: THREE.Group, mole: THREE.Group, carrot: THREE.Group, crown: THREE.Mesh, up: boolean, timer: number, upFor: number, hit: boolean, king: boolean, hp: number, lastTap: number}>} */
     this.holes = [];
     for (let r = 0; r < GUARD.GRID; r += 1) {
       for (let c = 0; c < GUARD.GRID; c += 1) {
@@ -195,6 +211,10 @@ export default {
         const nose = new THREE.Mesh(moleNose, noseMat);
         nose.position.set(0, 0.34, 0.26);
         mole.add(nose);
+        const crown = new THREE.Mesh(kingCrown, crownMat);
+        crown.position.set(0, 0.78, 0);
+        crown.visible = false;
+        mole.add(crown);
         const carrotLoot = ctx.assets.getModel('nature-kit/crop_carrot');
         const cbox = new THREE.Box3().setFromObject(carrotLoot);
         const csize = cbox.getSize(new THREE.Vector3());
@@ -209,7 +229,19 @@ export default {
         mole.userData.holeIndex = this.holes.length;
         scene.add(mole);
 
-        this.holes.push({ mound, mole, carrot: carrotLoot, up: false, timer: 0, upFor: 0, hit: false });
+        this.holes.push({
+          mound,
+          mole,
+          carrot: carrotLoot,
+          crown,
+          up: false,
+          timer: 0,
+          upFor: 0,
+          hit: false,
+          king: false,
+          hp: 0,
+          lastTap: -Infinity,
+        });
       }
     }
 
@@ -298,6 +330,42 @@ export default {
   },
 
   bonk(hole) {
+    if (!acceptsTapAfter(this.tapClock - hole.lastTap)) return;
+    hole.lastTap = this.tapClock;
+    if (hole.king) {
+      const res = applyKingTap({
+        score: this.score,
+        combo: this.combo,
+        hp: hole.hp,
+      });
+      hole.hp = res.hp;
+      this.swingMallet(hole.mole.position);
+      this.ctx.audio.play('mole.bonk');
+      if (!res.complete) {
+        this.floats.spawn(
+          `${res.hp}×`,
+          hole.mole.position.clone().add(new THREE.Vector3(0, 1.1, 0)),
+          '#C98A00'
+        );
+        this.particles.emit('dizzyStars', hole.mole.position.clone().add(new THREE.Vector3(0, 0.8, 0)));
+        return;
+      }
+      hole.hit = true;
+      this.score = res.score;
+      this.combo = res.combo;
+      this.kingsDefeated += 1;
+      this.ctx.onScore(res.gained);
+      this.ctx.hud.banner(t('mg.guard.kingDefeated'));
+      this.floats.spawn(
+        `+${res.gained}`,
+        hole.mole.position.clone().add(new THREE.Vector3(0, 1.1, 0)),
+        '#C98A00'
+      );
+      this.particles.emit('confetti', hole.mole.position.clone().add(new THREE.Vector3(0, 1, 0)), { count: 16 });
+      this.gooby.play('happyBounce');
+      hole.timer = 0.35;
+      return;
+    }
     hole.hit = true;
     const pos = hole.mole.position;
     this.swingMallet(pos);
@@ -305,6 +373,7 @@ export default {
     const gained = res.score - this.score;
     this.score = res.score;
     this.combo = res.combo;
+    this.bonks += 1;
     this.ctx.onScore(gained);
     this.ctx.audio.play('mole.bonk');
     this.floats.spawn(res.bonus > 0 ? `+1 +${res.bonus}!` : '+1', pos.clone().add(new THREE.Vector3(0, 0.9, 0)), '#2E8B57');
@@ -327,6 +396,8 @@ export default {
   },
 
   whiff(p) {
+    if (!acceptsTapAfter(this.tapClock - this.lastWhiffAt, GUARD.WHIFF_COOLDOWN_SEC)) return;
+    this.lastWhiffAt = this.tapClock;
     const before = this.combo;
     this.combo = applyWhiff({ combo: this.combo }).combo;
     this.ctx.audio.play('mole.whiff');
@@ -334,19 +405,27 @@ export default {
   },
 
   /** Pop a mole from a random free hole. */
-  popMole(elapsed) {
+  popMole(elapsed, forceKing = false) {
     const { rng } = this.ctx;
     const free = this.holes.filter((h) => !h.up);
-    if (free.length === 0) return;
+    if (free.length === 0) return false;
     const hole = free[Math.floor(rng() * free.length)];
+    const king = forceKing || isKingDue(this.bonks, this.kingsSpawned);
+    if (king) this.kingsSpawned += 1;
     hole.up = true;
     hole.hit = false;
-    hole.upFor = upTimeAt(elapsed);
+    hole.king = king;
+    hole.hp = king ? GUARD.KING_TAPS : 1;
+    hole.lastTap = -Infinity;
+    hole.crown.visible = king;
+    hole.mole.scale.x = hole.mole.scale.z = king ? 1.22 : 1;
+    hole.upFor = king ? Math.max(1.5, upTimeAt(elapsed) * 2.4) : upTimeAt(elapsed);
     hole.timer = hole.upFor + GUARD.POP_SEC * 2;
     hole.carrot.visible = false;
     hole.mole.visible = true;
     hole.mole.scale.y = 0.01;
     this.ctx.audio.play('mole.pop');
+    if (king) this.ctx.hud.banner(t('mg.guard.king'));
     const mole = hole.mole;
     tween({
       from: 0.01, to: 1, duration: GUARD.POP_SEC, ease: easings.easeOutBack,
@@ -354,11 +433,13 @@ export default {
         mole.scale.y = Math.max(0.01, v);
       },
     });
+    return king;
   },
 
   escape(hole) {
     hole.up = false;
     hole.mole.visible = false;
+    hole.crown.visible = false;
     const res = applyEscape({ carrots: this.carrots, combo: this.combo });
     this.carrots = res.carrots;
     this.combo = res.combo;
@@ -380,7 +461,7 @@ export default {
       if (!hole.up || hole.hit) continue;
       const elapsedUp = hole.upFor + GUARD.POP_SEC * 2 - hole.timer;
       if (elapsedUp < 0.34) continue; // reaction time
-      if (rng() < 0.33) {
+      if (hole.king || rng() < 0.82) {
         this.bonk(hole);
         return; // one bonk per tick — doubles can slip through
       }
@@ -392,6 +473,7 @@ export default {
     this.gooby.update(dt);
     this.particles.update(dt);
     this.floats.update(dt);
+    this.tapClock += dt;
 
     if (this.phase === 'ending') {
       this.endT += dt;
@@ -414,6 +496,7 @@ export default {
         if (hole.timer <= 0) {
           hole.up = false;
           hole.mole.visible = false;
+          hole.crown.visible = false;
         }
         continue;
       }
@@ -434,8 +517,8 @@ export default {
     // spawn cadence (§C6.1 ramp), occasional doubles late in the round
     this.spawnT -= dt;
     if (this.spawnT <= 0) {
-      this.popMole(elapsed);
-      if (this.ctx.rng() < doubleChanceAt(elapsed)) this.popMole(elapsed);
+      const king = this.popMole(elapsed);
+      if (!king && this.ctx.rng() < doubleChanceAt(elapsed)) this.popMole(elapsed);
       this.spawnT = spawnIntervalAt(elapsed);
     }
 
@@ -447,7 +530,12 @@ export default {
       this.gooby.setEmotion('ecstatic');
       this.gooby.play('happyBounce');
       this.particles.emit('confetti', this.gooby.group.position.clone().add(new THREE.Vector3(0, 1.3, 0)), { count: 14 });
-      if (this.autoplay) console.log(`[carrotGuard] autoplay run ended — score ${this.score} (carrots left ${this.carrots})`);
+      if (this.autoplay) {
+        console.log(
+          `[carrotGuard] autoplay run ended — score ${this.score} ` +
+          `(carrots ${this.carrots}, kings ${this.kingsDefeated})`
+        );
+      }
     }
   },
 

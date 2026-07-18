@@ -44,6 +44,15 @@ export const PANCAKE = Object.freeze({
   SLIDE_PERIOD_MIN: 1.15,
   /** Drop fall speed (world units/s). */
   FALL_SPEED: 7,
+  /** V3 §C10.2: tower spring-wobble begins at landed height 8. */
+  WOBBLE_START_LAYER: 8,
+  WOBBLE_FORCE: 0.7,
+  WOBBLE_SPRING: 10,
+  WOBBLE_DAMPING: 3.2,
+  WOBBLE_MAX_RAD: 0.16,
+  PERFECT_WOBBLE_DAMP: 0.4,
+  /** Audit contract: all missed/cut pieces, including toppings, despawn. */
+  FALLEN_DESPAWN_SEC: 1.4,
 });
 
 /**
@@ -170,4 +179,74 @@ export function isTowerDone(width, layers, tune = PANCAKE) {
  */
 export function towerScore(layers, bonusPoints, tune = PANCAKE) {
   return Math.max(0, layers * tune.POINTS_PER_LAYER + Math.round(bonusPoints));
+}
+
+/** @returns {{angle:number,velocity:number,phase:number}} */
+export function initialWobbleState() {
+  return { angle: 0, velocity: 0, phase: 0 };
+}
+
+/**
+ * Damped, driven tower sway. Below height 8 it settles toward rest.
+ * @param {{angle:number,velocity:number,phase:number}} state
+ * @param {number} dt seconds
+ * @param {number} layers landed layer count
+ * @param {object} [tune]
+ * @returns {{angle:number,velocity:number,phase:number}}
+ */
+export function stepWobble(state, dt, layers, tune = PANCAKE) {
+  const h = Math.max(0, dt);
+  const phase = state.phase + h;
+  const active = layers >= tune.WOBBLE_START_LAYER;
+  const ramp = active
+    ? Math.min(1, (layers - tune.WOBBLE_START_LAYER + 1) / 8)
+    : 0;
+  const drive = active ? Math.sin(phase * 2.3) * tune.WOBBLE_FORCE * ramp : 0;
+  const accel = drive - state.angle * tune.WOBBLE_SPRING -
+    state.velocity * tune.WOBBLE_DAMPING;
+  const velocity = state.velocity + accel * h;
+  const angle = Math.max(
+    -tune.WOBBLE_MAX_RAD,
+    Math.min(tune.WOBBLE_MAX_RAD, state.angle + velocity * h)
+  );
+  return { angle, velocity, phase };
+}
+
+/**
+ * Perfect drops visibly stabilize the tower.
+ * @param {{angle:number,velocity:number,phase:number}} state
+ * @param {object} [tune]
+ */
+export function dampWobble(state, tune = PANCAKE) {
+  return {
+    angle: state.angle * tune.PERFECT_WOBBLE_DAMP,
+    velocity: state.velocity * tune.PERFECT_WOBBLE_DAMP,
+    phase: state.phase,
+  };
+}
+
+/**
+ * World-space x of the swaying stack top after rotating around its base.
+ * @param {number} localCenter
+ * @param {number} heightAboveBase
+ * @param {number} angle radians
+ */
+export function wobbleTopX(localCenter, heightAboveBase, angle) {
+  return localCenter * Math.cos(angle) - heightAboveBase * Math.sin(angle);
+}
+
+/**
+ * Inverse of wobbleTopX for a piece landing at a known world x.
+ * @param {number} worldX
+ * @param {number} heightAboveBase
+ * @param {number} angle radians
+ */
+export function wobbleLocalX(worldX, heightAboveBase, angle) {
+  const c = Math.cos(angle);
+  return (worldX + heightAboveBase * Math.sin(angle)) / (Math.abs(c) < 1e-6 ? 1e-6 : c);
+}
+
+/** Fallen toppings and pancake cuts share the same bounded lifetime. */
+export function isFallenExpired(age, tune = PANCAKE) {
+  return age >= tune.FALLEN_DESPAWN_SEC;
 }
