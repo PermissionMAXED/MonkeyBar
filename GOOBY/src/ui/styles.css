@@ -32,6 +32,26 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
+  /* V3/G47 (§C11.2): Kenney ui-pack 9-slice sprites (§D4, public/assets/ui/).
+     GREY sprites are STRUCTURE (frame/bevel) layered over the palette
+     background-colors above — hue-rotate/sepia tinting is forbidden (mushy);
+     where a sprite face must carry an identity color it is multiplied
+     (background-blend-mode) so the bevel stays crisp. Slice numbers are
+     unitless source-image pixels (9-slice offsets); the border widths are rem
+     so every frame scales with settings.uiScale (§B3). */
+  --g47-card: url('/assets/ui/grey/button_square_border.png');
+  --g47-flat: url('/assets/ui/grey/button_square_flat.png');
+  --g47-gloss: url('/assets/ui/grey/button_square_gloss.png');
+  --g47-btn: url('/assets/ui/grey/button_rectangle_depth_flat.png');
+  --g47-btn-flat: url('/assets/ui/grey/button_rectangle_flat.png');
+  --g47-btn-red: url('/assets/ui/red/button_rectangle_depth_flat.png');
+  --g47-round: url('/assets/ui/grey/check_round_grey.png');
+  --g47-round-dot: url('/assets/ui/grey/check_round_round_circle.png');
+  --g47-rail: url('/assets/ui/grey/slide_horizontal_grey.png');
+  --g47-rail-fill: url('/assets/ui/grey/slide_horizontal_color_section.png');
+  --g47-knob: url('/assets/ui/grey/slide_hangle.png');
+  --g47-star: url('/assets/ui/grey/star.png');
+  --g47-star-off: url('/assets/ui/grey/star_outline.png');
 }
 
 /* F3: predictable sizing everywhere — padding/borders stay inside declared
@@ -49,6 +69,11 @@
 
 /* ---------- buttons (§D5: chunky, pressable) ---------- */
 
+/* V3/G47 (§C11.2): primary buttons wear button_rectangle_depth_flat as a
+   9-slice frame (structure only — the identity background-color fills the
+   face); pressed = _flat swap + 2px translate. Border replaces the old
+   border-bottom depth lip; paddings are compensated so the total content
+   inset stays what it was pre-reskin. */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -56,11 +81,12 @@
   gap: 0.5rem;
   min-height: max(44px, 3rem);
   min-width: max(44px, 3rem);
-  padding: 0.625rem 1.375rem;
-  border: none;
-  border-radius: var(--btn-radius);
+  padding: 0.25rem 1rem 0.125rem;
+  border: solid transparent;
+  border-width: 0.375rem 0.375rem 0.5rem;
+  border-image: var(--g47-btn) 8 8 10 8 / 0.375rem 0.375rem 0.5rem stretch;
+  border-radius: 0.625rem;
   background: var(--pink);
-  border-bottom: 0.25rem solid var(--pink-dark);
   color: var(--white);
   font-size: 1.125rem;
   font-weight: 800;
@@ -71,7 +97,8 @@
   transition: transform 90ms ease;
 }
 .btn:active {
-  transform: scale(0.96);
+  border-image-source: var(--g47-btn-flat);
+  transform: translateY(2px); /* §C11.2 pressed state (motion offset stays px) */
 }
 .btn.btn-teal {
   background: var(--teal);
@@ -92,6 +119,16 @@
   width: 3.25rem;
   height: 3.25rem;
   padding: 0;
+  /* V3/G47: a circle cannot 9-slice — round buttons wear the round check
+     sprite as a whole-image face multiplied over their background-color. */
+  border: none;
+  border-image: none;
+  background-image: var(--g47-round);
+  background-size: 100% 100%;
+  background-blend-mode: multiply;
+}
+.btn.btn-round:active {
+  transform: translateY(2px);
 }
 .btn svg {
   display: block;
@@ -99,11 +136,18 @@
 
 /* ---------- cards / sheets ---------- */
 
+/* V3/G47 (§C11.2): .card wears button_square_border as a 9-slice frame
+   (BINDING: 24px slices). background-clip: padding-box keeps the white face
+   inside the frame so the sprite's rounded corners paint cleanly; padding is
+   compensated (0.625rem border + 0.625rem padding = the old 1.25rem inset). */
 .card {
   background: var(--white);
-  border-radius: var(--card-radius);
+  background-clip: padding-box;
+  border: 0.625rem solid transparent;
+  border-image: var(--g47-card) 24 / 0.625rem stretch;
+  border-radius: 0.375rem;
   box-shadow: var(--shadow-soft);
-  padding: 1.25rem;
+  padding: 0.625rem;
 }
 
 /* ---------- full screens & panels (§E6) ---------- */
@@ -133,13 +177,20 @@
   justify-content: center;
   z-index: 200;
 }
+/* V3/G47 (§C11.2): bottom sheets get the same button_square_border frame on
+   the top + side edges (the bottom edge runs off-screen); padding compensated
+   like .card so sheet content keeps its pre-reskin inset. */
 .panel {
   width: 100%;
   max-width: 30rem;
   background: var(--white);
-  border-radius: var(--card-radius) var(--card-radius) 0 0;
+  background-clip: padding-box;
+  border: solid transparent;
+  border-width: 0.625rem 0.625rem 0;
+  border-image: var(--g47-card) 24 / 0.625rem 0.625rem 0 stretch;
+  border-radius: 0.375rem 0.375rem 0 0;
   box-shadow: var(--shadow-soft);
-  padding: 1.25rem 1.25rem max(1.25rem, calc(var(--safe-bottom) + 0.25rem)); /* V3/G33 §C1.4 sheet rule */
+  padding: 0.625rem 0.625rem max(1.25rem, calc(var(--safe-bottom) + 0.25rem)); /* V3/G33 §C1.4 sheet rule */
   animation: panel-up 180ms ease-out;
 }
 @keyframes panel-up {
@@ -517,7 +568,13 @@
 }
 .settings-danger .btn {
   background: #e0655f;
-  border-bottom-color: #b84943;
+  /* V3/G47 (§D4): red state-accent frame for the destructive action. The red
+     pack ships no _flat rectangle, so pressed keeps the red frame (translate
+     only via the base .btn:active rule). */
+  border-image-source: var(--g47-btn-red);
+}
+.settings-danger .btn:active {
+  border-image-source: var(--g47-btn-red);
 }
 .settings-footer {
   text-align: center;
@@ -525,11 +582,16 @@
   font-weight: 700;
   opacity: 0.45;
 }
+/* V3/G47 (§C11.2): segmented controls get a button_square_flat 9-slice rim
+   (structure); the selected pill inside stays pure CSS (identity accent). */
 .seg {
   display: inline-flex;
   background: rgba(74, 59, 54, 0.08);
-  border-radius: 0.875rem;
-  padding: 0.1875rem;
+  background-clip: padding-box;
+  border: 0.25rem solid transparent;
+  border-image: var(--g47-flat) 10 / 0.25rem stretch;
+  border-radius: 0.25rem;
+  padding: 0.125rem;
   gap: 0.1875rem;
   /* V3/G33 §C1.2: segments wrap instead of clipping (320px × 115/130 %) */
   flex-wrap: wrap;
@@ -602,7 +664,7 @@
 /* F3: compact Go-home button so the trip header fits narrow widths */
 .shop-head .shop-home {
   min-height: max(44px, 2.75rem);
-  padding: 0.5rem 0.875rem;
+  padding: 0.125rem 0.5rem 0; /* V3/G47: compensates the 9-slice frame border */
   font-size: 0.9375rem;
   flex: none;
 }
@@ -791,7 +853,7 @@
 }
 .shop-buybar .btn {
   min-height: max(44px, 2.75rem);
-  padding: 0.5rem 1rem;
+  padding: 0.125rem 0.625rem 0; /* V3/G47: compensates the 9-slice frame border */
   font-size: 1rem;
 }
 .shop-banner {
@@ -824,8 +886,8 @@
   opacity: 0.7;
 }
 .shop-banner .btn {
-  min-height: 2.625rem;
-  padding: 0.375rem 0.875rem;
+  min-height: max(44px, 2.625rem);
+  padding: 0 0.5rem; /* V3/G47: compensates the 9-slice frame border */
   font-size: 0.875rem;
   flex: none;
 }
@@ -972,15 +1034,19 @@
   transition: background 160ms ease;
   flex: none;
 }
+/* V3/G47 (§C11.2): toggle knobs wear the check_round_* sprites — plain ring
+   when off, ringed dot when on; the pill track keeps its CSS teal accent.
+   The knob spans the full pill height (1.875rem), so the on-travel stays the
+   G33 1.375rem and the ≥44px halo below is untouched. */
 .g14-toggle .g14-knob {
   position: absolute;
-  top: 0.1875rem;
-  left: 0.1875rem;
-  width: 1.5rem;
-  height: 1.5rem;
+  top: 0;
+  left: 0;
+  width: 1.875rem;
+  height: 1.875rem;
   border-radius: 50%;
-  background: var(--white);
-  box-shadow: 0 2px 6px rgba(74, 59, 54, 0.25);
+  background: var(--g47-round) center / 100% 100% no-repeat;
+  filter: drop-shadow(0 2px 3px rgba(74, 59, 54, 0.25));
   transition: transform 160ms ease;
 }
 .g14-toggle.g14-on {
@@ -988,6 +1054,7 @@
 }
 .g14-toggle.g14-on .g14-knob {
   transform: translateX(1.375rem); /* V3/G33 §B3: knob travel scales with the pill */
+  background-image: var(--g47-round-dot);
 }
 /* F3: invisible hit-area expansion — visual 52×30 stays, taps get ≥44px.
    V3/G33 §B3: the halo now GUARANTEES a ≥44 real-px hit box at every uiScale
@@ -1121,7 +1188,7 @@
 }
 .vet-head .vet-home {
   min-height: max(44px, 2.75rem);
-  padding: 0.5rem 0.875rem;
+  padding: 0.125rem 0.5rem 0; /* V3/G47: compensates the 9-slice frame border */
   font-size: 0.9375rem;
   flex: none;
   margin-left: auto; /* right-aligned even on its own wrap line (320px DE) */
@@ -1377,7 +1444,7 @@
 .g22-skin-buy {
   margin-top: 0.125rem;
   min-height: max(44px, 2.75rem); /* F3: ≥44px touch target */
-  padding: 0.25rem 0.875rem;
+  padding: 0 0.5rem; /* V3/G47: compensates the 9-slice frame border */
   font-size: 0.8125rem;
   border-radius: 0.75rem;
 }
@@ -1511,10 +1578,9 @@
 .btn.g19-btn {
   min-height: max(44px, 2.75rem);
   min-width: 0;
-  padding: 0.375rem 0.625rem;
+  padding: 0 0.25rem; /* V3/G47: compensates the 9-slice frame border */
   font-size: 0.875rem;
   border-radius: 0.8125rem;
-  border-bottom-width: 0.1875rem;
   flex: 1 1 0;
   white-space: nowrap;
 }
@@ -1654,36 +1720,60 @@
   background: transparent;
   cursor: pointer;
 }
+/* V3/G47 (§C11.2/§C2.1): sliders get the Kenney rail/fill/knob treatment —
+   slide_horizontal_grey 9-slice rail (end caps in the side slices),
+   slide_horizontal_color_section as the fill bar (multiplied over the teal
+   accent so the sprite bevel stays crisp), slide_hangle as the knob
+   (multiplied over the pink accent). The fill width rides the --g47-fill
+   custom property (set by settingsScreen's marked hook; defaults to 0%
+   elsewhere, e.g. the dev-panel sliders). */
 .g33-vol-slider::-webkit-slider-runnable-track {
-  height: 0.625rem;
-  border-radius: 999px;
-  background: rgba(74, 59, 54, 0.12);
+  height: 0.875rem;
+  border: solid transparent;
+  border-width: 0.3125rem 0.4375rem;
+  border-image: var(--g47-rail) 6 8 stretch;
+  background:
+    var(--g47-rail-fill) no-repeat left center / var(--g47-fill, 0%) 100%,
+    linear-gradient(var(--teal), var(--teal)) no-repeat left center / var(--g47-fill, 0%) 100%;
+  background-blend-mode: multiply, normal;
+  background-clip: content-box, content-box;
 }
 .g33-vol-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 1.5rem;
+  height: 2rem;
   margin-top: -0.5625rem;
-  border-radius: 50%;
-  background: var(--pink);
-  border: 3px solid var(--white);
-  box-shadow: 0 2px 6px rgba(74, 59, 54, 0.25);
+  border: none;
+  background-color: var(--pink);
+  background-image: var(--g47-knob);
+  background-size: 100% 100%;
+  background-blend-mode: multiply;
+  -webkit-mask: var(--g47-knob) center / 100% 100% no-repeat;
+  mask: var(--g47-knob) center / 100% 100% no-repeat;
 }
 .g33-vol-slider::-moz-range-track {
-  height: 0.625rem;
-  border-radius: 999px;
-  background: rgba(74, 59, 54, 0.12);
+  height: 0.875rem;
+  border: solid transparent;
+  border-width: 0.3125rem 0.4375rem;
+  border-image: var(--g47-rail) 6 8 stretch;
+  background:
+    var(--g47-rail-fill) no-repeat left center / var(--g47-fill, 0%) 100%,
+    linear-gradient(var(--teal), var(--teal)) no-repeat left center / var(--g47-fill, 0%) 100%;
+  background-blend-mode: multiply, normal;
+  background-clip: content-box, content-box;
 }
 .g33-vol-slider::-moz-range-thumb {
-  width: 1.75rem;
-  height: 1.75rem;
-  border-radius: 50%;
-  background: var(--pink);
-  border: 3px solid var(--white);
-  box-shadow: 0 2px 6px rgba(74, 59, 54, 0.25);
+  width: 1.5rem;
+  height: 2rem;
+  border: none;
+  background-color: var(--pink);
+  background-image: var(--g47-knob);
+  background-size: 100% 100%;
+  background-blend-mode: multiply;
+  mask: var(--g47-knob) center / 100% 100% no-repeat;
 }
 .g33-vol-slider:disabled::-webkit-slider-thumb {
-  background: rgba(74, 59, 54, 0.25);
+  background-color: rgba(74, 59, 54, 0.25);
 }
 .g33-vol-readout {
   flex: none;
@@ -1719,7 +1809,7 @@
 /* --- „Entwickler" row (§B4 — rendered only when settings.devUnlocked) --- */
 .g33-dev-row .btn {
   min-height: max(44px, 2.75rem);
-  padding: 0.5rem 0.875rem;
+  padding: 0.125rem 0.5rem 0; /* V3/G47: compensates the 9-slice frame border */
   font-size: 0.9375rem;
 }
 
@@ -1787,9 +1877,8 @@
 }
 .btn.g33-dev-btn {
   min-height: max(44px, 2.75rem);
-  padding: 0.375rem 0.75rem;
+  padding: 0 0.375rem; /* V3/G47: compensates the 9-slice frame border */
   font-size: 0.875rem;
-  border-bottom-width: 3px;
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -2055,3 +2144,134 @@
   color: #fff6ec;
 }
 /* ---------- end V3/G41 ---------- */
+
+/* =============== V3/G47 — UI reskin: Kenney ui-pack 9-slice (§C11.2) ====== */
+/* Screen-specific frames for surfaces whose base styles live in component-
+   injected CSS (arcade/quest/album/wardrobe/HUD). Selectors are one level
+   deeper than the injected rules so these reskin declarations win the cascade
+   regardless of <style> injection order. Toasts + HUD pills deliberately KEEP
+   their current CSS (§C11.2 keep-list); tab strips stay CSS-only. */
+
+/* --- arcade tiles: button_square_gloss frame over the white tile face --- */
+.screen-arcade .g5-tile {
+  border: solid transparent;
+  border-width: 0.3125rem 0.3125rem 0.4375rem;
+  border-image: var(--g47-gloss) 8 8 12 8 / 0.3125rem 0.3125rem 0.4375rem stretch;
+  border-radius: 0.5rem;
+  background-clip: padding-box;
+}
+.screen-arcade .g5-tile.g48-flagship {
+  background-clip: padding-box; /* the flagship gradient stays inside the frame */
+}
+.screen-arcade .g5-tile:active {
+  transform: translateY(2px); /* pressed = 2px translate (§C11.2) */
+}
+.screen-arcade .g5-tile-lock {
+  border-radius: 0.25rem; /* lock overlay follows the sprite frame corners */
+}
+
+/* --- HUD action buttons: button_square_gloss frame (pills/toasts keep CSS) */
+.g5-hud .g5-hud-btn {
+  border: solid transparent;
+  border-width: 0.3125rem 0.3125rem 0.4375rem;
+  border-image: var(--g47-gloss) 8 8 12 8 / 0.3125rem 0.3125rem 0.4375rem stretch;
+  border-radius: 0.5rem;
+  background-clip: padding-box;
+}
+.g5-hud .g5-hud-btn:active {
+  transform: translateY(2px);
+}
+
+/* --- shop: item cards + buy bar (care cards keep their dashed teal look) -- */
+.screen-shop .shop-card:not(.g22-care-card) {
+  border: 0.3125rem solid transparent;
+  border-image: var(--g47-flat) 12 / 0.3125rem stretch;
+  border-radius: 0.375rem;
+  background-clip: padding-box;
+  padding: 0.4375rem 0.125rem 0.3125rem; /* compensates the frame border */
+}
+.screen-shop .shop-buybar {
+  border: 0.375rem solid transparent;
+  border-image: var(--g47-card) 24 / 0.375rem stretch;
+  border-radius: 0.25rem;
+  background-clip: padding-box;
+  padding: 0.25rem 0.375rem; /* compensates the frame border */
+}
+
+/* --- wardrobe: outfit/fur item cards --- */
+.screen-wardrobe .g12-wr-item {
+  border: 0.3125rem solid transparent;
+  border-image: var(--g47-flat) 12 / 0.3125rem stretch;
+  border-radius: 0.375rem;
+  background-clip: padding-box;
+}
+
+/* --- quest board: quest cards + locked teaser card --- */
+.screen-questBoard .g23-qb-card,
+.screen-questBoard .g23-qb-locked {
+  border: 0.5rem solid transparent;
+  border-image: var(--g47-card) 24 / 0.5rem stretch;
+  border-radius: 0.375rem;
+  background-clip: padding-box;
+}
+.screen-questBoard .g23-qb-card {
+  padding: 0.25rem 0.375rem; /* compensates the frame border */
+}
+.screen-questBoard .g23-qb-locked {
+  padding: 1.25rem 0.625rem;
+}
+
+/* --- album: collection page + sticker-book pages --- */
+.screen-album .g23-al-page,
+.screen-album .g34-sb-page {
+  border: 0.5rem solid transparent;
+  border-image: var(--g47-card) 24 / 0.5rem stretch;
+  border-radius: 0.375rem;
+  background-clip: padding-box;
+}
+.screen-album .g23-al-page {
+  padding: 0.375rem; /* compensates the frame border (was 14px) */
+}
+.screen-album .g34-sb-page {
+  padding: 0.375rem; /* compensates the frame border (was 0.875rem) */
+}
+.screen-album .g34-sb-pager {
+  border-radius: 0.375rem; /* scroll-snap viewport follows the frame corners */
+}
+
+/* --- results: star sprites flank the title (§C11.2 star/star_outline) ---- */
+/* §C1.3 hardening: the results card shrink-wraps inside the flex-centered
+   .screen — cap it at the screen's content box, let the title stars shrink,
+   and let a long value+badge (DE „Tagesbonus ×2!" at 320px/130%) wrap inside
+   its row instead of running past the viewport. */
+.screen-mgResults .card {
+  max-width: 100%;
+}
+.screen-mgResults .mg-results-rows {
+  max-width: 100%; /* the min(20rem,80vw) rows stay inside the card frame */
+}
+.screen-mgResults .mg-results-row .mg-value {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.screen-mgResults .mg-overlay-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.625rem;
+}
+.screen-mgResults .mg-overlay-title::before,
+.screen-mgResults .mg-overlay-title::after {
+  content: '';
+  flex: 0 1 1.75rem; /* may shrink when the title is tight (320px @ 130%) */
+  min-width: 0;
+  aspect-ratio: 64 / 60; /* star.png aspect survives flex shrink */
+  background-color: var(--yellow);
+  background-image: var(--g47-star);
+  background-size: 100% 100%;
+  background-blend-mode: multiply;
+  -webkit-mask: var(--g47-star) center / 100% 100% no-repeat;
+  mask: var(--g47-star) center / 100% 100% no-repeat;
+}
+
+/* ---------- end V3/G47 ---------- */

@@ -214,6 +214,7 @@ export function createSettingsScreen({ store, ui }) {
             <span class="settings-label">${icon(ic, 18)} ${tx(labelKey)}</span>
             <span class="g33-vol-controls">
               <input type="range" class="g33-vol-slider" min="0" max="100" step="5"
+                style="--g47-fill:${volumes[key]}%" ${''/* V3/G47: sprite fill hook (§C11.2) */}
                 value="${volumes[key]}" data-vol="${key}" aria-label="${tx(labelKey)}">
               <span class="g33-vol-readout">${volumes[key]}%</span>
               ${mute ? `<button class="g14-toggle ${!muted ? 'g14-on' : ''}"
@@ -278,6 +279,7 @@ export function createSettingsScreen({ store, ui }) {
       const readout = row.querySelector('.g33-vol-readout');
       slider.addEventListener('input', () => {
         const v = normalizeVolume(slider.value, key);
+        slider.style.setProperty('--g47-fill', `${v}%`); // V3/G47: sprite fill hook (§C11.2)
         readout.textContent = `${v}%`;
         store.update((state) => {
           state.settings.volumes = state.settings.volumes ?? {};
