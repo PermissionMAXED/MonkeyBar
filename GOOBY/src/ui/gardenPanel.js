@@ -19,7 +19,6 @@ import { ITEM_PRICES } from '../data/constants.js';
 import { CROPS, CROPS_BY_ID } from '../data/crops.js';
 import * as garden from '../systems/garden.js';
 import * as economy from '../systems/economy.js';
-import { count as invCount } from '../systems/inventory.js';
 import { now } from '../core/clock.js';
 import { forecast } from '../systems/weather.js';
 import audio from '../audio/audio.js';
@@ -188,7 +187,10 @@ function createSeedPanel({ store, ui }) {
 }
 
 // ---------------------------------------------------------------------------
-// compost-bin sell sheet (§C2.2)
+// compost-bin sell sheet (§C2.2) — V2 fix (RE1): lists/sells HARVESTED units
+// only (economy.sellableHarvest provenance, FIX-A) — shop-bought crop stock
+// is hidden here (it stays edible in the fridge) and a 0-unit sell can never
+// toast success.
 // ---------------------------------------------------------------------------
 
 function createSellPanel({ store, ui }) {
@@ -204,14 +206,22 @@ function createSellPanel({ store, ui }) {
 
       const render = () => {
         rows.innerHTML = '';
-        const inv = store.get('inventory') ?? {};
-        const sellable = CROPS.filter((c) => invCount(inv, c.foodId) > 0);
+        // V2 fix (RE1): row counts come from HARVEST PROVENANCE —
+        // economy.sellableHarvest = min(inventory, harvested counter) — not
+        // the raw inventory. Shop-bought crop stock is never compost-sellable
+        // (FIX-A economy gate), so listing it with live Sell buttons was a
+        // dead-end affordance. 0-sellable crops are HIDDEN, matching the
+        // sheet's existing only-what-you-can-sell filter (fresh saves' §C5.1
+        // starter carrots would otherwise grey-clutter every first visit);
+        // the empty state already teaches "harvest some crops first".
+        const state = store.get();
+        const sellable = CROPS.filter((c) => economy.sellableHarvest(state, c.foodId) > 0);
         if (sellable.length === 0) {
           rows.innerHTML = `<div class="g19-empty">${t('garden.sell.empty')}</div>`;
           return;
         }
         for (const crop of sellable) {
-          const n = invCount(inv, crop.foodId);
+          const n = economy.sellableHarvest(state, crop.foodId);
           const row = document.createElement('div');
           row.className = 'g19-row';
           // V2 fix (E16): buttons on their own flex line — see seed panel note.
@@ -233,7 +243,10 @@ function createSellPanel({ store, ui }) {
           const all = document.createElement('button');
           all.className = 'btn g19-btn';
           all.textContent = t('garden.sell.all');
-          all.addEventListener('click', () => sell(crop, invCount(store.get('inventory'), crop.foodId)));
+          // V2 fix (RE1): "Sell all" = all genuinely HARVESTED units (reread
+          // live — the fridge may have changed since render), so the ×n badge,
+          // the qty sold and the toast total always agree.
+          all.addEventListener('click', () => sell(crop, economy.sellableHarvest(store.get(), crop.foodId)));
           actions.append(one, all);
           row.appendChild(actions);
           rows.appendChild(row);
@@ -242,8 +255,13 @@ function createSellPanel({ store, ui }) {
 
       const sell = (crop, qty) => {
         const res = economy.sellHarvest(store, crop.foodId, qty);
-        if (!res.ok) {
+        // V2 fix (RE1): success feedback ONLY when units actually moved —
+        // sellHarvest reports {ok, qty} and refuses 0-unit sells ('none');
+        // never toast success over a no-op. On refusal re-render too: the
+        // rows were stale (provenance/inventory shifted under the sheet).
+        if (!res.ok || !(res.qty >= 1)) {
           audio.play('ui.error');
+          render();
           return;
         }
         audio.play('garden.sell');
