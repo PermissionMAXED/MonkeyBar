@@ -317,6 +317,151 @@ test('assets cache: rejected loads are evicted and retried; in-flight loads coal
   assert.equal(assets.getModel(key).name, key, 'getModel returns a named clone');
 });
 
+// ---------------------------------------------------------------------------
+// V2/FIX-F P2-5 (eval E18): getModel must survive transient load failures —
+// sceneManager fail-softs preload errors, so a synchronous getModel throw in
+// roomManager.enter() used to brick boot. getModel now retries the fetch once
+// in the background and returns a tiny neutral placeholder Group (no throw).
+// ---------------------------------------------------------------------------
+
+test('V2/FIX-F P2-5: failing-then-succeeding load — getModel succeeds via a self-healing placeholder', async (t) => {
+  const assets = await import('../src/core/assets.js');
+  const THREE = await import('three');
+  t.after(() => assets._setLoaderForTests(null));
+
+  const key = 'food-kit/__ff-getmodel-retry-test';
+  const master = new THREE.Group();
+  master.name = 'master';
+  master.add(new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial()));
+  let calls = 0;
+  assets._setLoaderForTests({
+    loadAsync() {
+      calls += 1;
+      if (calls === 1) return Promise.reject(new Error('boom: transient failure'));
+      return Promise.resolve({ scene: master });
+    },
+  });
+
+  // 1. Preload fails (as sceneManager would fail-soft it) …
+  await assert.rejects(assets.preload([key]), /transient failure/);
+  assert.equal(assets.isLoaded(key), false);
+
+  // 2. … but getModel does NOT throw: neutral placeholder + background retry.
+  const got = assets.getModel(key);
+  assert.equal(got.isObject3D, true, 'placeholder is a real Object3D Group');
+  assert.equal(got.name, key);
+  assert.equal(got.userData.placeholder, true);
+  assert.ok(got.children.length > 0, 'placeholder has a visible stand-in mesh');
+
+  // 3. The retry (2nd loader call) lands → cache populated, placeholder heals.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(calls, 2, 'getModel retried the fetch exactly once');
+  assert.equal(assets.isLoaded(key), true, 'retry populated the cache');
+  assert.equal(got.userData.placeholder, false, 'placeholder self-healed');
+  assert.ok(
+    got.children.some((c) => c.name === 'master'),
+    'real model cloned into the placeholder group'
+  );
+  assert.equal(assets.getModel(key).name, key, 'later getModel calls serve real clones');
+});
+
+test('V2/FIX-F P2-5: twice-failing load — placeholder stays, still no throw', async (t) => {
+  const assets = await import('../src/core/assets.js');
+  t.after(() => assets._setLoaderForTests(null));
+
+  const key = 'food-kit/__ff-getmodel-permafail-test';
+  let calls = 0;
+  assets._setLoaderForTests({
+    loadAsync() {
+      calls += 1;
+      return Promise.reject(new Error('boom: permanent failure'));
+    },
+  });
+
+  await assert.rejects(assets.preload([key]), /permanent failure/);
+  const got = assets.getModel(key); // must not throw
+  assert.equal(got.userData.placeholder, true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(calls, 2, 'exactly one retry from getModel');
+  assert.equal(assets.isLoaded(key), false, 'failed retry stays uncached');
+  assert.equal(got.userData.placeholder, true, 'placeholder remains the stand-in');
+  // the v1 eviction still applies: a later preload retries fresh and can recover
+  assets._setLoaderForTests({
+    loadAsync: () => Promise.resolve({ scene: { name: 'master', clone: () => ({ name: '' }) } }),
+  });
+  await assets.preload([key]);
+  assert.equal(assets.isLoaded(key), true);
+});
+
+// ---------------------------------------------------------------------------
+// V2/FIX-F P1-2 (eval E13): Kenney GLBs shipping metallicFactor 1 render
+// near-black without an envmap — load normalization zeroes metalness===1 on
+// LOADED materials only (app-created materials never pass through here).
+// ---------------------------------------------------------------------------
+
+test('V2/FIX-F P1-2: loaded GLB materials with metalness 1 normalize to 0, idempotently', async (t) => {
+  const assets = await import('../src/core/assets.js');
+  const THREE = await import('three');
+  t.after(() => assets._setLoaderForTests(null));
+
+  const scene = new THREE.Group();
+  const metalMat = new THREE.MeshStandardMaterial({ metalness: 1, roughness: 0.7, color: 0xff7ba9 });
+  const midMat = new THREE.MeshStandardMaterial({ metalness: 0.25 });
+  scene.add(new THREE.Mesh(new THREE.BoxGeometry(), metalMat));
+  scene.add(new THREE.Mesh(new THREE.BoxGeometry(), midMat));
+  assets._setLoaderForTests({ loadAsync: () => Promise.resolve({ scene }) });
+
+  const key = 'nature-kit/__ff-metalness-test';
+  await assets.preload([key]);
+  assert.equal(metalMat.metalness, 0, 'metallicFactor 1 zeroed');
+  assert.equal(metalMat.roughness, 0.7, 'roughness untouched');
+  assert.equal(metalMat.color.getHex(), 0xff7ba9, 'color untouched');
+  assert.equal(midMat.metalness, 0.25, 'partial metalness (golden-skin-style) untouched');
+
+  // idempotence guard: a re-run over the SAME materials (clones share them)
+  // must not re-normalize — post-load tweaks survive.
+  metalMat.metalness = 0.6;
+  assets._setLoaderForTests({ loadAsync: () => Promise.resolve({ scene }) });
+  await assets.preload(['nature-kit/__ff-metalness-test-2']);
+  assert.equal(metalMat.metalness, 0.6, 'already-normalized material left alone');
+});
+
+// ---------------------------------------------------------------------------
+// V2/FIX-F P2-3 (eval E17): the permanent cache exposes an ownership check so
+// scene dispose sweeps (minigame framework) can skip shared master resources.
+// ---------------------------------------------------------------------------
+
+test('V2/FIX-F P2-3: isCachedResource marks cache masters (and their shared clones) only', async (t) => {
+  const assets = await import('../src/core/assets.js');
+  const THREE = await import('three');
+  t.after(() => assets._setLoaderForTests(null));
+
+  const geo = new THREE.BoxGeometry();
+  const mat = new THREE.MeshStandardMaterial();
+  const scene = new THREE.Group();
+  scene.add(new THREE.Mesh(geo, mat));
+  assets._setLoaderForTests({ loadAsync: () => Promise.resolve({ scene }) });
+
+  const key = 'nature-kit/__ff-ownership-test';
+  await assets.preload([key]);
+  assert.equal(assets.isCachedResource(geo), true, 'master geometry registered');
+  assert.equal(assets.isCachedResource(mat), true, 'master material registered');
+
+  // getModel clones SHARE the master resources → also recognized as cached
+  const clone = assets.getModel(key);
+  clone.traverse((o) => {
+    if (!o.isMesh) return;
+    assert.equal(assets.isCachedResource(o.geometry), true, 'clone geometry is the shared master');
+    assert.equal(assets.isCachedResource(o.material), true, 'clone material is the shared master');
+  });
+
+  // resources the app creates itself are NOT cache-owned → sweeps dispose them
+  assert.equal(assets.isCachedResource(new THREE.MeshBasicMaterial()), false);
+  assert.equal(assets.isCachedResource(new THREE.BoxGeometry()), false);
+  assert.equal(assets.isCachedResource(null), false);
+  assert.equal(assets.isCachedResource(undefined), false);
+});
+
 test('assets cache: concurrent callers share one rejection, then recover', async (t) => {
   const assets = await import('../src/core/assets.js');
   t.after(() => assets._setLoaderForTests(null));

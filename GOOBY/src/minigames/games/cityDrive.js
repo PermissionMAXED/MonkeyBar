@@ -691,6 +691,12 @@ export default {
         this.veil?.remove();
         this.veil = null;
         this.car.updateChaseCam(ctx.camera, 10);
+        // V2/FIX-F P2-4 (E12): the §C9.3 landmark scan only ran in phase
+        // 'drive' — a towed trip teleports during phase 'tow', so towed
+        // arrivals never awarded the destination/landmark stickers. Scan at
+        // the tow drop-off too (both destination aprons sit inside their
+        // landmark's 15 m trigger — test/cityLayout.test.js proves it).
+        this.scanLandmarks(park.x, park.z);
         this.arrive(); // §C4.5: you always reach the shop
       }
     } else if (this.phase === 'fanfare') {
@@ -773,16 +779,7 @@ export default {
       if (step < 15) this.distanceM += step; // teleports (tow/rescue) don't count
       this.lastPos.x = p.x;
       this.lastPos.z = p.z;
-      for (const id of landmarksInRange(this.baseLayout.landmarks, p.x, p.z)) {
-        if (this.landmarksHit.has(id)) continue;
-        this.landmarksHit.add(id);
-        // SYNCHRONOUS window event — systems/shopTrip.js awards the sticker
-        // (it has store access; this plugin doesn't) and reflects `first`
-        // back into detail so the one-time camera-flash gag fires here.
-        const ev = new CustomEvent('gooby:landmark', { detail: { id, first: false } });
-        window.dispatchEvent(ev);
-        if (ev.detail.first) this.cameraFlash();
-      }
+      this.scanLandmarks(p.x, p.z); // V2/FIX-F P2-4: shared with the tow path
     }
     // ── end V2/G21 ───────────────────────────────────────────────────────────
 
@@ -908,6 +905,25 @@ export default {
   },
 
   // ── V2/G21: landmark gag + §B3 meta + §C12.1 distance feed ────────────────
+  /**
+   * §C9.3 landmark scan at a car position — fires the sticker event once per
+   * landmark per run. Runs per-frame in phase 'drive' AND once at the tow
+   * drop-off (V2/FIX-F P2-4, E12 — tows teleport outside phase 'drive').
+   * @param {number} px @param {number} pz car world position
+   */
+  scanLandmarks(px, pz) {
+    for (const id of landmarksInRange(this.baseLayout.landmarks, px, pz)) {
+      if (this.landmarksHit.has(id)) continue;
+      this.landmarksHit.add(id);
+      // SYNCHRONOUS window event — systems/shopTrip.js awards the sticker
+      // (it has store access; this plugin doesn't) and reflects `first`
+      // back into detail so the one-time camera-flash gag fires here.
+      const ev = new CustomEvent('gooby:landmark', { detail: { id, first: false } });
+      window.dispatchEvent(ev);
+      if (ev.detail.first) this.cameraFlash();
+    }
+  },
+
   /** §C9.3 camera-flash gag — plays once per first-time landmark sticker. */
   cameraFlash() {
     const el = document.createElement('div');

@@ -7,6 +7,7 @@
 // pipeFlow.logic.js. Dev-only ?autoplay=1 replays the exported solver's taps.
 
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'; // V2/FIX-F P1-1
 import { t } from '../../data/strings.js';
 import { tween, easings } from '../../gfx/tween.js';
 import { createParticles } from '../../gfx/particles.js';
@@ -110,6 +111,39 @@ function makeBlueprintTexture() {
   return tex;
 }
 
+/**
+ * V2/FIX-F P1-1 (E17): one merged geometry per pipe shape (rot-0 arms + hub)
+ * so a whole tile renders as ONE draw call instead of 3–4 (the uninstanced
+ * 5×5 board pushed the base scene to ~139 calls; with the solve spray's 22
+ * sprites the round breached the ≤150 §E10 budget at 161–168). The tile group
+ * still rotates, so tap animation and water-fill tinting are unchanged.
+ * @param {'straight'|'bend'|'tee'} shape
+ * @param {THREE.BufferGeometry} armGeo
+ * @param {THREE.BufferGeometry} hubGeo
+ * @returns {THREE.BufferGeometry}
+ */
+function buildShapeGeo(shape, armGeo, hubGeo) {
+  const parts = [];
+  const m = new THREE.Matrix4();
+  for (const dir of connectionsOf({ shape, rot: 0 })) {
+    const arm = armGeo.clone();
+    m.makeRotationZ(dir === DIRS.E || dir === DIRS.W ? Math.PI / 2 : 0);
+    m.setPosition(
+      (CELL / 4) * (dir === DIRS.E ? 1 : dir === DIRS.W ? -1 : 0),
+      (CELL / 4) * (dir === DIRS.N ? 1 : dir === DIRS.S ? -1 : 0),
+      0
+    );
+    arm.applyMatrix4(m);
+    parts.push(arm);
+  }
+  const hub = hubGeo.clone();
+  hub.applyMatrix4(m.makeRotationX(Math.PI / 2));
+  parts.push(hub);
+  const merged = mergeGeometries(parts, false);
+  for (const g of parts) g.dispose();
+  return merged;
+}
+
 /** @type {object} §E8 plugin — fully procedural (no GLB assets). */
 export default {
   id: 'pipeFlow',
@@ -176,6 +210,13 @@ export default {
     this.ownedGeos.push(this.armGeo, this.hubGeo, this.baseGeo);
     this.baseMat = new THREE.MeshBasicMaterial({ color: COLORS.PIPE_EDGE, transparent: true, opacity: 0.5 });
     this.ownedMats.push(this.baseMat);
+    // V2/FIX-F P1-1: one merged geometry per shape — a tile is 1 draw call
+    this.shapeGeos = {
+      straight: buildShapeGeo('straight', this.armGeo, this.hubGeo),
+      bend: buildShapeGeo('bend', this.armGeo, this.hubGeo),
+      tee: buildShapeGeo('tee', this.armGeo, this.hubGeo),
+    };
+    this.ownedGeos.push(this.shapeGeos.straight, this.shapeGeos.bend, this.shapeGeos.tee);
 
     // --- board group + fixtures (tap + sprinkler rebuilt per deal) ---
     this.boardGroup = new THREE.Group();
@@ -183,6 +224,24 @@ export default {
     scene.add(this.boardGroup);
     this.fixtures = new THREE.Group();
     scene.add(this.fixtures);
+
+    // V2/FIX-F P1-1: the 5×5 tile bases are static across deals — render all
+    // of them as ONE InstancedMesh (was 25 meshes/draw calls); taps raycast
+    // this mesh and read hit.instanceId as the cell index (cellAt below).
+    {
+      const size = PIPE.GRID;
+      const origin = -((size - 1) / 2) * CELL;
+      this.baseIM = new THREE.InstancedMesh(this.baseGeo, this.baseMat, size * size);
+      const bm = new THREE.Matrix4();
+      for (let idx = 0; idx < size * size; idx += 1) {
+        const col = idx % size;
+        const row = (idx - col) / size;
+        bm.makeTranslation(origin + col * CELL, BOARD_Y + (-(origin + row * CELL)), -0.08);
+        this.baseIM.setMatrixAt(idx, bm);
+      }
+      this.baseIM.instanceMatrix.needsUpdate = true;
+      this.boardGroup.add(this.baseIM);
+    }
 
     // --- Gooby foreman watching from the footer ---
     this.particles = createParticles(scene);
@@ -255,27 +314,13 @@ export default {
       const group = new THREE.Group();
       group.position.set(origin + col * CELL, BOARD_Y + (-(origin + row * CELL)), 0);
 
-      const base = new THREE.Mesh(this.baseGeo, this.baseMat);
-      base.position.z = -0.08;
-      base.userData.cellIdx = idx;
-      group.add(base);
-
-      // pipe arms at the tile's ROT-0 connections; the group itself rotates,
-      // so a tap animates one -90° turn of the whole tile.
+      // V2/FIX-F P1-1: the tile base lives in the shared InstancedMesh (init);
+      // the whole rot-0 pipe (arms + hub) is ONE merged-geometry mesh. The
+      // mesh itself rotates, so a tap still animates one -90° turn.
       const pipeMat = new THREE.MeshBasicMaterial({ color: COLORS.PIPE });
       this.dealMats.push(pipeMat);
-      const pipes = new THREE.Group();
+      const pipes = new THREE.Mesh(this.shapeGeos[tiles[idx].shape], pipeMat);
       pipes.name = 'pipes';
-      for (const dir of connectionsOf({ shape: tiles[idx].shape, rot: 0 })) {
-        const arm = new THREE.Mesh(this.armGeo, pipeMat);
-        arm.position.y = (CELL / 4) * (dir === DIRS.N ? 1 : dir === DIRS.S ? -1 : 0);
-        arm.position.x = (CELL / 4) * (dir === DIRS.E ? 1 : dir === DIRS.W ? -1 : 0);
-        arm.rotation.z = dir === DIRS.E || dir === DIRS.W ? Math.PI / 2 : 0;
-        pipes.add(arm);
-      }
-      const hub = new THREE.Mesh(this.hubGeo, pipeMat);
-      hub.rotation.x = Math.PI / 2;
-      pipes.add(hub);
       pipes.rotation.z = -tiles[idx].rot * (Math.PI / 2);
       group.add(pipes);
 
@@ -320,11 +365,11 @@ export default {
     this.sprinklerPos = new THREE.Vector3(origin + goalCol * CELL, botY - 0.15, 0.2);
   },
 
-  /** Map a tap payload to a cell index (raycast against tile bases). */
+  /** Map a tap payload to a cell index (raycast the base InstancedMesh). */
   cellAt(p) {
-    const bases = this.tileViews.map((v) => v.group.children[0]);
-    const hit = this.ctx.input.pick(this.ctx.camera, bases, p);
-    return hit ? hit.object.userData.cellIdx : null;
+    // V2/FIX-F P1-1: instance order == cell index (built row-major in init)
+    const hit = this.ctx.input.pick(this.ctx.camera, [this.baseIM], p);
+    return hit && hit.instanceId != null ? hit.instanceId : null;
   },
 
   /** One 90° tap on a tile (§C1.2 #9) — rotate, count, check the flow. */
@@ -441,6 +486,9 @@ export default {
     this.offTap?.();
     this.particles?.dispose();
     this.gooby?.dispose();
+    this.baseIM?.dispose(); // V2/FIX-F P1-1: frees the instanceMatrix buffer
+    this.baseIM = null;
+    this.shapeGeos = null; // V2/FIX-F P1-1 (geometries are in ownedGeos)
     for (const geo of this.ownedGeos ?? []) geo.dispose();
     for (const mat of this.ownedMats ?? []) mat.dispose();
     for (const tex of this.ownedTexs ?? []) tex.dispose();

@@ -10,6 +10,7 @@
  * e.g. `'food-kit/carrot'`, `'interface-sounds/click_001'`.
  */
 
+import * as THREE from 'three'; // V2/FIX-F: placeholder Group (P2-5, E18)
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 /** Packs whose files are OGGs under `<slug>/audio/` (PLAN.md §D1). */
@@ -29,6 +30,50 @@ let loader = new GLTFLoader();
 const modelCache = new Map();
 /** In-flight/settled load promises so concurrent preloads coalesce. */
 const loadPromises = new Map();
+
+// ── V2/FIX-F P2-3 (E17): cache ownership registry ───────────────────────────
+// Geometries/materials of cache MASTERS. getModel clones SHARE these objects
+// (Object3D.clone() semantics), so scene dispose sweeps (minigame framework)
+// can consult isCachedResource to skip them — disposing a shared master forces
+// a GPU re-upload + shader recompile on the next scene that uses the model.
+/** @type {WeakSet<object>} */
+const cachedResources = new WeakSet();
+
+/**
+ * Whether a geometry/material belongs to (is shared with) the permanent asset
+ * cache. Scene dispose sweeps must SKIP these — mirror `roomManager`'s
+ * `disposeIfOwned` pattern (V2/FIX-F P2-3).
+ * @param {object|null|undefined} resource a THREE geometry or material
+ * @returns {boolean}
+ */
+export function isCachedResource(resource) {
+  return resource != null && cachedResources.has(resource);
+}
+
+/**
+ * One-time normalization of a freshly loaded GLB scene (idempotent per
+ * material — clones/multi-mesh GLBs share material instances):
+ *   · V2/FIX-F P1-2 (E13): Kenney nature-kit GLBs ship `metallicFactor: 1`
+ *     (tree_oak, tree_default, flower_redA, …); with no envmap those materials
+ *     render near-black. metalness === 1 → 0, roughness/colormap untouched.
+ *     ONLY loaded GLB materials pass through here — materials the app creates
+ *     itself (e.g. the golden skin's 0.25 metalness) are never touched.
+ *   · V2/FIX-F P2-3: register master geometries/materials in the ownership
+ *     WeakSet (see isCachedResource).
+ * @param {object} sceneRoot the gltf.scene master
+ */
+function normalizeLoadedScene(sceneRoot) {
+  sceneRoot.traverse?.((obj) => {
+    if (obj.geometry) cachedResources.add(obj.geometry);
+    const mats = Array.isArray(obj.material) ? obj.material : obj.material ? [obj.material] : [];
+    for (const mat of mats) {
+      cachedResources.add(mat);
+      if (mat.userData?.goobyMetalnessNormalized) continue;
+      if (mat.userData) mat.userData.goobyMetalnessNormalized = true;
+      if (mat.metalness === 1) mat.metalness = 0;
+    }
+  });
+}
 
 /**
  * Test seam: swap the loader (must expose `loadAsync(url) → Promise<{scene}>`).
@@ -80,6 +125,7 @@ function loadModel(key) {
   if (!p) {
     p = loader.loadAsync(getModelUrl(key)).then(
       (gltf) => {
+        normalizeLoadedScene(gltf.scene); // V2/FIX-F P1-2 + P2-3
         modelCache.set(key, gltf.scene);
         return gltf.scene;
       },
@@ -108,29 +154,80 @@ export async function preload(keys) {
   await Promise.all(keys.filter((k) => !isAudioKey(k)).map(loadModel));
 }
 
+// ── V2/FIX-F P2-5 (E18): getModel never throws on a missing model ───────────
+// sceneManager fail-softs preload errors (console.warn), but consumers like
+// roomManager.enter() call getModel synchronously right after — one transient
+// GLB fetch failure used to hard-crash boot ('[boot] fatal') with no retry.
+
+/** Shared placeholder resources (cache-owned so dispose sweeps skip them). */
+let placeholderGeo = null;
+let placeholderMat = null;
+
+/**
+ * Tiny neutral stand-in Group for a model that is not (yet) loaded. If the
+ * background retry lands, the real model is cloned INTO this group so the
+ * scene self-heals without consumer involvement.
+ * @param {string} key
+ * @returns {import('three').Group}
+ */
+function makePlaceholder(key) {
+  if (!placeholderGeo) {
+    placeholderGeo = new THREE.BoxGeometry(0.24, 0.24, 0.24);
+    placeholderMat = new THREE.MeshStandardMaterial({ color: 0xbdb4aa, roughness: 0.9 });
+    cachedResources.add(placeholderGeo);
+    cachedResources.add(placeholderMat);
+  }
+  const group = new THREE.Group();
+  group.name = key;
+  group.userData.placeholder = true;
+  const box = new THREE.Mesh(placeholderGeo, placeholderMat);
+  box.position.y = 0.12;
+  group.add(box);
+  return group;
+}
+
 /**
  * Get a fresh instance of a preloaded model: the node hierarchy is deep-cloned
  * (safe to reposition/rename/add per scene) while geometries and materials
  * stay shared with the cached master (three.js `Object3D.clone()` semantics)
  * to keep memory + draw setup cheap.
  *
+ * Cache miss (V2/FIX-F P2-5, E18): instead of throwing, retry the fetch once
+ * in the background (the v1 retry-on-reject eviction guarantees a real
+ * re-fetch after a failed preload) and return a tiny neutral placeholder
+ * Group immediately. When the retry succeeds the model is cloned into the
+ * placeholder, and later getModel calls serve real clones from the cache.
+ *
  * Disposal caveat (F5/E14): because geometries/materials are SHARED with the
  * permanent cache, calling `.dispose()` on a clone's geometry/material (e.g.
  * a blanket scene sweep) releases the cached master's GPU buffers/programs
  * too. three.js re-uploads them on next render (CPU-side data is retained),
  * so this is safe but causes re-upload churn — prefer disposing only
- * resources you created, like `roomManager`'s `disposeIfOwned` does.
+ * resources you created: use `isCachedResource` to skip shared masters, like
+ * `roomManager`'s `disposeIfOwned` does.
  * @param {string} key e.g. 'food-kit/carrot'
  * @returns {import('three').Group}
  */
 export function getModel(key) {
   const master = modelCache.get(key);
-  if (!master) {
-    throw new Error(`assets: '${key}' not loaded — call preload(['${key}']) first`);
+  if (master) {
+    const clone = master.clone(true);
+    clone.name = key;
+    return clone;
   }
-  const clone = master.clone(true);
-  clone.name = key;
-  return clone;
+  console.warn(`assets: '${key}' not loaded — retrying fetch, placeholder returned`);
+  const placeholder = makePlaceholder(key);
+  loadModel(key).then(
+    (loaded) => {
+      if (loaded?.isObject3D !== true) return; // test seams may stub the scene
+      placeholder.userData.placeholder = false;
+      placeholder.add(loaded.clone(true));
+    },
+    (err) => {
+      console.warn(`assets: retry for '${key}' failed — placeholder stays:`, err);
+    }
+  );
+  return placeholder;
 }
 
 /**

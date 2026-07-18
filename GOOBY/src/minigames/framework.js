@@ -512,10 +512,20 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
           console.error('[minigames] game dispose error:', err);
         }
         game = null;
+        // V2/FIX-F P2-3 (E17): the safety sweep frees leftovers the game's own
+        // dispose missed, but must SKIP resources shared with the permanent
+        // asset cache (assets.getModel clones share master geo/mats — blanket
+        // disposal churned 40 geo + 40 mats per cityDrive quit, forcing GPU
+        // re-uploads + shader recompiles on the next launch). Mirrors
+        // roomManager's disposeIfOwned pattern (also honors userData.shared).
+        const isShared = (res) =>
+          ctx.assets?.isCachedResource?.(res) === true || res?.userData?.shared === true;
         scene.traverse((obj) => {
-          obj.geometry?.dispose?.();
+          if (obj.geometry && !isShared(obj.geometry)) obj.geometry.dispose?.();
           if (obj.material) {
-            for (const m of Array.isArray(obj.material) ? obj.material : [obj.material]) m.dispose?.();
+            for (const m of Array.isArray(obj.material) ? obj.material : [obj.material]) {
+              if (!isShared(m)) m.dispose?.();
+            }
           }
         });
       },
@@ -526,6 +536,8 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
   /** F6 (RE5): retry cadence/budget while an in-flight scene switch settles. */
   const LAUNCH_RETRY_MS = 100;
   const LAUNCH_RETRY_MAX_MS = 5000;
+  /** V2/FIX-F P2-6 (E20): serialize launches — see the guard in launch(). */
+  let launchInFlight = false;
 
   /**
    * Launch a minigame by id (§E8): checks metadata, implementation, unlock
@@ -537,6 +549,11 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
    * and only resolves true once the minigame scene really is current (results
    * "Home" → immediate relaunch, arcade taps during fades, …). Resolves false
    * if it never lands within the retry budget.
+   *
+   * V2/FIX-F P2-6 (E20): launches are SERIALIZED — while one launch is in
+   * flight every further call returns false immediately (two concurrent
+   * launches used to both resolve true, last one winning the scene). The
+   * fade-retry loop above still runs for the single active launch.
    * @param {string} id
    * @param {object} [params] forwarded to the game as ctx.params;
    *   params.dev bypasses the level lock; params.onExit overrides the
@@ -544,6 +561,17 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
    * @returns {Promise<boolean>} whether the game was launched
    */
   async function launch(id, params = {}) {
+    if (launchInFlight) return false; // V2/FIX-F P2-6
+    launchInFlight = true;
+    try {
+      return await launchInner(id, params);
+    } finally {
+      launchInFlight = false;
+    }
+  }
+
+  /** The single active launch (V2/FIX-F P2-6 keeps this un-reentrant). */
+  async function launchInner(id, params = {}) {
     const meta = getMinigame(id);
     if (!meta || !hasGame(id)) {
       ui.toast('toast.minigameMissing');

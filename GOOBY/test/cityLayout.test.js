@@ -349,6 +349,25 @@ test('V2 §C9.3: landmarksInRange fires inside 15 m and stays quiet outside', ()
   assert.deepEqual(landmarksInRange(undefined, 0, 0), []); // defensive
 });
 
+// V2/FIX-F P2-4 (eval E12): towed trips teleport the car straight onto the
+// destination apron OUTSIDE phase 'drive' — cityDrive now runs the §C9.3
+// landmark scan at the tow drop-off too. This proves the drop-off points
+// actually sit inside their destination landmark's 15 m trigger, so the
+// tow-completion scan always awards the destination sticker.
+test('V2/FIX-F P2-4: tow drop-off aprons sit inside their destination landmark trigger', () => {
+  const layout = generateCityLayout(SEED);
+  assert.deepEqual(
+    landmarksInRange(layout.landmarks, layout.shop.parking.x, layout.shop.parking.z),
+    ['shop'],
+    'shop apron (tow target on shopTrips) must trigger the shop sticker'
+  );
+  assert.deepEqual(
+    landmarksInRange(layout.landmarks, layout.vet.parking.x, layout.vet.parking.z),
+    ['vetClinic'],
+    'vet apron (tow target on vetTrips) must trigger the vetClinic sticker'
+  );
+});
+
 test('V2 §C9.1: vet building renders west-facing on the tile east half (building-e)', () => {
   const layout = generateCityLayout(SEED);
   assert.equal(layout.vet.rotY, -Math.PI / 2); // rotY −90° per §C9.1
