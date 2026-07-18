@@ -31,6 +31,7 @@ import { FOODS } from '../data/foods.js';
 import { WALLPAPERS, FLOORS, furnitureFor, roomSlots } from '../data/furniture.js';
 import { CROPS } from '../data/crops.js'; // V2/G22: seed rows in the Care section (§C7)
 import { SKINS, DEFAULT_SKIN, getSkin } from '../data/skins.js'; // V2/G22: Skins tab (§C8.5)
+import { OUTFITS } from '../data/outfits.js'; // V3/G40: §C13 outfit level badges
 import musicDirector from '../audio/musicDirector.js'; // V3/G32: shop medley overlay (§B2.4)
 import { count as invCount } from '../systems/inventory.js';
 import { NOUGAT } from '../systems/nougat.logic.js'; // V3/G35: Nougatschleuse card (§C6.3)
@@ -156,6 +157,12 @@ const SHOP_FIX_CSS = `
 .swatch .swatch-name{max-width:100%;text-align:center;line-height:1.2;overflow-wrap:anywhere;}
 .swatch .swatch-price{max-width:100%;flex-wrap:wrap;justify-content:center;text-align:center;}
 .shop-tabs .shop-tab{min-width:0;min-height:max(44px, 2.875rem);overflow:hidden;overflow-wrap:anywhere;font-size:clamp(0.6875rem,3.4vw,0.8125rem);line-height:1.2;padding:0.375rem 0.1875rem;}
+/* V3/G40 (§C13.3): compact arcade-style lock rows in the shop's outfit tab. */
+.g40-shop-outfit-locks{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0.375rem;margin-top:0.75rem;}
+.g40-shop-outfit-lock{min-width:0;display:flex;align-items:center;justify-content:space-between;gap:0.25rem;padding:0.375rem 0.5rem;border-radius:0.75rem;background:rgba(74,59,54,.08);font-size:0.6875rem;font-weight:800;}
+.g40-shop-outfit-lock-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g40-shop-outfit-level{flex:none;display:inline-flex;align-items:center;gap:0.125rem;padding:0.125rem 0.3125rem;border-radius:999px;background:var(--brown);color:#fff;font-size:0.5625rem;}
+.g40-shop-outfit-level svg{color:var(--yellow);}
 `;
 
 /**
@@ -648,13 +655,30 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
 
   // ---------------------------------------------------------------- outfits
   function renderOutfits() {
+    // V3/G40 (§C13.3): the actual buy/equip path remains the wardrobe. This
+    // shop landing card only mirrors each currently locked gated row with the
+    // same level badge treatment as the arcade, so the gate is visible before
+    // entering buy mode.
+    const level = store.get('level') ?? 1;
+    const owned = store.get('outfits.owned') ?? [];
+    const lockedRows = OUTFITS.filter(
+      (def) => def.minLevel > level && !owned.includes(def.id)
+    );
     const card = document.createElement('div');
     card.className = 'card shop-outfits-card';
     card.innerHTML = `
       <span class="shop-outfits-emoji">🎩</span>
       <div>${t('shop.outfitsPitch')}</div>
       <button class="btn btn-teal outfits-open">${icon('shirt', 20)} ${t('shop.outfitsOpen')}</button>
-      ${atTrip() ? '' : `<div class="shop-banner-body">${t('wardrobe.shopOnly')}</div>`}`;
+      ${atTrip() ? '' : `<div class="shop-banner-body">${t('wardrobe.shopOnly')}</div>`}
+      ${lockedRows.length === 0 ? '' : `
+        <div class="g40-shop-outfit-locks">
+          ${lockedRows.map((def) => `
+            <span class="g40-shop-outfit-lock">
+              <span class="g40-shop-outfit-lock-name">${t(def.nameKey)}</span>
+              <span class="g40-shop-outfit-level">${icon('lock', 11)}${t('arcade.lockLevel', { level: def.minLevel })}</span>
+            </span>`).join('')}
+        </div>`}`;
     card.querySelector('.outfits-open').addEventListener('click', () => {
       audio.play('ui.tap');
       // G12 wires: the wardrobe screen registers itself at boot — open it in

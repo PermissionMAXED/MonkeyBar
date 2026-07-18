@@ -17,14 +17,25 @@
 // in buy mode via economy.buySkin.
 
 import * as THREE from 'three';
-import { OUTFIT_SLOTS, OUTFITS, OUTFITS_BY_ID, outfitsForSlot } from '../data/outfits.js';
+import {
+  OUTFIT_EQUIP_SLOTS,
+  OUTFITS,
+  OUTFITS_BY_ID,
+  outfitsForSlot,
+} from '../data/outfits.js';
 import { SKINS, DEFAULT_SKIN, getSkin } from '../data/skins.js'; // V2/G22 (§C8.5)
 import { t } from '../data/strings.js';
 import { icon } from './icons.js';
 import { createGooby } from '../character/gooby.js';
-import { applyOutfits, buildOutfitItem } from '../character/outfitAttach.js';
+import {
+  applyOutfits,
+  buildOutfitItem,
+  preloadOutfitAssets,
+} from '../character/outfitAttach.js';
+import { isCachedResource } from '../core/assets.js';
 import { applySkin, previewSkin, clearSkinPreview } from '../character/skins.js'; // V2/G22
 import { buySkin, spend } from '../systems/economy.js'; // V2/G22 (§C8.5) + V2/FIX-D: spend (§C1.5)
+import { tierOf } from '../systems/weight.js'; // V3/G40: preview back fit at live weight tier
 
 const PREVIEW_H = 280;
 const THUMB_SIZE = 108;
@@ -45,13 +56,16 @@ const WARDROBE_CSS = `
 .g12-wr-stage canvas{display:block;width:100%;height:100%;}
 .g12-wr-tryon{position:absolute;top:0.625rem;left:0.75rem;background:rgba(255,255,255,.9);border-radius:999px;padding:0.375rem 0.75rem;font-size:0.8125rem;font-weight:800;color:var(--pink-dark);box-shadow:var(--shadow-soft);}
 .g12-wr-tabs{width:100%;max-width:27.5rem;display:flex;gap:0.375rem;margin:0.75rem 0 0.625rem;flex:none;}
-.g12-wr-tab{flex:1;min-width:0;border:none;border-radius:1rem;background:rgba(255,255,255,.75);border-bottom:0.25rem solid rgba(74,59,54,.12);color:var(--brown);font-family:inherit;font-size:clamp(0.75rem,3.9vw,0.875rem);font-weight:800;min-height:max(44px, 2.875rem);padding:0.25rem 0.125rem;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+.g12-wr-tabs .g12-wr-tab{flex:1;min-width:0;border:none;border-radius:1rem;background:rgba(255,255,255,.75);border-bottom:0.25rem solid rgba(74,59,54,.12);color:var(--brown);font-family:inherit;font-size:clamp(0.5625rem,2.8vw,0.75rem);font-weight:800;line-height:1.05;white-space:normal;overflow:hidden;text-overflow:clip;overflow-wrap:anywhere;word-break:break-word;min-height:max(44px, 2.875rem);padding:0.25rem 0.125rem;cursor:pointer;-webkit-tap-highlight-color:transparent;}
 .g12-wr-tab.g12-on{background:var(--pink);border-bottom-color:var(--pink-dark);color:#fff;}
 .g12-wr-grid{width:100%;max-width:27.5rem;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0.625rem;padding-bottom:1.125rem;flex:none;}
 .g12-wr-item{position:relative;display:flex;flex-direction:column;align-items:center;gap:0.25rem;min-width:0;border:0.1875rem solid transparent;border-radius:1.125rem;background:var(--white);box-shadow:var(--shadow-soft);font-family:inherit;color:var(--brown);cursor:pointer;padding:0.5rem 0.25rem 0.625rem;-webkit-tap-highlight-color:transparent;transition:transform 90ms ease;}
 .g12-wr-item:active{transform:scale(.95);}
 .g12-wr-item.g12-equipped{border-color:var(--pink);}
 .g12-wr-item.g12-tryon{border-color:var(--teal);}
+.g12-wr-item.g40-locked{opacity:.58;border-color:rgba(74,59,54,.15);}
+.g40-level-badge{display:inline-flex;align-items:center;justify-content:center;gap:0.1875rem;min-height:1.375rem;padding:0.125rem 0.375rem;border-radius:999px;background:var(--brown);color:#fff;font-size:0.625rem;font-weight:900;line-height:1;}
+.g40-level-badge svg{color:var(--yellow);}
 .g12-wr-item img{width:${THUMB_SIZE / 2}px;height:${THUMB_SIZE / 2}px;border-radius:0.75rem;background:#FDF3E7;}
 .g12-wr-item-name{font-size:0.7188rem;font-weight:800;line-height:1.15;text-align:center;max-width:100%;max-height:1.6875rem;overflow:hidden;overflow-wrap:anywhere;}
 .g12-wr-item-sub{display:inline-flex;align-items:center;gap:0.1875rem;font-size:0.6875rem;font-weight:800;opacity:.75;min-height:1rem;}
@@ -89,8 +103,8 @@ function getSharedRenderer() {
 
 /** Render 3D thumbnails for every catalog item once per session (Kenney-free,
  * pure primitives — the same builders the rig wears). */
-function ensureThumbs() {
-  if (thumbCache.size >= OUTFITS.length) return;
+function ensureThumbs(defs = OUTFITS) {
+  if (defs.every((def) => thumbCache.has(def.id))) return;
   const renderer = getSharedRenderer(); // V2/FIX-D (E17): no context of its own
   if (!renderer) return;
   renderer.setSize(THUMB_SIZE, THUMB_SIZE);
@@ -104,7 +118,7 @@ function ensureThumbs() {
   const box = new THREE.Box3();
   const center = new THREE.Vector3();
   const size = new THREE.Vector3();
-  for (const def of OUTFITS) {
+  for (const def of defs) {
     if (thumbCache.has(def.id)) continue;
     const item = buildOutfitItem(def.id);
     if (!item) continue;
@@ -124,7 +138,9 @@ function ensureThumbs() {
       /* toDataURL can fail on odd contexts — cards fall back to no image */
     }
     scene.remove(item);
-    item.traverse((obj) => obj.geometry?.dispose?.());
+    item.traverse((obj) => {
+      if (obj.geometry && !isCachedResource(obj.geometry)) obj.geometry.dispose?.();
+    });
   }
   // V2/FIX-D (E17): no dispose — the context is shared with the try-on stage
   // (mount's resize() restores the stage size right after baking).
@@ -145,8 +161,20 @@ export function registerWardrobe({ store, ui, audio }) {
   /** Live-mount state (screen is a singleton — one mount at a time, §E6). */
   let live = null;
 
-  // V2/G22: the Fur category sits after the 3 outfit slots (§C8.5)
-  const WR_TABS = [...OUTFIT_SLOTS, 'fur'];
+  // V3/G40: `back` is the 4th outfit slot; Fur remains the final category.
+  const WR_TABS = [...OUTFIT_EQUIP_SLOTS, 'fur'];
+
+  // Load the real KayKit pumpkin in the background. If a placeholder thumbnail
+  // was baked first, replace only that cached image and leave the shared
+  // renderer/context alive (V2/FIX-D contract).
+  preloadOutfitAssets().then(() => {
+    thumbCache.delete('pumpkinHat');
+    if (!live) return;
+    const active = live.tab?.();
+    if (active && active !== 'fur') ensureThumbs(outfitsForSlot(active));
+    live.resize?.();
+    live.renderAll?.();
+  }).catch((err) => console.warn('[wardrobe] pumpkin preload unavailable:', err));
 
   function mount(el, params = {}) {
     const buyMode = params.mode === 'buy';
@@ -202,7 +230,7 @@ export function registerWardrobe({ store, ui, audio }) {
     const scene = new THREE.Scene();
     // V2/FIX-D (E17): bake thumbnails BEFORE sizing the stage — both share the
     // one module-level context, and resize() below restores the stage size.
-    ensureThumbs();
+    if (tab !== 'fur') ensureThumbs(outfitsForSlot(tab));
     try {
       renderer = getSharedRenderer();
       if (!renderer) throw new Error('WebGL unavailable');
@@ -232,7 +260,8 @@ export function registerWardrobe({ store, ui, audio }) {
         const dt = Math.min((now - last) / 1000, 0.1);
         last = now;
         gooby.update(dt);
-        gooby.group.rotation.y = Math.sin(now / 2400) * 0.5; // gentle sway
+        const targetYaw = tab === 'back' ? Math.PI + Math.sin(now / 2200) * 0.28 : Math.sin(now / 2400) * 0.5;
+        gooby.group.rotation.y += (targetYaw - gooby.group.rotation.y) * Math.min(1, dt * 7);
         renderer.render(scene, camera);
       };
       raf = requestAnimationFrame(tick);
@@ -257,6 +286,7 @@ export function registerWardrobe({ store, ui, audio }) {
 
     const equipped = () => store.get('outfits.equipped') ?? {};
     const owned = () => store.get('outfits.owned') ?? [];
+    const level = () => store.get('level') ?? 1;
     // V2/G22 skin slices (§B2 — defaults cream/cream)
     const ownedSkins = () => store.get('skins.owned') ?? [DEFAULT_SKIN];
     const equippedSkin = () => store.get('skins.equipped') ?? DEFAULT_SKIN;
@@ -264,6 +294,9 @@ export function registerWardrobe({ store, ui, audio }) {
     /** The preview wears equipped + any active try-on override. */
     function refreshPreview() {
       if (!live?.gooby) return;
+      // V3/G40 (§C13 fit bar): the shared preview rig uses the save's actual
+      // silhouette tier, so back/neck anchor scaling is visible before equip.
+      live.gooby.setWeightTier(tierOf(store.get('weight.value') ?? 50));
       const wear = { ...equipped() };
       if (tryOn) wear[tryOn.slot] = tryOn.id;
       applyOutfits(live.gooby, wear);
@@ -299,6 +332,11 @@ export function registerWardrobe({ store, ui, audio }) {
     }
 
     function buy(def) {
+      if (level() < def.minLevel) {
+        ui.toast('mg.locked', { level: def.minLevel });
+        audio.play('ui.error');
+        return;
+      }
       // V2/FIX-D (E13, §C1.5): the single money path — economy.spend gates
       // affordability AND feeds profile.coinsSpent (stats-screen truth); the
       // old direct store.update coin subtraction bypassed both.
@@ -327,6 +365,13 @@ export function registerWardrobe({ store, ui, audio }) {
           const cur = state.outfits.equipped[def.slot];
           state.outfits.equipped[def.slot] = cur === def.id ? null : def.id; // tap again = take off
         });
+        renderAll();
+        return;
+      }
+      if (level() < def.minLevel) {
+        tryOn = null;
+        ui.toast('mg.locked', { level: def.minLevel });
+        audio.play('ui.error');
         renderAll();
         return;
       }
@@ -414,15 +459,24 @@ export function registerWardrobe({ store, ui, audio }) {
         renderFurGrid(); // V2/G22 (§C8.5)
         return;
       }
+      ensureThumbs(outfitsForSlot(tab));
+      live?.resize?.(); // thumbnail baking temporarily uses the shared 108px viewport
       for (const def of outfitsForSlot(tab)) {
         const isOwned = owned().includes(def.id);
         const isEquipped = equipped()[def.slot] === def.id;
+        const isLocked = !isOwned && level() < def.minLevel;
         const card = document.createElement('button');
         card.className = 'g12-wr-item';
         if (isEquipped) card.classList.add('g12-equipped');
         else if (tryOn?.id === def.id) card.classList.add('g12-tryon');
+        if (isLocked) {
+          card.classList.add('g40-locked');
+          card.setAttribute('aria-disabled', 'true');
+        }
         const thumb = thumbCache.get(def.id);
-        const sub = isEquipped
+        const sub = isLocked
+          ? `<span class="g40-level-badge">${icon('lock', 12)}${t('arcade.lockLevel', { level: def.minLevel })}</span>`
+          : isEquipped
           ? `<span class="g12-wr-item-sub g12-sub-equipped">${t('wardrobe.equipped')}</span>`
           : isOwned
             ? `<span class="g12-wr-item-sub g12-sub-owned">${t('wardrobe.owned')}</span>`
@@ -432,7 +486,7 @@ export function registerWardrobe({ store, ui, audio }) {
           <span class="g12-wr-item-name">${t(def.nameKey)}</span>
           ${sub}`;
         card.addEventListener('click', () => onItemTap(def));
-        if (buyMode && !isOwned) {
+        if (buyMode && !isOwned && !isLocked) {
           const buyBtn = document.createElement('span');
           buyBtn.className = 'btn btn-teal g12-wr-buy';
           buyBtn.textContent = t('wardrobe.buy');
@@ -460,6 +514,8 @@ export function registerWardrobe({ store, ui, audio }) {
     renderAll();
     live.offCoins = offCoins;
     live.rafStop = () => cancelAnimationFrame(raf);
+    live.renderAll = renderAll;
+    live.tab = () => tab;
   }
 
   function unmount() {

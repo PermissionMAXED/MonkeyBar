@@ -5,58 +5,95 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { OUTFITS, OUTFITS_BY_ID, OUTFIT_SLOTS, getOutfit, outfitsForSlot } from '../src/data/outfits.js';
+import {
+  OUTFITS,
+  OUTFITS_BY_ID,
+  OUTFIT_SLOTS,
+  OUTFIT_EQUIP_SLOTS,
+  getOutfit,
+  outfitsForSlot,
+} from '../src/data/outfits.js';
 import { EN, DE } from '../src/data/strings.js';
+import { ACHIEVEMENTS } from '../src/data/achievements.js';
+import { STICKERS } from '../src/data/stickers.js';
 import * as save from '../src/core/save.js';
 import { applyOutfits, buildOutfitItem, applyEquippedOutfits } from '../src/character/outfitAttach.js';
+import { isSatisfied as isAchievementSatisfied } from '../src/systems/achievementsEngine.js';
+import { isStickerSatisfied } from '../src/systems/stickerBook.js';
 
 // ------------------------------------------------------------ §C5.3 catalog
 
-/** §C5.3 + §C8.4 binding table: id → [slot, price]. */
+/** §C5.3 + §C8.4 + §C13 binding table: id → [slot, price, minLevel]. */
 const SPEC = {
-  partyHat: ['hat', 120],
-  beanie: ['hat', 100],
-  cap: ['hat', 150],
-  topHat: ['hat', 300],
-  crown: ['hat', 1200],
-  roundGlasses: ['glasses', 150],
-  sunglasses: ['glasses', 200],
-  starGlasses: ['glasses', 250],
-  scarfRed: ['neck', 120],
-  bowtie: ['neck', 140],
-  scarfStriped: ['neck', 180],
+  partyHat: ['hat', 120, 1],
+  beanie: ['hat', 100, 1],
+  cap: ['hat', 150, 1],
+  topHat: ['hat', 300, 1],
+  crown: ['hat', 1200, 1],
+  roundGlasses: ['glasses', 150, 1],
+  sunglasses: ['glasses', 200, 1],
+  starGlasses: ['glasses', 250, 1],
+  scarfRed: ['neck', 120, 1],
+  bowtie: ['neck', 140, 1],
+  scarfStriped: ['neck', 180, 1],
   // V2/G22 (§C8.4 verbatim)
-  strawHat: ['hat', 160],
-  chefHat: ['hat', 220],
-  flowerCrown: ['hat', 180],
-  wizardHat: ['hat', 350],
-  heartGlasses: ['glasses', 220],
-  monocle: ['glasses', 400],
-  bandana: ['neck', 130],
-  bellCollar: ['neck', 160],
-  cape: ['neck', 500],
+  strawHat: ['hat', 160, 1],
+  chefHat: ['hat', 220, 1],
+  flowerCrown: ['hat', 180, 1],
+  wizardHat: ['hat', 350, 1],
+  heartGlasses: ['glasses', 220, 1],
+  monocle: ['glasses', 400, 1],
+  bandana: ['neck', 130, 1],
+  bellCollar: ['neck', 160, 1],
+  cape: ['neck', 500, 1],
+  // V3/G40 (§C13.2 verbatim)
+  sombrero: ['hat', 260, 6],
+  pirateHat: ['hat', 320, 12],
+  detectiveHat: ['hat', 280, 10],
+  beret: ['hat', 180, 4],
+  vikingHelm: ['hat', 380, 15],
+  pumpkinHat: ['hat', 240, 8],
+  spaceHelm: ['hat', 420, 18],
+  chefToque: ['hat', 300, 6],
+  aviatorGoggles: ['glasses', 260, 9],
+  readingGlasses: ['glasses', 170, 3],
+  eyepatch: ['glasses', 190, 12],
+  stars3D: ['glasses', 310, 14],
+  pearlNecklace: ['neck', 350, 13],
+  flowerLei: ['neck', 220, 7],
+  medalGold: ['neck', 400, 16],
+  winterScarf: ['neck', 200, 5],
+  backpackTiny: ['back', 280, 6],
+  balloonRed: ['back', 240, 4],
+  propellerPack: ['back', 450, 17],
+  turtleShell: ['back', 320, 11],
+  fairyWings: ['back', 500, 20],
+  surfBoard: ['back', 380, 14],
 };
 
-test('catalog has exactly the 20 §C5.3+§C8.4 items with verbatim slots and prices', () => {
-  assert.equal(OUTFITS.length, 20); // §A3: outfits 11 → 20
+test('catalog has exactly 42 §C5.3+§C8.4+§C13 items with verbatim rows', () => {
+  assert.equal(OUTFITS.length, 42); // §A2: outfits 20 → 42
   assert.deepEqual(
     new Set(OUTFITS.map((o) => o.id)),
     new Set(Object.keys(SPEC))
   );
-  for (const [id, [slot, price]] of Object.entries(SPEC)) {
+  for (const [id, [slot, price, minLevel]] of Object.entries(SPEC)) {
     const item = OUTFITS_BY_ID[id];
     assert.ok(item, `catalog missing ${id}`);
     assert.equal(item.slot, slot, `${id} slot`);
-    assert.equal(item.price, price, `${id} price (§C5.3/§C8.4 binding)`);
+    assert.equal(item.price, price, `${id} price (§C5.3/§C8.4/§C13 binding)`);
+    assert.equal(item.minLevel, minLevel, `${id} minLevel (§C13.2 binding/default 1)`);
   }
 });
 
-test('slot split per §C8.4: 9 hats, 5 glasses, 6 neck', () => {
+test('slot split per §C13: 17 hats, 9 glasses, 10 neck, 6 back', () => {
   assert.deepEqual(OUTFIT_SLOTS, ['hat', 'glasses', 'neck']);
-  assert.equal(outfitsForSlot('hat').length, 9);
-  assert.equal(outfitsForSlot('glasses').length, 5);
-  assert.equal(outfitsForSlot('neck').length, 6);
-  for (const item of OUTFITS) assert.ok(OUTFIT_SLOTS.includes(item.slot));
+  assert.deepEqual(OUTFIT_EQUIP_SLOTS, ['hat', 'glasses', 'neck', 'back']);
+  assert.equal(outfitsForSlot('hat').length, 17);
+  assert.equal(outfitsForSlot('glasses').length, 9);
+  assert.equal(outfitsForSlot('neck').length, 10);
+  assert.equal(outfitsForSlot('back').length, 6);
+  for (const item of OUTFITS) assert.ok(OUTFIT_EQUIP_SLOTS.includes(item.slot));
 });
 
 test('every outfit nameKey exists in BOTH string dictionaries (EN+DE)', () => {
@@ -77,11 +114,16 @@ test('getOutfit lookup', () => {
 async function fakeGooby() {
   const { Object3D } = await import('three');
   return {
-    anchors: { hat: new Object3D(), glasses: new Object3D(), neck: new Object3D() },
+    anchors: {
+      hat: new Object3D(),
+      glasses: new Object3D(),
+      neck: new Object3D(),
+      back: new Object3D(),
+    },
   };
 }
 
-test('all 20 builders produce a non-empty group named for their slot', () => {
+test('all 42 builders produce a non-empty group named for their slot', () => {
   for (const item of OUTFITS) {
     const group = buildOutfitItem(item.id);
     assert.ok(group, `builder missing for ${item.id}`);
@@ -95,27 +137,34 @@ test('all 20 builders produce a non-empty group named for their slot', () => {
   assert.equal(buildOutfitItem('bogus'), null);
 });
 
-test('applyOutfits is idempotent: one item per slot, swap replaces, null removes', async () => {
+test('applyOutfits is idempotent across all 4 slots: swap replaces, null removes', async () => {
   const gooby = await fakeGooby();
   const outfitChildren = (slot) =>
     gooby.anchors[slot].children.filter((c) => c.name.startsWith('outfit-'));
 
-  assert.equal(applyOutfits(gooby, { hat: 'crown', glasses: 'starGlasses', neck: 'scarfRed' }), true);
-  for (const slot of OUTFIT_SLOTS) assert.equal(outfitChildren(slot).length, 1);
+  const full = {
+    hat: 'crown',
+    glasses: 'starGlasses',
+    neck: 'scarfRed',
+    back: 'backpackTiny',
+  };
+  assert.equal(applyOutfits(gooby, full), true);
+  for (const slot of OUTFIT_EQUIP_SLOTS) assert.equal(outfitChildren(slot).length, 1);
   assert.equal(outfitChildren('hat')[0].userData.outfitId, 'crown');
+  assert.equal(outfitChildren('back')[0].userData.outfitId, 'backpackTiny');
 
   // same map again → still exactly one per slot (no stacking)
-  applyOutfits(gooby, { hat: 'crown', glasses: 'starGlasses', neck: 'scarfRed' });
-  for (const slot of OUTFIT_SLOTS) assert.equal(outfitChildren(slot).length, 1);
+  applyOutfits(gooby, full);
+  for (const slot of OUTFIT_EQUIP_SLOTS) assert.equal(outfitChildren(slot).length, 1);
 
   // swap the hat → previous crown replaced by topHat
-  applyOutfits(gooby, { hat: 'topHat', glasses: 'starGlasses', neck: 'scarfRed' });
+  applyOutfits(gooby, { ...full, hat: 'topHat' });
   assert.equal(outfitChildren('hat').length, 1);
   assert.equal(outfitChildren('hat')[0].userData.outfitId, 'topHat');
 
   // undress
   applyOutfits(gooby, {});
-  for (const slot of OUTFIT_SLOTS) assert.equal(outfitChildren(slot).length, 0);
+  for (const slot of OUTFIT_EQUIP_SLOTS) assert.equal(outfitChildren(slot).length, 0);
 });
 
 test('applyOutfits resolves named anchor nodes inside a bare THREE.Group', async () => {
@@ -123,19 +172,72 @@ test('applyOutfits resolves named anchor nodes inside a bare THREE.Group', async
   const root = new Group();
   const inner = new Group();
   root.add(inner);
-  for (const slot of OUTFIT_SLOTS) {
+  for (const slot of OUTFIT_EQUIP_SLOTS) {
     const a = new Object3D();
     a.name = `anchor-${slot}`;
     inner.add(a);
   }
-  assert.equal(applyOutfits(root, { neck: 'bowtie' }), true);
+  assert.equal(applyOutfits(root, { neck: 'bowtie', back: 'turtleShell' }), true);
   const neckAnchor = inner.children.find((c) => c.name === 'anchor-neck');
   assert.equal(neckAnchor.children.filter((c) => c.name === 'outfit-neck').length, 1);
+  const backAnchor = inner.children.find((c) => c.name === 'anchor-back');
+  assert.equal(backAnchor.children.filter((c) => c.name === 'outfit-back').length, 1);
   assert.equal(applyOutfits(new Group(), { hat: 'cap' }), false); // no anchors
 });
 
 test('applyEquippedOutfits is a safe no-op before initOutfitSync', async () => {
   assert.equal(applyEquippedOutfits(await fakeGooby()), false);
+});
+
+test('back anchor is created in outfitAttach at the §C13 offset and tracks weight scale', async () => {
+  const THREE = await import('three');
+  const group = new THREE.Group();
+  const bodyRoot = new THREE.Group();
+  group.add(bodyRoot);
+  const anchors = {};
+  for (const slot of OUTFIT_SLOTS) {
+    const anchor = new THREE.Object3D();
+    anchor.name = `anchor-${slot}`;
+    bodyRoot.add(anchor);
+    anchors[slot] = anchor;
+  }
+
+  assert.equal(applyOutfits({ group, anchors }, { back: 'turtleShell' }), true);
+  assert.ok(anchors.back, 'outfitAttach creates and exposes the new back anchor');
+  assert.deepEqual(anchors.back.position.toArray(), [0, 0.34, -0.18]);
+  assert.equal(anchors.back.children[0].userData.outfitId, 'turtleShell');
+
+  anchors.neck.scale.set(1.14, 1, 1.14); // floof: gooby.js V2/FIX-C source
+  anchors.back.userData.syncOutfitWeight();
+  assert.deepEqual(anchors.back.scale.toArray(), [1.14, 1, 1.14]);
+  assert.equal(anchors.back.position.z, -0.18 * 1.14);
+
+  anchors.neck.scale.set(0.93, 1, 0.93); // sleek
+  anchors.back.userData.syncOutfitWeight();
+  assert.deepEqual(anchors.back.scale.toArray(), [0.93, 1, 0.93]);
+  assert.equal(anchors.back.position.z, -0.18 * 0.93);
+});
+
+test('§C13.3 Full Fit sticker + achievement still require all 3 ORIGINAL slots', () => {
+  const achievement = ACHIEVEMENTS.find((def) => def.id === 'fullOutfit');
+  const sticker = STICKERS.find((def) => def.id === 'fullFit');
+  const state = {
+    outfits: {
+      equipped: {
+        hat: 'crown',
+        glasses: 'starGlasses',
+        neck: null,
+        back: 'fairyWings',
+      },
+    },
+  };
+  assert.equal(isAchievementSatisfied(achievement, state), false, 'back cannot substitute for neck');
+  assert.equal(isStickerSatisfied(sticker, state), false, 'back cannot substitute for neck');
+
+  state.outfits.equipped.neck = 'cape';
+  state.outfits.equipped.back = null;
+  assert.equal(isAchievementSatisfied(achievement, state), true, '3 original slots unlock achievement');
+  assert.equal(isStickerSatisfied(sticker, state), true, '3 original slots unlock sticker');
 });
 
 // ---------------------------------------------------------------------------
@@ -263,18 +365,26 @@ test('equip persistence roundtrip: owned + equipped survive save/load (§E3)', (
     equipped: { hat: null, glasses: null, neck: null, back: null },
   });
 
-  state.outfits.owned = ['crown', 'starGlasses', 'scarfRed', 'beanie'];
-  state.outfits.equipped = { hat: 'crown', glasses: 'starGlasses', neck: 'scarfRed', back: null };
+  state.outfits.owned = ['crown', 'starGlasses', 'scarfRed', 'fairyWings', 'beanie'];
+  state.outfits.equipped = {
+    hat: 'crown',
+    glasses: 'starGlasses',
+    neck: 'scarfRed',
+    back: 'fairyWings',
+  };
   save.persist(state);
 
   const reloaded = save.load();
   assert.equal(reloaded.fresh, false);
-  assert.deepEqual(reloaded.state.outfits.owned, ['crown', 'starGlasses', 'scarfRed', 'beanie']);
+  assert.deepEqual(
+    reloaded.state.outfits.owned,
+    ['crown', 'starGlasses', 'scarfRed', 'fairyWings', 'beanie']
+  );
   assert.deepEqual(reloaded.state.outfits.equipped, {
     hat: 'crown',
     glasses: 'starGlasses',
     neck: 'scarfRed',
-    back: null,
+    back: 'fairyWings',
   });
   save.clear();
 });
