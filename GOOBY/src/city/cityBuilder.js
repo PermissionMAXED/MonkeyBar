@@ -348,37 +348,86 @@ export const CITY_ASSET_KEYS = Object.freeze([
 
 const DEG = Math.PI / 180;
 
+// ── V3/G39 (§C7.1): PIECE_PORTS truth table + search-based roadPieceFor ─────
+// The v1 orientation ladder guessed the GLB authoring ("road-straight runs
+// N–S at rotY 0") and rotated with the wrong sign — 28 of the 33 road tiles
+// rendered misrotated (every straight/zebra 90° off, bends [1,1]/[7,7] and
+// T's [4,1]/[4,7] 180° off): the product owner's „die Straße passt nicht".
+// This table is the TRUE authored open-port sides per §C7.1-1, read off the
+// `?scene=roadtest` render (dev harness; evidence in the G39 report) and
+// cross-checked with a raycast+colormap probe over the same live scene.
+
+/**
+ * TRUE open port sides (road surface meeting the tile edge) of each Kenney
+ * city-kit-roads GLB at rotY 0. `road-crossing` shares `road-straight`'s
+ * authoring, so the §C7.1 zebra substitution inherits the straight's
+ * orientation correctly (locked by test/cityRoads.test.js).
+ * Frozen module-local per §E0.1-3 — constants.js is read-only.
+ * @type {Readonly<Record<string, ReadonlyArray<'N'|'E'|'S'|'W'>>>}
+ */
+export const PIECE_PORTS = Object.freeze({
+  'road-straight': Object.freeze(['W', 'E']),
+  'road-bend': Object.freeze(['S', 'W']),
+  'road-intersection': Object.freeze(['E', 'S', 'W']),
+  'road-crossroad': Object.freeze(['N', 'E', 'S', 'W']),
+  'road-crossing': Object.freeze(['W', 'E']),
+});
+
+/** One +90° three.js rotY quarter turn maps ports N→W→S→E→N (R_y(θ)). */
+const PORT_TURN = Object.freeze({ N: 'W', W: 'S', S: 'E', E: 'N' });
+
+/**
+ * Rotate a set of port sides by `quarterTurns` × +90° rotY.
+ * @param {ReadonlyArray<'N'|'E'|'S'|'W'>} ports
+ * @param {number} quarterTurns 0..3 (positive rotY quarter turns)
+ * @returns {Array<'N'|'E'|'S'|'W'>}
+ */
+export function rotatePorts(ports, quarterTurns) {
+  const q = ((Math.round(quarterTurns) % 4) + 4) % 4;
+  return ports.map((p) => {
+    let out = p;
+    for (let i = 0; i < q; i++) out = PORT_TURN[out];
+    return out;
+  });
+}
+
+/**
+ * Open ports of a PLACED tile — piece rotated by its grid rotY (radians).
+ * Consumed by test/cityRoads.test.js and G44's deliveryRush audit.
+ * @param {string} piece PIECE_PORTS key
+ * @param {number} rotY radians (multiple of 90°)
+ * @returns {Array<'N'|'E'|'S'|'W'>}
+ */
+export function portsOf(piece, rotY) {
+  return rotatePorts(PIECE_PORTS[piece] ?? [], Math.round(rotY / (90 * DEG)));
+}
+
+/** Deterministic search order (crossing is a seeded straight substitution). */
+const SEARCH_PIECES = Object.freeze([
+  'road-straight', 'road-bend', 'road-intersection', 'road-crossroad',
+]);
+
 /**
  * Pick the road GLB + Y rotation for a road tile from its N/E/S/W road
- * neighbors. Kenney city-kit-roads authoring (verified via top-cam shots):
- * road-straight runs north–south at rotY 0; road-bend at rotY 0 connects
- * south+west; road-intersection (T) at rotY 0 opens west+east+south;
- * road-crossroad connects all four.
+ * neighbors: SEARCH (piece × quarter turn) for the rotation whose rotated
+ * PIECE_PORTS equal the tile's connectivity set — deterministic (fixed
+ * search order, first match wins), no special-case ladder (§C7.1-2).
  * @param {boolean} n @param {boolean} e @param {boolean} s @param {boolean} w
  * @returns {{piece: string, rotY: number}}
  */
 export function roadPieceFor(n, e, s, w) {
-  const count = Number(n) + Number(e) + Number(s) + Number(w);
-  if (count === 4) return { piece: 'road-crossroad', rotY: 0 };
-  if (count === 3) {
-    // T: rotY per the missing arm (base opens W+E+S, i.e. missing N)
-    if (!n) return { piece: 'road-intersection', rotY: 0 };
-    if (!e) return { piece: 'road-intersection', rotY: 90 * DEG };
-    if (!s) return { piece: 'road-intersection', rotY: 180 * DEG };
-    return { piece: 'road-intersection', rotY: 270 * DEG };
+  const want = [n && 'N', e && 'E', s && 'S', w && 'W'].filter(Boolean).sort().join('');
+  for (const piece of SEARCH_PIECES) {
+    for (let q = 0; q < 4; q++) {
+      const got = rotatePorts(PIECE_PORTS[piece], q).sort().join('');
+      if (got === want) return { piece, rotY: q * 90 * DEG };
+    }
   }
-  if (count === 2 && n && s) return { piece: 'road-straight', rotY: 0 };
-  if (count === 2 && e && w) return { piece: 'road-straight', rotY: 90 * DEG };
-  if (count === 2) {
-    // bend: base connects south+west; rotate counter-clockwise per pair
-    if (s && w) return { piece: 'road-bend', rotY: 0 };
-    if (n && w) return { piece: 'road-bend', rotY: 90 * DEG };
-    if (n && e) return { piece: 'road-bend', rotY: 180 * DEG };
-    return { piece: 'road-bend', rotY: 270 * DEG }; // s && e
-  }
-  // dead ends don't occur in the ring+cross network; keep a safe default
-  return { piece: 'road-straight', rotY: n || s ? 0 : 90 * DEG };
+  // 0/1-port tiles don't occur in the ring+cross network; safe default:
+  // a straight oriented along the one existing neighbor (W–E authored base).
+  return { piece: 'road-straight', rotY: n || s ? 90 * DEG : 0 };
 }
+// ── end V3/G39 ──────────────────────────────────────────────────────────────
 
 // ---------------------------------------------------------------------------
 // generateCityLayout — THE pure seeded generator (§G G7 test surface)

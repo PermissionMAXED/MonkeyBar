@@ -1,14 +1,25 @@
 // Player car controller (§G G7, §C6.1 #1): physics-lite and forgiving, not
 // sim-like. Auto-throttle (DRIVE.BASE_SPEED → MAX_SPEED ramp), left/right
 // thumb-zone steering (hold left half of the screen = steer left), a DOM
-// brake button bottom-center, lane-snapping assist within ≤ 15° deviation,
-// and soft collisions against buildings/props (slide + speed loss — §C4.5
-// crashes vs traffic are counted by the game, not here). Also owns the
-// third-person chase camera (§C6.1) and the §D1 car-kit wheel fallback.
+// brake button bottom-center, a gentle lane-assist spring (V3/G39 §C7.2:
+// max 8°/s, fades to 0 at 25° intent, off at ≥ 40 % deflection — replaces
+// the v1 lane SNAP), and soft collisions against buildings/props (slide +
+// speed loss — §C4.5 crashes vs traffic are counted by the game, not here).
+// Also owns the third-person chase camera (§C7.2: damped k = 4.0/s follow,
+// 6 m look-ahead, FOV 55→60 with speed, no roll/bob) and the §D1 car-kit
+// wheel fallback. Steering input runs through a τ = 120 ms low-pass with a
+// 90°/s output yaw-rate cap (§C7.2) — the pure math lives in city/carFeel.js
+// so node:test covers it headlessly; all three drivers (cityDrive trip,
+// cityDrive arcade, deliveryRush) inherit the feel through this controller.
 
 import * as THREE from 'three';
 import { DRIVE, DRIVE_TUNING } from '../data/constants.js';
 import { t } from '../data/strings.js';
+// V3/G39 (§C7.2): pure feel math + verbatim tuning numbers (supersedes the
+// v1 LANE_SNAP_*/CAM_POS_LERP/CAM_LOOKAHEAD rows in DRIVE_TUNING).
+import { FEEL, smoothSteer, steerYawRate, assistRate, assistFade, camFollowFactor, chaseFov } from './carFeel.js';
+
+export { FEEL } from './carFeel.js'; // consumers/evals read the §C7.2 numbers here
 
 const T = DRIVE_TUNING;
 const HALF_PI = Math.PI / 2;
@@ -89,9 +100,13 @@ const CONTROLS_CSS = `
  *   colliders: Array<{minX: number, maxX: number, minZ: number, maxZ: number}>,
  *   onWallHit?: () => void,
  *   onStuck?: () => void,
+ *   speedProfile?: {maxSpeed?: number, rampDelaySec?: number},
  * }} deps heading: rotation.y radians, forward = (sin h, 0, cos h); east = π/2.
  *   onStuck (F4 P1-1): fired once per sustained throttle-on standstill
  *   (> STUCK_TRIGGER_SEC) so the game can play a rescue/unstick treatment.
+ *   speedProfile (V3/G39 §C7.2): auto-throttle override for the ARCADE
+ *   open-run (max 15 m/s, ramp after 20 s — cityDrive passes it); trips and
+ *   deliveryRush omit it and keep the §C4 9→13 m/s ramp bit-identical.
  * @returns {{
  *   group: import('three').Group, position: import('three').Vector3,
  *   heading: () => number, speed: () => number,
@@ -104,7 +119,7 @@ const CONTROLS_CSS = `
  *   dispose: () => void,
  * }}
  */
-export function createCarController({ scene, assets, uiRoot, spawn, colliders, onWallHit, onStuck }) {
+export function createCarController({ scene, assets, uiRoot, spawn, colliders, onWallHit, onStuck, speedProfile }) {
   // ---------------------------------------------------------------- meshes
   const group = new THREE.Group();
   group.name = 'playerCar';
@@ -121,10 +136,16 @@ export function createCarController({ scene, assets, uiRoot, spawn, colliders, o
   const halfL = 1.27 * T.CAR_SCALE;
   const cityHalf = (T.GRID * T.TILE_M) / 2 - 2;
 
+  // V3/G39 (§C7.2): arcade speed override — trips/deliveryRush omit it and
+  // keep DRIVE.BASE_SPEED → DRIVE.MAX_SPEED over SPEED_RAMP_SEC unchanged.
+  const maxSpeed = speedProfile?.maxSpeed ?? DRIVE.MAX_SPEED;
+  const rampDelaySec = speedProfile?.rampDelaySec ?? 0;
+
   // ---------------------------------------------------------------- state
   let heading = spawn.heading;
   let speed = 0;
-  let steer = 0;
+  let steer = 0; // raw player/autopilot intent −1..1
+  let steerSmoothed = 0; // V3/G39 §C7.2: τ = 120 ms low-passed steering
   let braking = false;
   let frozen = false;
   let rampTime = 0;
@@ -203,14 +224,21 @@ export function createCarController({ scene, assets, uiRoot, spawn, colliders, o
   window.addEventListener('keyup', keyUp);
 
   // ---------------------------------------------------------------- physics
-  /** Lane-snapping assist (§G G7: ≤ 15° deviation, no active steering). */
-  function laneSnap(dt) {
-    if (steer !== 0) return;
+  /**
+   * V3/G39 (§C7.2): gentle lane-assist SPRING — replaces the v1 snap (heading
+   * yanked at 97°/s + 1.8/s lateral pull = the "weird" fighting feel). Max
+   * correction 8°/s toward the lane heading, force fades linearly to 0 at 25°
+   * player-intent angle, fully disabled while actively steering ≥ 40 %
+   * deflection (raw thumb input, not the filtered value — release = assist).
+   * The lateral lane-centering ease is scaled by the SAME fade so both
+   * components let go together as the player commits to a turn.
+   */
+  function laneAssist(dt) {
     const cardinal = Math.round(heading / HALF_PI) * HALF_PI;
     const diff = wrapAngle(cardinal - heading);
-    if (Math.abs(diff) > T.LANE_SNAP_DEG * (Math.PI / 180)) return;
-    const step = Math.sign(diff) * Math.min(Math.abs(diff), T.LANE_SNAP_HEADING_RATE * dt);
-    heading += step;
+    const rate = assistRate(diff, steer); // 0 beyond 25° intent or ≥ 40 % deflection
+    if (rate === 0) return;
+    heading += Math.sign(diff) * Math.min(Math.abs(diff), Math.abs(rate) * dt);
     // ease sideways toward the right-hand lane center of the current tile
     const r = Math.round(group.position.z / T.TILE_M + (T.GRID - 1) / 2);
     const c = Math.round(group.position.x / T.TILE_M + (T.GRID - 1) / 2);
@@ -220,7 +248,7 @@ export function createCarController({ scene, assets, uiRoot, spawn, colliders, o
     // 3 → −x west; the right-hand lane is at ±LANE_OFFSET_M off the tile
     // centerline on the travel direction's right side.
     const dirIdx = ((Math.round(cardinal / HALF_PI) % 4) + 4) % 4;
-    const k = Math.min(1, T.LANE_SNAP_LATERAL_RATE * dt);
+    const k = Math.min(1, T.LANE_SNAP_LATERAL_RATE * assistFade(diff) * dt);
     if (dirIdx === 0) group.position.x += (centerX - T.LANE_OFFSET_M - group.position.x) * k; // south → right = west
     else if (dirIdx === 1) group.position.z += (centerZ + T.LANE_OFFSET_M - group.position.z) * k; // east → right = south
     else if (dirIdx === 2) group.position.x += (centerX + T.LANE_OFFSET_M - group.position.x) * k; // north → right = east
@@ -277,6 +305,8 @@ export function createCarController({ scene, assets, uiRoot, spawn, colliders, o
     position: group.position,
     heading: () => heading,
     speed: () => speed,
+    /** V3/G39 telemetry (§C7.2 evidence): raw vs low-passed steering. */
+    steering: () => ({ raw: steer, smoothed: steerSmoothed }),
 
     /** @param {number} v -1 (left) … 1 (right) — autopilot/tests override */
     setSteer(v) {
@@ -334,9 +364,10 @@ export function createCarController({ scene, assets, uiRoot, spawn, colliders, o
         speed = Math.max(0, speed - T.BRAKE_DECEL * dt);
       } else {
         rampTime += dt;
-        // auto-throttle (§C6.1: base 9 m/s ramping to 13) + crash recovery
-        const ramp = Math.min(1, rampTime / T.SPEED_RAMP_SEC);
-        let target = DRIVE.BASE_SPEED + (DRIVE.MAX_SPEED - DRIVE.BASE_SPEED) * ramp;
+        // auto-throttle (§C6.1: base 9 m/s ramping to 13; V3/G39 §C7.2 the
+        // ARCADE profile ramps to 15 starting after 20 s) + crash recovery
+        const ramp = Math.min(1, Math.max(0, rampTime - rampDelaySec) / T.SPEED_RAMP_SEC);
+        let target = DRIVE.BASE_SPEED + (maxSpeed - DRIVE.BASE_SPEED) * ramp;
         if (crashRecover > 0) {
           crashRecover = Math.max(0, crashRecover - dt);
           const f = DRIVE.CRASH_SPEED_MULT + (1 - DRIVE.CRASH_SPEED_MULT) * (1 - crashRecover / T.CRASH_RECOVER_SEC);
@@ -348,11 +379,14 @@ export function createCarController({ scene, assets, uiRoot, spawn, colliders, o
           const accel = speed < target ? 5.5 : 9;
           speed += Math.sign(target - speed) * Math.min(Math.abs(target - speed), accel * dt);
         }
-        // steering (slightly damped at speed so max speed stays manageable)
+        // V3/G39 (§C7.2): steering input low-pass (τ = 120 ms) + output
+        // yaw-rate cap 90°/s — thumb jitter no longer twitches the car.
+        steerSmoothed = smoothSteer(steerSmoothed, steer, dt);
+        // (slightly damped at speed so max speed stays manageable)
         const damp = 1 - 0.25 * Math.min(1, speed / DRIVE.MAX_SPEED);
-        heading += steer * T.STEER_RATE * damp * dt;
+        heading += steerYawRate(steerSmoothed, T.STEER_RATE, damp) * dt;
         heading = wrapAngle(heading);
-        laneSnap(dt);
+        laneAssist(dt);
         group.position.x += Math.sin(heading) * speed * dt;
         group.position.z += Math.cos(heading) * speed * dt;
         collide();
@@ -374,14 +408,16 @@ export function createCarController({ scene, assets, uiRoot, spawn, colliders, o
       prevX = group.position.x;
       prevZ = group.position.z;
       group.rotation.y = heading;
-      // a touch of arcade body roll
-      model.rotation.z = -steer * Math.min(1, speed / DRIVE.MAX_SPEED) * 0.06;
+      // V3/G39 (§C7.2): body roll REMOVED (motion comfort at 130 % UI scale)
       const wheelOmega = (speed / T.CAR_SCALE / 0.3) * dt;
       for (const w of wheels) w.rotation.x += wheelOmega;
     },
 
     /**
-     * Third-person chase cam (§C6.1).
+     * Third-person chase cam (§C6.1; V3/G39 §C7.2: damped follow k = 4.0/s,
+     * look-ahead 6 m, FOV 55° → 60° with speed 9 → 13 m/s, no roll/bob).
+     * Supersedes DRIVE_TUNING.CAM_POS_LERP/CAM_LOOKAHEAD (constants.js is
+     * read-only §E0.1-3 — the live numbers are carFeel.js FEEL).
      * @param {import('three').PerspectiveCamera} camera
      * @param {number} dt
      * @param {number} [shake] 0..1 crash-shake amplitude
@@ -391,13 +427,21 @@ export function createCarController({ scene, assets, uiRoot, spawn, colliders, o
       const fz = Math.cos(heading);
       const p = group.position;
       const desired = new THREE.Vector3(p.x - fx * T.CAM_BACK, T.ROAD_Y + T.CAM_HEIGHT, p.z - fz * T.CAM_BACK);
-      camera.position.lerp(desired, 1 - Math.exp(-T.CAM_POS_LERP * dt));
+      camera.position.lerp(desired, camFollowFactor(dt));
       if (shake > 0) {
         camera.position.x += (Math.random() - 0.5) * shake;
         camera.position.y += (Math.random() - 0.5) * shake * 0.6;
         camera.position.z += (Math.random() - 0.5) * shake;
       }
-      camera.lookAt(p.x + fx * T.CAM_LOOKAHEAD, T.ROAD_Y + 1.2, p.z + fz * T.CAM_LOOKAHEAD);
+      camera.lookAt(p.x + fx * FEEL.CAM_LOOKAHEAD_M, T.ROAD_Y + 1.2, p.z + fz * FEEL.CAM_LOOKAHEAD_M);
+      // §C7.2 speed-scaled FOV (only touch the projection when it changes)
+      if (camera.isPerspectiveCamera) {
+        const fov = chaseFov(speed);
+        if (Math.abs(camera.fov - fov) > 0.01) {
+          camera.fov = fov;
+          camera.updateProjectionMatrix();
+        }
+      }
     },
 
     dispose() {
@@ -405,8 +449,13 @@ export function createCarController({ scene, assets, uiRoot, spawn, colliders, o
       window.removeEventListener('keyup', keyUp);
       controls.remove();
       scene.remove(group);
+      if (import.meta.env?.DEV && window.__car === api) delete window.__car; // V3/G39
     },
   };
+
+  // V3/G39 dev-only telemetry handle (§C7.2 evidence + the V3-E4 eval's
+  // scripted step-input probes over CDP) — same pattern as window.__gooby.
+  if (import.meta.env?.DEV && typeof window !== 'undefined') window.__car = api;
 
   return api;
 }

@@ -50,6 +50,13 @@ import { now } from '../../core/clock.js';
 const T = DRIVE_TUNING;
 const SKY = '#cfe8ff'; // §D4: city fog color
 
+// ── V3/G39 (§C7.2): arcade open-run speed — max nudged 13 → 15 m/s with the
+// ramp starting after 20 s (gentle tuning only). TRIP speed stays the §C4
+// 9 → 13 m/s ramp bit-identical: trips (and deliveryRush) simply omit the
+// speedProfile. Frozen module-local per §E0.1-3 (constants.js is read-only).
+export const ARCADE_SPEED = Object.freeze({ MAX_SPEED_MS: 15, RAMP_DELAY_SEC: 20 });
+// ── end V3/G39 ──────────────────────────────────────────────────────────────
+
 // --- V2/G26 (§C10.2): city band dressing ------------------------------------
 // V2/G28 reuses: deliveryRush inherits this tint via the shared city setup —
 // read the band once at init (bandAt(now()).band) and index this table.
@@ -383,6 +390,10 @@ export default {
       onWallHit: () => ctx.audio.play('bump'),
       // F4 P1-1: sustained throttle-on standstill (wedged off-road) → rescue
       onStuck: () => this.startRescue(),
+      // V3/G39 (§C7.2): arcade-only 15 m/s ramp after 20 s (trips: §C4 9→13)
+      speedProfile: this.mode === 'arcade'
+        ? { maxSpeed: ARCADE_SPEED.MAX_SPEED_MS, rampDelaySec: ARCADE_SPEED.RAMP_DELAY_SEC }
+        : undefined,
     });
     // F4 P1-1 dev repro (?wedge=1): park the car nose-first (heading east)
     // against a building's west face — throttle-on, zero displacement — so

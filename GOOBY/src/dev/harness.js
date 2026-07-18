@@ -134,6 +134,20 @@ export async function postBoot({ store, ui, sceneManager, framework }) {
     return true;
   }
 
+  // ---- V3/G39: ?scene=roadtest (PLAN3 §C7.1-1, marked append) ----
+  // Dev-only road-piece orientation grid: all 5 city-kit-roads pieces at
+  // rotY 0/90/180/270 with labels + compass — the binding evidence surface
+  // for the PIECE_PORTS truth table in city/cityBuilder.js.
+  if (q.get('scene') === 'roadtest') {
+    const { createRoadtestScene, ROADTEST_ASSET_KEYS } = await import('./roadtestScene.js');
+    if (!sceneManager.has('roadtest')) {
+      sceneManager.register('roadtest', createRoadtestScene, [...ROADTEST_ASSET_KEYS]);
+    }
+    await sceneManager.switchTo('roadtest');
+    return true;
+  }
+  // ---- end V3/G39 append ----
+
   if (q.get('scene') === 'gooby') {
     const loader = showcaseModules['../character/showcase.js'];
     if (loader) {

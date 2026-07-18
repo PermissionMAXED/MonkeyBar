@@ -15,6 +15,7 @@ import {
   pointAtLength,
   distanceToPolyline,
   roadPieceFor,
+  portsOf, // V3/G39 (§C7.1)
   isRoadTile,
   landmarksInRange, // V2/G21 (§C9.3)
   LANDMARK_TRIGGER_M, // V2/G21 (§C9.3)
@@ -367,6 +368,28 @@ test('V2/FIX-F P2-4: tow drop-off aprons sit inside their destination landmark t
     'vet apron (tow target on vetTrips) must trigger the vetClinic sticker'
   );
 });
+
+// ── V3/G39 (§C7.1, additive): canonical-seed rotations of the tiles the v1
+// orientation ladder got wrong — the full ports model lives in
+// test/cityRoads.test.js; this pins the 5 previously-misfitting tile classes
+// on THE city players actually drive (CITY_SEED). ─────────────────────────────
+test('V3 §C7.1: previously-misrotated tiles now open exactly toward their road neighbors', () => {
+  const layout = generateCityLayout(SEED);
+  const expects = [
+    { rc: [1, 1], ports: ['E', 'S'] }, // NW ring bend (was 180° off)
+    { rc: [7, 7], ports: ['N', 'W'] }, // SE ring bend (was 180° off)
+    { rc: [4, 1], ports: ['E', 'N', 'S'] }, // west-ring T (was 180° off)
+    { rc: [4, 7], ports: ['N', 'S', 'W'] }, // east-ring T (was 180° off)
+    { rc: [1, 2], ports: ['E', 'W'] }, // north-ring straight/zebra (was 90° off)
+    { rc: [2, 1], ports: ['N', 'S'] }, // west-ring straight/zebra (was 90° off)
+  ];
+  for (const { rc: [r, c], ports } of expects) {
+    const tile = layout.grid[r][c];
+    const got = [...portsOf(tile.piece, tile.rotY ?? 0)].sort();
+    assert.deepEqual(got, ports, `tile (${r},${c}) ${tile.piece} open sides`);
+  }
+});
+// ── end V3/G39 ──────────────────────────────────────────────────────────────
 
 test('V2 §C9.1: vet building renders west-facing on the tile east half (building-e)', () => {
   const layout = generateCityLayout(SEED);
