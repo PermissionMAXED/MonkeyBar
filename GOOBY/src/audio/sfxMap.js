@@ -339,6 +339,30 @@ export const SFX_MAP = Object.freeze({
   'cake.order': sample(seq(`${UI}/question`, 4), { volume: 0.5 }), // new customer order chime
   // --- end V3/G36 ---
 
+  // --- V3/G41: toyRacer + ghostHunt (PLAN3 §C10.1 #1/#2 — §E0.1-4 append:
+  // committed ui/impact/casino sample keys + existing synth recipes only;
+  // 15 of 20 ids sample-backed per the §C3.1 majority arithmetic) ---
+  'racer.putter': sample(seq(`${IMP}/footstep_carpet`, 5, 0), { volume: 0.22, rate: 1.5, throttleMs: 120 }), // toy engine put-put
+  'racer.drift': sample(seq(`${UI}/scratch`, 5), { volume: 0.3, throttleMs: 260 }), // tyre squeal on the rug
+  'racer.boost': synth('riser', { volume: 0.6, haptic: 'light' }), // §C3.1 whitelist: riser (drift release + turbo)
+  'racer.item': sample(seqN(`${CAS}/card-slide-`, 3), { volume: 0.7, haptic: 'light' }), // item-box roulette
+  'racer.shield': synth('sparkle', { volume: 0.6 }), // bumper-shield up / pop shimmer
+  'racer.block': synth('whooshDown', { volume: 0.55 }), // toy-block drop behind
+  'racer.blockHit': sample(seq(`${IMP}/impactPlank_medium`, 5, 0), { volume: 0.65, haptic: 'medium' }), // kart bonks a block
+  'racer.lap': sample(seq(`${UI}/confirmation`, 4), { volume: 0.6 }),
+  'racer.overtake': sample(seq(`${UI}/glass`, 6), { volume: 0.55 }),
+  'racer.offtrack': sample(seq(`${IMP}/footstep_grass`, 5, 0), { volume: 0.45, rate: 0.8, throttleMs: 350 }), // carpet rumble
+  'hunt.spawn': sample(seq(`${UI}/open`, 4), { volume: 0.3 }), // ghost peeks up
+  'hunt.catch': sample(seq(`${IMP}/impactGeneric_light`, 5, 0), { volume: 0.7, haptic: 'light' }), // §C3.1 pop family
+  'hunt.chain': sample(seq(`${UI}/glass`, 6), { volume: 0.55 }), // chain-link ding
+  'hunt.decoy': sample(seq(`${UI}/error`, 4), { volume: 0.45, haptic: 'medium' }), // decoy penalty
+  'hunt.gone': sample(seq(`${UI}/minimize`, 3), { volume: 0.28 }), // missed peek sinks away
+  'hunt.boo': synth('riser', { volume: 0.5 }), // boo-wave sting
+  'hunt.booBonus': sample(seqN(`${CAS}/chips-stack-`, 2), { volume: 0.8, haptic: 'light' }), // ≥4-catch payout
+  'hunt.powerup': synth('sparkle', { volume: 0.7, haptic: 'light' }), // Laterne/Netz activates
+  'hunt.token': sample([`${UI}/pluck_001`, `${UI}/pluck_002`], { volume: 0.55 }), // token appears
+  // --- end V3/G41 ---
+
   // --- V3/G42: rocketRescue + harborHopper (PLAN3 §C10.1 #3/#4 — §E0.1-4
   // append: committed ui/impact sample keys + existing synth/loop recipes
   // only; 12 of 16 non-loop ids sample-backed per the §C3.1 arithmetic) ---
