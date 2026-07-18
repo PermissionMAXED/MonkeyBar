@@ -577,6 +577,16 @@ export function initAchievements({ store, ui, audio, framework }) {
     const spentDelta = cur.coinsSpent - prev.coinsSpent;
     const harvestsDelta = cur.counters.harvests - prev.counters.harvests;
     if (foodGained > 0 && spentDelta > 0 && harvestsDelta <= 0) events.push(['buyFood', 1, undefined]);
+    // V2/FIX-A (E7): the §C5.2 "harvest +2 XP" / "delivery +3 XP" grants were
+    // defined (LEVELING.XP_HARVEST/XP_DELIVERY) but never paid anywhere. Grant
+    // them here on the SAME counter diffs the quest events ride — whichever
+    // path bumps counters.harvests/.deliveries pays exactly once, through the
+    // real leveling path (grantXp — level-ups pay coins like quest/sticker XP).
+    const deliveriesDelta = cur.counters.deliveries - prev.counters.deliveries;
+    const counterXp =
+      Math.max(0, harvestsDelta) * LEVELING.XP_HARVEST +
+      Math.max(0, deliveriesDelta) * LEVELING.XP_DELIVERY;
+    if (counterXp > 0) store.update((state) => grantXp(state, counterXp));
     // neverSick bookkeeping (§C5.3): latch every → sick transition
     if (cur.healthState === 'sick' && prev.healthState !== 'sick') track('sickEver');
     // first-time stickers (§C5.2): +5 XP + toast, whoever awarded them

@@ -7,13 +7,14 @@
  */
 
 /**
- * Count of an item.
+ * Count of an item. V2/FIX-A: Number-coerced (junk-typed values from a
+ * hand-edited save read as 0, never NaN).
  * @param {Inventory} inv
  * @param {string} id
  * @returns {number}
  */
 export function count(inv, id) {
-  return Math.max(0, Math.floor(inv?.[id] ?? 0));
+  return Math.max(0, Math.floor(Number(inv?.[id]) || 0));
 }
 
 /**

@@ -8,12 +8,17 @@ import { STATS, MOOD } from '../data/constants.js';
  */
 
 /**
- * Clamp a single stat value to [0, 100].
+ * Clamp a single stat value to [0, 100]. V2/FIX-A (E9 NaN poisoning):
+ * non-finite inputs (NaN/±Infinity from corrupt saves or bad arithmetic)
+ * fall back to STATS.MIN instead of propagating — Math.min/max pass NaN
+ * straight through, which used to poison every stat forever.
  * @param {number} v
  * @returns {number}
  */
 export function clampStat(v) {
-  return Math.min(STATS.MAX, Math.max(STATS.MIN, v));
+  const n = Number(v);
+  if (!Number.isFinite(n)) return STATS.MIN;
+  return Math.min(STATS.MAX, Math.max(STATS.MIN, n));
 }
 
 /**

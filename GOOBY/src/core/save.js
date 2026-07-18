@@ -237,6 +237,18 @@ function mergeDefaults(defaults, src, path = 'save') {
  * V2/G16 (§B2.4): level clamps to LEVELING.MAX_LEVEL (40); weight clamps to
  * [5, 95]; garden.plots is normalized to exactly 6 entries; health.state is
  * coerced to 'healthy' when not one of the 3 valid strings.
+ * V2/FIX-A (E9/E20 hardening):
+ *   - sleep leaves are normalized (sleeping → strict boolean; startedAt/
+ *     wakeAt → finite ms or the whole slice resets to not-sleeping) so a
+ *     wrong-typed slice can never feed NaN into offline.js/applyTick;
+ *   - quests.active is normalized to an array of well-formed rows (non-object
+ *     rows and non-string ids dropped; progress → finite number ≥ 0;
+ *     claimed → strict boolean; `seen` kept only as a string[]) so
+ *     quests.track/the quest board never meet malformed rows;
+ *   - the inventory map is taken VERBATIM when the save has one (consumed-to-
+ *     zero foods used to resurrect because mergeDefaults re-added missing
+ *     STARTER_INVENTORY keys); a MISSING/null inventory slice still gets the
+ *     defaults, and wrong-typed slices still throw in mergeDefaults (F2).
  * @param {object} state
  * @returns {object}
  */
@@ -249,6 +261,37 @@ function validate(state) {
   s.coins = Math.max(0, Math.floor(Number(s.coins) || 0));
   s.xp = Math.max(0, Number(s.xp) || 0);
   s.level = Math.min(LEVELING.MAX_LEVEL, Math.max(1, Math.floor(Number(s.level) || 1)));
+  // --- V2/FIX-A: sleep-slice normalization (E9 — NaN-poisoned offline sim) ---
+  {
+    const startedAt = Number(s.sleep.startedAt);
+    const wakeAt = Number(s.sleep.wakeAt);
+    if (!Number.isFinite(startedAt) || !Number.isFinite(wakeAt)) {
+      s.sleep = { sleeping: false, startedAt: 0, wakeAt: 0 };
+    } else {
+      s.sleep = { ...s.sleep, sleeping: s.sleep.sleeping === true, startedAt, wakeAt };
+    }
+  }
+  // --- V2/FIX-A: quests.active row sanitization (E9 — quest-board crash) ---
+  s.quests.active = (Array.isArray(s.quests.active) ? s.quests.active : [])
+    .filter((row) => row != null && typeof row === 'object' && !Array.isArray(row)
+      && typeof row.id === 'string' && row.id !== '')
+    .map((row) => {
+      const progress = Number(row.progress);
+      const entry = {
+        ...row,
+        progress: Number.isFinite(progress) ? Math.max(0, progress) : 0,
+        // truthiness-coerced ON PURPOSE (unlike sleep.sleeping): a junk-typed
+        // `claimed` must never re-open a paid quest for a second claim.
+        claimed: Boolean(row.claimed),
+      };
+      if ('seen' in entry && !Array.isArray(entry.seen)) delete entry.seen;
+      else if (Array.isArray(entry.seen)) entry.seen = entry.seen.map(String);
+      return entry;
+    });
+  // --- V2/FIX-A: consumed inventory stays consumed (E20 resurrection) ---
+  if (state.inventory != null && typeof state.inventory === 'object' && !Array.isArray(state.inventory)) {
+    s.inventory = { ...state.inventory };
+  }
   // --- V2/G16: v2 slice validation (§B2.4) ---
   const w = Number(s.weight.value);
   s.weight.value = Number.isFinite(w) ? Math.min(95, Math.max(5, w)) : 50;

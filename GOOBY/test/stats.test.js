@@ -116,3 +116,32 @@ test('applyTick is pure (input untouched)', () => {
   applyTick(input, 5);
   assert.deepEqual(input, FULL);
 });
+
+// ------------------------------------------- V2/FIX-A (E9): NaN guards
+// clampStat used to pass NaN straight through Math.min/max, so one NaN input
+// (e.g. a wrong-typed sleep slice feeding NaN minutes into the offline sim)
+// poisoned every stat forever. Non-finite now falls back to STATS.MIN.
+
+test('V2/FIX-A: clampStat never returns a non-finite value', () => {
+  assert.equal(clampStat(NaN), STATS.MIN);
+  assert.equal(clampStat(Infinity), STATS.MIN);
+  assert.equal(clampStat(-Infinity), STATS.MIN);
+  assert.equal(clampStat('wat'), STATS.MIN);
+  assert.equal(clampStat(undefined), STATS.MIN);
+  assert.equal(clampStat(null), STATS.MIN); // Number(null) = 0 → finite → 0 anyway
+  assert.equal(clampStat('42'), 42); // numeric strings still coerce
+  assert.equal(clampStat(55.5), 55.5); // normal floats untouched
+});
+
+test('V2/FIX-A: applyTick with NaN inputs yields finite stats (never persists NaN)', () => {
+  // NaN dtMin (the E9 offline repro: wakeAt 'tomorrow' − lastTickAt = NaN)
+  const fromNaNDt = applyTick({ ...FULL }, NaN);
+  for (const k of STATS.KEYS) assert.ok(Number.isFinite(fromNaNDt[k]), `${k} finite (NaN dt)`);
+  // already-poisoned stats recover to finite values on the next tick
+  const poisoned = { hunger: NaN, energy: NaN, hygiene: NaN, fun: NaN };
+  const recovered = applyTick(poisoned, 1);
+  for (const k of STATS.KEYS) assert.ok(Number.isFinite(recovered[k]), `${k} finite (NaN stats)`);
+  // applyDeltas is covered by the same clamp
+  const d = applyDeltas(poisoned, { hunger: 10 });
+  for (const k of STATS.KEYS) assert.ok(Number.isFinite(d[k]), `${k} finite (deltas)`);
+});

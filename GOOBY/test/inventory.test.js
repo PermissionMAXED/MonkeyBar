@@ -38,6 +38,14 @@ test('has / count on missing ids', () => {
   assert.equal(has({ carrot: 3 }, 'carrot', 4), false);
 });
 
+test('V2/FIX-A: count coerces junk-typed values to 0 (never NaN)', () => {
+  assert.equal(count({ carrot: 'many' }, 'carrot'), 0);
+  assert.equal(count({ carrot: null }, 'carrot'), 0);
+  assert.equal(count({ carrot: -4 }, 'carrot'), 0);
+  assert.equal(count({ carrot: '2' }, 'carrot'), 2); // numeric strings coerce
+  assert.equal(totalCount({ carrot: 'many', apple: 1 }), 1);
+});
+
 test('operations are immutable (inputs untouched)', () => {
   const inv = { carrot: 2 };
   add(inv, 'carrot');

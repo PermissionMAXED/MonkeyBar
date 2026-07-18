@@ -33,6 +33,10 @@ import {
   buyPlot,
   seedKey,
   healthReady,
+  // V2/FIX-A (E8): harvest provenance
+  recordHarvest,
+  sellableHarvest,
+  harvestedKey,
 } from '../src/systems/economy.js';
 import {
   ECONOMY, MINIGAME, COIN_TABLE, FOOD_TABLE, STATS, OFFLINE,
@@ -42,8 +46,11 @@ import { MINIGAME_IDS, getMinigame, computeCoins } from '../src/data/minigames.j
 import { FOODS } from '../src/data/foods.js';
 import { xpToNext, applyXp } from '../src/systems/leveling.js';
 import * as clock from '../src/core/clock.js';
-import { defaultState } from '../src/core/save.js';
+import { defaultState, persist, load } from '../src/core/save.js';
 import { createStore } from '../src/core/store.js';
+// V2/FIX-A (E7): the real §C5.2 harvest/delivery XP grant path lives in the
+// achievements engine's counter-diff watcher — exercised below.
+import { initAchievements, resetAchievementsEngineForTests } from '../src/systems/achievementsEngine.js';
 
 // V2/G16: settle the optional systems/health.js probe before tests run, so
 // useMedicine/payVet behave deterministically (assertions below stay
@@ -460,26 +467,107 @@ test('V2: profile.coinsEarned/coinsSpent track every award/spend/awardMinigame',
 test('V2: sellHarvest pays the §C2.3 sell price, atomic, counts sells', () => {
   const store = makeStore();
   store.set('coins', 0);
+  // V2/FIX-A: sales require harvest provenance — credit 3 harvested radishes
   store.update((s) => { s.inventory = { radish: 3 }; });
-  assert.deepEqual(sellHarvest(store, 'radish', 2), { ok: true, total: 2 * CROP_TABLE.radish.sellPrice });
+  assert.deepEqual(recordHarvest(store, 'radish', 3), { ok: true });
+  assert.deepEqual(
+    sellHarvest(store, 'radish', 2),
+    { ok: true, total: 2 * CROP_TABLE.radish.sellPrice, qty: 2 }
+  );
   assert.equal(store.get('coins'), 12);
   assert.equal(store.get('inventory.radish'), 1);
+  assert.equal(store.get(`items.${harvestedKey('radish')}`), 1);
   assert.equal(store.get('achievements.counters.sells'), 2);
-  // more than owned → nothing changes
-  assert.deepEqual(sellHarvest(store, 'radish', 2), { ok: false, reason: 'none' });
-  assert.equal(store.get('coins'), 12);
-  assert.equal(store.get('inventory.radish'), 1);
+  // more than owned → capped at the remaining sellable unit
+  assert.deepEqual(sellHarvest(store, 'radish', 2), { ok: true, total: CROP_TABLE.radish.sellPrice, qty: 1 });
+  assert.equal(store.get('coins'), 18);
+  assert.equal(store.get('inventory.radish') ?? 0, 0);
+  // nothing left → refused, nothing changes
+  assert.deepEqual(sellHarvest(store, 'radish', 1), { ok: false, reason: 'none' });
+  assert.equal(store.get('coins'), 18);
   // only crop foods are sellable
   assert.deepEqual(sellHarvest(store, 'burger', 1), { ok: false, reason: 'unknown' });
   assert.deepEqual(sellHarvest(store, 'radish', 0), { ok: false, reason: 'qty' });
-  // NOTE (V2-E8 balance flag, constants untuned by G16 rule): the binding
-  // §C2.3 sell prices sit ABOVE the §C7 shop prices for radish (6 > 5),
-  // tomato (9 > 7), corn (16 > 10), eggplant, pumpkin and watermelon — a
-  // shop-buy → compost-sell flip profits. The seed→grow→sell loop is the
-  // intended path; the V2-E8 auditor owns the ruling.
+  // Every crop food stays shop-buyable (§C2.3/§C7 binding prices)…
   for (const id of Object.keys(CROP_TABLE)) {
     assert.equal(typeof FOOD_TABLE[id].price, 'number', `${id} is shop-buyable (§C2.3)`);
   }
+});
+
+// ---------------------------------------- V2/FIX-A: harvest provenance (E8)
+// COORDINATOR RULING: the §C2.3 sell prices and §C7 shop prices are binding
+// (6 of 8 crops sell above their shop price), so the buy→sell arbitrage is
+// closed via PROVENANCE, not price changes: compost sales are capped at
+// min(inventory, items['harvested:<foodId>']) — only units credited by
+// recordHarvest (called at the garden harvest site) are ever sellable.
+
+test('V2/FIX-A: shop-bought crop food is NOT compost-sellable (arbitrage closed)', () => {
+  pinDay('2026-07-18');
+  const store = makeStore();
+  store.set('level', 12);
+  store.set('quickDelivery', true);
+  store.set('coins', 100);
+  // the E8 exploit loop: quick-delivery buy watermelon (15c) → try to sell (70c)
+  assert.equal(buyFood(store, 'watermelon', 1, { quick: true }).ok, true);
+  assert.equal(store.get('coins'), 85);
+  assert.equal(sellableHarvest(store.get(), 'watermelon'), 0);
+  assert.deepEqual(sellHarvest(store, 'watermelon', 1), { ok: false, reason: 'none' });
+  assert.equal(store.get('coins'), 85, 'no profit — the loop cannot compound');
+  assert.equal(store.get('inventory.watermelon'), 1, 'the food stays edible');
+  // shop-trip (catalog price) purchases are equally unsellable
+  assert.equal(buyFood(store, 'radish', 4).ok, true);
+  assert.deepEqual(sellHarvest(store, 'radish', 4), { ok: false, reason: 'none' });
+  assert.equal(store.get('achievements.counters.sells'), 0);
+});
+
+test('V2/FIX-A: harvested units ARE sellable; partial stock caps at the harvested count', () => {
+  const store = makeStore();
+  store.set('coins', 0);
+  // harvest 2 tomatoes (recordHarvest = the gardenInteractions harvest-site call)
+  store.update((s) => { s.inventory = { tomato: 2 }; });
+  assert.deepEqual(recordHarvest(store, 'tomato', 2), { ok: true });
+  assert.equal(sellableHarvest(store.get(), 'tomato'), 2);
+  // …then shop-buy 3 more: 5 in the fridge, still only 2 sellable
+  store.set('coins', 3 * FOOD_TABLE.tomato.price);
+  assert.equal(buyFood(store, 'tomato', 3).ok, true);
+  assert.equal(store.get('inventory.tomato'), 5);
+  assert.equal(sellableHarvest(store.get(), 'tomato'), 2);
+  // "sell all 5" caps at 2 — the 3 bought ones never sell
+  const r = sellHarvest(store, 'tomato', 5);
+  assert.deepEqual(r, { ok: true, total: 2 * CROP_TABLE.tomato.sellPrice, qty: 2 });
+  assert.equal(store.get('inventory.tomato'), 3);
+  assert.equal(sellableHarvest(store.get(), 'tomato'), 0);
+  assert.deepEqual(sellHarvest(store, 'tomato', 1), { ok: false, reason: 'none' });
+  assert.equal(store.get('achievements.counters.sells'), 2);
+});
+
+test('V2/FIX-A: starter carrots are not sellable; recordHarvest validates input', () => {
+  const store = makeStore(); // starter inventory: 3 carrots (§C5.1)
+  assert.equal(store.get('inventory.carrot'), 3);
+  assert.equal(sellableHarvest(store.get(), 'carrot'), 0);
+  assert.deepEqual(sellHarvest(store, 'carrot', 3), { ok: false, reason: 'none' });
+  // recordHarvest guards: crop catalog only, qty ≥ 1
+  assert.deepEqual(recordHarvest(store, 'burger', 1), { ok: false, reason: 'unknown' });
+  assert.deepEqual(recordHarvest(store, 'carrot', 0), { ok: false, reason: 'qty' });
+  assert.deepEqual(recordHarvest(store, 'carrot', NaN), { ok: false, reason: 'qty' });
+  assert.equal(store.get(`items.${harvestedKey('carrot')}`), undefined);
+});
+
+test('V2/FIX-A: harvested counters survive a persist → load roundtrip', () => {
+  const store = makeStore();
+  store.update((s) => { s.inventory = { ...s.inventory, pumpkin: 1 }; });
+  assert.equal(recordHarvest(store, 'pumpkin', 1).ok, true);
+  persist(store.get());
+  const { state, recovered } = load();
+  assert.equal(recovered, false);
+  assert.equal(state.items[harvestedKey('pumpkin')], 1);
+  const reloaded = createStore(state, { autosave: false });
+  assert.equal(sellableHarvest(reloaded.get(), 'pumpkin'), 1);
+  assert.deepEqual(
+    sellHarvest(reloaded, 'pumpkin', 1),
+    { ok: true, total: CROP_TABLE.pumpkin.sellPrice, qty: 1 }
+  );
+  assert.equal(reloaded.get(`items.${harvestedKey('pumpkin')}`), 0);
 });
 
 test('V2: buySeed is level-gated (§B6 crops), lands in items[seedKey]', () => {
@@ -594,9 +682,9 @@ test('V2: buyPlot — §B6 gating: plot 5 at L10/300c, plot 6 at L16/600c, in or
 // 3 claimed quests (≈ +75c/+37xp — the §C5.1 daily average; the quest engine
 // itself is G18's, so the claim payout path is simulated via award/applyXp
 // exactly like dailyBonus), one radish+carrot garden cycle through the REAL
-// buySeed/sellHarvest paths (+§C5.2 harvest XP), and feeding to satiation.
-// Bars (binding, constants untuned): net ≥ +40c/day, food affordable, and
-// the §A3 disposable-income check — 7-day extrapolation ≥ 400c.
+// buySeed/recordHarvest/sellHarvest paths (V2/FIX-A provenance), and feeding
+// to satiation. Bars (binding, constants untuned): net ≥ +40c/day, food
+// affordable, and the §A3 disposable-income check — 7-day extrapolation ≥ 400c.
 
 test('V2 economy simulation: quest + garden day still nets ≥ +40c', (t) => {
   const store = makeStore();
@@ -640,16 +728,19 @@ test('V2 economy simulation: quest + garden day still nets ≥ +40c', (t) => {
 
     // 4) one radish + carrot garden cycle through the real §B3 paths:
     //    buy seeds → (G18's growth engine simulated: yields land in the
-    //    inventory per §C2.3) → sell the harvest at the compost bin, +2 XP
-    //    per harvest (§C5.2).
+    //    inventory per §C2.3, provenance credited via the REAL recordHarvest
+    //    call the harvest site makes — V2/FIX-A) → sell at the compost bin.
+    //    The §C5.2 +2 XP/harvest rides the achievements engine's counter-diff
+    //    watcher (V2/FIX-A, E7) — exercised in the dedicated grant-path test
+    //    below; omitting it here keeps this sim strictly conservative.
     const seeds = buySeed(store, 'radish').total + buySeed(store, 'carrot').total;
     store.update((s) => {
       s.inventory.radish = (s.inventory.radish ?? 0) + CROP_TABLE.radish.yield;
       s.inventory.carrot = (s.inventory.carrot ?? 0) + CROP_TABLE.carrot.yield;
-      const prog = applyXp({ xp: s.xp, level: s.level }, 2 * LEVELING.XP_HARVEST);
-      s.xp = prog.xp; s.level = prog.level; s.coins += prog.coinsAwarded;
-      s.profile.coinsEarned += prog.coinsAwarded;
+      s.achievements.counters.harvests += 2;
     });
+    recordHarvest(store, 'radish', CROP_TABLE.radish.yield);
+    recordHarvest(store, 'carrot', CROP_TABLE.carrot.yield);
     const harvestCoins =
       sellHarvest(store, 'radish', CROP_TABLE.radish.yield).total +
       sellHarvest(store, 'carrot', CROP_TABLE.carrot.yield).total;
@@ -697,4 +788,44 @@ test('V2 economy simulation: quest + garden day still nets ≥ +40c', (t) => {
     store.get('profile.coinsEarned') - store.get('profile.coinsSpent'),
     store.get('coins') - ECONOMY.STARTING_COINS
   );
+});
+
+// ------------------------------- V2/FIX-A (E7): real §C5.2 XP grant path
+// LEVELING.XP_HARVEST/XP_DELIVERY were defined but never granted anywhere —
+// the earlier revision of this file "simulated" the harvest XP by hand,
+// masking the gap. The real grant now lives in the achievements engine's
+// counter-diff watcher: ANY path that bumps achievements.counters.harvests /
+// .deliveries pays +2/+3 XP through the same leveling path quest/sticker XP
+// uses. This test drives the counters and asserts the XP actually moved.
+
+test('V2/FIX-A: harvest +2 XP / delivery +3 XP flow through the real engine path', () => {
+  resetAchievementsEngineForTests();
+  const store = makeStore();
+  initAchievements({ store, ui: { toast: () => {} }, audio: { play: () => {} } });
+  store.flush(); // settle the boot quest roll before baselining
+
+  // one harvest (the gardenInteractions harvest site bumps the counter)
+  let xp0 = store.get('xp');
+  store.update((s) => { s.achievements.counters.harvests += 1; });
+  store.flush();
+  assert.equal(store.get('xp'), xp0 + LEVELING.XP_HARVEST, '+2 XP per harvest (§C5.2)');
+
+  // three deliveries in one flush (deliveryRush meta → engine.track batches)
+  xp0 = store.get('xp');
+  store.update((s) => { s.achievements.counters.deliveries += 3; });
+  store.flush();
+  assert.equal(store.get('xp'), xp0 + 3 * LEVELING.XP_DELIVERY, '+3 XP per delivery (§C5.2)');
+
+  // the grant rides the REAL leveling path: a level-up pays its coin reward
+  store.update((s) => { s.xp = xpToNext(s.level) - 1; });
+  store.flush();
+  const coins0 = store.get('coins');
+  const level0 = store.get('level');
+  const earned0 = store.get('profile.coinsEarned');
+  store.update((s) => { s.achievements.counters.harvests += 1; });
+  store.flush();
+  assert.equal(store.get('level'), level0 + 1, 'harvest XP levels up');
+  assert.ok(store.get('coins') > coins0, 'level-up coins paid (§C1.5)');
+  assert.ok(store.get('profile.coinsEarned') > earned0, 'lifetime total moved');
+  resetAchievementsEngineForTests();
 });

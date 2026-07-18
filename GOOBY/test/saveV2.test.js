@@ -22,6 +22,8 @@ globalThis.localStorage = {
 
 const { defaultState, migrations, load, persist } = await import('../src/core/save.js');
 const { SAVE } = await import('../src/data/constants.js');
+// V2/FIX-A (E20): the real inventory op that deletes zero-count keys
+const { remove: removeInv } = await import('../src/systems/inventory.js');
 
 const wipe = () => backing.clear();
 
@@ -212,6 +214,118 @@ test('validate() clamps the v2 slices (§B2.4)', () => {
     assert.equal(recovered, false, JSON.stringify(patch));
     check(state);
   }
+});
+
+// ═════════════════════════════════════════════════════════════ V2/FIX-A ═══
+// Hardening regressions: E9 hostile sleep slice (NaN-poisoned stats), E9
+// malformed quests.active rows (quest-board crash), E20 starter-food
+// resurrection, E8 harvest-provenance persistence.
+
+test('V2/FIX-A (E9): the exact hostile sleep payload boots to a usable state', async () => {
+  // sleep:{sleeping:'yes',startedAt:'dawn',wakeAt:'tomorrow'} used to survive
+  // validate() → offline.js computed NaN minutes → applyTick NaN'd ALL stats
+  // forever (wakeAt was never rewritten, so every boot re-poisoned).
+  const hostile = {
+    ...defaultState(),
+    sleep: { sleeping: 'yes', startedAt: 'dawn', wakeAt: 'tomorrow' },
+    lastTickAt: Date.now() - 3600_000, // 1 h "offline"
+  };
+  const { state, recovered } = loadRaw(hostile);
+  assert.equal(recovered, false, 'not a corruption recovery — normalized in place');
+  assert.deepEqual(state.sleep, { sleeping: false, startedAt: 0, wakeAt: 0 });
+
+  // …and the offline catch-up sim stays finite end-to-end
+  const { simulateOffline } = await import('../src/systems/offline.js');
+  const sim = simulateOffline(state, Date.now());
+  for (const [k, v] of Object.entries(sim.state.stats)) {
+    assert.ok(Number.isFinite(v), `stats.${k} finite after offline sim (got ${v})`);
+  }
+  // NaN can never persist: a re-load of the simulated state stays finite
+  const again = loadRaw({ ...state, stats: sim.state.stats });
+  for (const [k, v] of Object.entries(again.state.stats)) {
+    assert.ok(Number.isFinite(v), `stats.${k} finite after reload (got ${v})`);
+  }
+});
+
+test('V2/FIX-A (E9): sleep leaves normalize; valid sleeps survive untouched', () => {
+  // wrong-typed sleeping with VALID times → sleeping coerced to false
+  const junkFlag = loadRaw({ ...defaultState(), sleep: { sleeping: 'yes', startedAt: 5, wakeAt: 10 } });
+  assert.deepEqual(junkFlag.state.sleep, { sleeping: false, startedAt: 5, wakeAt: 10 });
+  // any non-finite time resets the whole slice to not-sleeping
+  for (const sleep of [
+    { sleeping: true, startedAt: 1, wakeAt: 'tomorrow' },
+    { sleeping: true, startedAt: {}, wakeAt: 2 },
+    { sleeping: true, startedAt: 'x', wakeAt: 'y' },
+  ]) {
+    const { state } = loadRaw({ ...defaultState(), sleep });
+    assert.deepEqual(state.sleep, { sleeping: false, startedAt: 0, wakeAt: 0 }, JSON.stringify(sleep));
+  }
+  // a legitimate in-progress sleep passes through verbatim
+  const real = { sleeping: true, startedAt: 1780000000000, wakeAt: 1780001620000 };
+  assert.deepEqual(loadRaw({ ...defaultState(), sleep: real }).state.sleep, real);
+});
+
+test('V2/FIX-A (E9): malformed quests.active rows are sanitized on load', () => {
+  const day = new Date().toISOString().slice(0, 10); // matches localDay format
+  const hostile = {
+    ...defaultState(),
+    quests: {
+      day, // day matches → rollDaily will NOT rebuild the board
+      active: [
+        { id: 42 },                                        // non-string id → dropped
+        null,                                              // null row → dropped
+        'x',                                               // primitive row → dropped
+        [1, 2],                                            // array row → dropped
+        { id: '' },                                        // empty id → dropped
+        { id: 'q.feed3', progress: '2', claimed: 'yes' },  // coerced
+        { id: 'q.wash1', progress: 'lots', claimed: 0, seen: 'abc' }, // junk progress/seen
+        { id: 'q.play2distinct', progress: 1, claimed: false, seen: ['runner', 7] },
+      ],
+      rerolledDay: '',
+      completedTotal: 0,
+    },
+  };
+  const { state, recovered } = loadRaw(hostile);
+  assert.equal(recovered, false);
+  assert.deepEqual(state.quests.active, [
+    { id: 'q.feed3', progress: 2, claimed: true },
+    { id: 'q.wash1', progress: 0, claimed: false },
+    { id: 'q.play2distinct', progress: 1, claimed: false, seen: ['runner', '7'] },
+  ]);
+});
+
+test('V2/FIX-A (E20): consumed starter food stays consumed across reloads', () => {
+  // consume all 3 starter carrots through the real inventory op (deletes the key)
+  const s = defaultState();
+  let inv = s.inventory;
+  for (let i = 0; i < 3; i += 1) inv = removeInv(inv, 'carrot');
+  s.inventory = inv;
+  assert.equal('carrot' in s.inventory, false, 'fixture: key deleted at 0');
+  const { state, recovered } = loadRaw(s);
+  assert.equal(recovered, false);
+  assert.equal(state.inventory.carrot ?? 0, 0, 'carrots must NOT resurrect');
+  assert.equal(state.inventory.apple, 1, 'untouched foods survive');
+  // …and the roundtrip stays stable
+  persist(state);
+  assert.equal(load().state.inventory.carrot ?? 0, 0);
+  // a MISSING inventory slice still gets the §C5.1 starter defaults (F2)
+  const { v: _v2, inventory: _inv, ...noInv } = defaultState();
+  const fresh = loadRaw({ ...noInv, v: 2 });
+  assert.equal(fresh.recovered, false);
+  assert.deepEqual(fresh.state.inventory, { carrot: 3, apple: 1, cupcake: 1 });
+  // wrong-typed inventory is still corruption → recovery (F2 intact)
+  assert.equal(loadRaw({ ...defaultState(), inventory: 'nope' }).recovered, true);
+});
+
+test('V2/FIX-A (E8): harvested-provenance items keys persist and default to 0', () => {
+  const s = defaultState();
+  s.items['harvested:radish'] = 2;
+  const { state, recovered } = loadRaw(s);
+  assert.equal(recovered, false);
+  assert.equal(state.items['harvested:radish'], 2, 'provenance counter survives');
+  // pre-fix saves have no counters — they read as absent (economy treats as 0)
+  const pre = loadRaw(fixture('v1-midgame.json')).state;
+  assert.equal(Object.keys(pre.items).some((k) => k.startsWith('harvested:')), false);
 });
 
 // ----------------------------------------------------------- idempotency

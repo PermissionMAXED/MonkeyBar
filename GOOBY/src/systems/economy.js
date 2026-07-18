@@ -15,6 +15,13 @@
 // useMedicine / payVet / buySkin / buyPlot (garden §C2, care §C3.5, vet
 // §C9.2, skins §C8.5, plots §B6). ALL coin movement still flows exclusively
 // through this module.
+//
+// V2/FIX-A (E8 arbitrage, coordinator ruling): the §C2.3 sell prices and §C7
+// shop prices are BINDING and 6 of 8 crops sell above their shop price, so
+// compost sales are gated on HARVEST PROVENANCE instead of price changes —
+// recordHarvest credits items['harvested:<foodId>'] at the harvest site, and
+// sellHarvest only sells min(inventory, harvestedCount) (sellableHarvest).
+// Shop-bought crop foods are never compost-sellable.
 
 import { ECONOMY, MINIGAME, ITEM_PRICES, UNLOCKS, VET } from '../data/constants.js'; // V2/G16: + v2 tables
 import { getMinigame, computeCoins } from '../data/minigames.js';
@@ -23,7 +30,7 @@ import { getCrop } from '../data/crops.js'; // V2/G16 (§C2.3)
 import { getSkin } from '../data/skins.js'; // V2/G16 (§C8.5)
 import { applyXp, minigameXp } from './leveling.js';
 import { clampStat } from './stats.js';
-import { add as invAdd, has as invHas, remove as invRemove } from './inventory.js'; // V2/G16: + has/remove
+import { add as invAdd, remove as invRemove } from './inventory.js'; // V2/G16: + remove; V2/FIX-A: has-gate moved into sellableHarvest
 import { localDay, now } from '../core/clock.js'; // V2/G16: + now (health calls)
 
 /**
@@ -240,28 +247,87 @@ export function buyQuickDelivery(store) {
 export const seedKey = (cropId) => `seed:${cropId}`;
 
 /**
+ * V2/FIX-A (E8 arbitrage): items-map key for the harvest-provenance counter
+ * ('harvested:<foodId>' — colon-flat like seedKey). The counter tracks how
+ * many units of a crop food were actually HARVESTED (vs shop-bought); only
+ * those units are compost-sellable. Missing keys read as 0, so existing v2
+ * saves need no migration (pre-fix stock simply becomes unsellable).
+ * @param {string} foodId
+ * @returns {string}
+ */
+export const harvestedKey = (foodId) => `harvested:${foodId}`;
+
+/**
+ * V2/FIX-A (E8 arbitrage): record a real garden harvest so the yield becomes
+ * compost-sellable. The harvest site (home/gardenInteractions.js) calls this
+ * right where the yield lands in the inventory; the counter lives in
+ * `items[harvestedKey(foodId)]` and is decremented by sellHarvest.
+ * CONTRACT for the harvest wiring: call ONCE per harvest with the crop's
+ * yielded qty (`res.qty`), in addition to (not instead of) the inventory add.
+ * @param {Store} store
+ * @param {string} foodId crop-food id ('radish', …) — must be a catalog crop
+ * @param {number} qty units harvested (≥ 1)
+ * @returns {{ok: boolean, reason?: 'unknown'|'qty'}}
+ */
+export function recordHarvest(store, foodId, qty) {
+  if (!getCrop(foodId)) return { ok: false, reason: 'unknown' };
+  const n = Math.floor(Number(qty) || 0);
+  if (n < 1) return { ok: false, reason: 'qty' };
+  store.update((state) => {
+    const key = harvestedKey(foodId);
+    state.items[key] = Math.max(0, Math.floor(Number(state.items[key]) || 0)) + n;
+  });
+  return { ok: true };
+}
+
+/**
+ * V2/FIX-A (E8 arbitrage): how many units of a crop food are sellable at the
+ * compost bin RIGHT NOW = min(inventory count, harvested-provenance counter).
+ * Shop-bought units (and pre-fix stock, incl. the §C5.1 starter carrots)
+ * count 0. The sell sheet (ui/gardenPanel.js) must read THIS, not the raw
+ * inventory count.
+ * @param {object} state save state (§E3) — or any {inventory, items} shape
+ * @param {string} foodId crop-food id
+ * @returns {number}
+ */
+export function sellableHarvest(state, foodId) {
+  const inv = Math.max(0, Math.floor(Number(state?.inventory?.[foodId]) || 0));
+  const harvested = Math.max(0, Math.floor(Number(state?.items?.[harvestedKey(foodId)]) || 0));
+  return Math.min(inv, harvested);
+}
+
+/**
  * Sell harvested crop food from the inventory at the §C2.3 sell price
  * (compost-bin sell sheet, §C2.2). Only crop foods are sellable (crop id ==
- * food id); sell price < shop buy price per crop, so there is no buy-sell
- * arbitrage. Bumps `achievements.counters.sells` by qty (quest event 'sell'
+ * food id) — and only units that were actually HARVESTED (V2/FIX-A, E8):
+ * several §C2.3 sell prices sit above the §C7 shop prices, so shop-bought
+ * stock must never be compost-sellable (the provenance counter in
+ * items[harvestedKey(foodId)] caps the sale; see recordHarvest). The
+ * requested qty is capped at sellableHarvest(state, foodId); with nothing
+ * sellable the call refuses ({ok:false, reason:'none'}). Bumps
+ * `achievements.counters.sells` by the qty actually sold (quest event 'sell'
  * — G23 wires).
  * @param {Store} store
  * @param {string} foodId crop-food id ('radish', …)
  * @param {number} [qty]
- * @returns {{ok: boolean, reason?: 'unknown'|'qty'|'none', total?: number}}
+ * @returns {{ok: boolean, reason?: 'unknown'|'qty'|'none', total?: number,
+ *   qty?: number}} qty = units actually sold (≤ requested)
  */
 export function sellHarvest(store, foodId, qty = 1) {
   const crop = getCrop(foodId);
   if (!crop) return { ok: false, reason: 'unknown' };
-  const n = Math.floor(Number(qty) || 0);
-  if (n < 1) return { ok: false, reason: 'qty' };
-  if (!invHas(store.get('inventory'), foodId, n)) return { ok: false, reason: 'none' };
+  const requested = Math.floor(Number(qty) || 0);
+  if (requested < 1) return { ok: false, reason: 'qty' };
+  const n = Math.min(requested, sellableHarvest(store.get(), foodId));
+  if (n < 1) return { ok: false, reason: 'none' };
   store.update((state) => {
     state.inventory = invRemove(state.inventory, foodId, n);
+    const key = harvestedKey(foodId);
+    state.items[key] = Math.max(0, Math.floor(Number(state.items[key]) || 0) - n);
     state.achievements.counters.sells += n;
   });
   const total = award(store, crop.sellPrice * n, 'sellHarvest');
-  return { ok: true, total };
+  return { ok: true, total, qty: n };
 }
 
 /**

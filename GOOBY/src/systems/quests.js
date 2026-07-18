@@ -179,14 +179,19 @@ export function track(q, event, n = 1, meta = undefined, pool = []) {
   const byId = poolById(pool);
   let changed = false;
   const active = q.active.map((entry) => {
-    if (entry.claimed) return entry;
+    // V2/FIX-A (E9): skip malformed rows (null / non-object / wrong-typed
+    // fields from hostile saves) instead of throwing — save.js validate()
+    // sanitizes on load, this guards runtime-injected slices.
+    if (entry == null || typeof entry !== 'object' || Array.isArray(entry)) return entry;
+    if (entry.claimed === true) return entry;
     const def = byId[entry.id];
     if (!def || def.event !== event) return entry;
     if (def.match && Object.entries(def.match).some(([k, v]) => meta?.[k] !== v)) return entry;
+    const prevProgress = Number(entry.progress) || 0; // V2/FIX-A: NaN/junk → 0
     const mode = def.mode ?? 'add';
     if (mode === 'distinct') {
       const key = meta?.[def.distinctKey ?? 'id'];
-      const seen = entry.seen ?? [];
+      const seen = Array.isArray(entry.seen) ? entry.seen : []; // V2/FIX-A
       if (key == null || seen.includes(key)) return entry;
       changed = true;
       const nextSeen = [...seen, String(key)];
@@ -194,10 +199,10 @@ export function track(q, event, n = 1, meta = undefined, pool = []) {
     }
     let progress;
     if (mode === 'max') {
-      progress = Math.min(def.target, Math.max(entry.progress, amount));
+      progress = Math.min(def.target, Math.max(prevProgress, amount));
     } else {
       if (amount <= 0) return entry;
-      progress = Math.min(def.target, entry.progress + amount);
+      progress = Math.min(def.target, prevProgress + amount);
     }
     if (progress === entry.progress) return entry;
     changed = true;
@@ -217,13 +222,16 @@ export function track(q, event, n = 1, meta = undefined, pool = []) {
  * @returns {{q: object, reward: {coins: number, xp: number}}|{ok: false}}
  */
 export function claim(q, id, pool) {
-  const entry = q?.active?.find((e) => e.id === id);
+  // V2/FIX-A (E9): e?.id — malformed rows (null/primitives) never match/throw
+  const entry = q?.active?.find((e) => e?.id === id);
   const def = (pool ?? []).find((d) => d.id === id);
-  if (!entry || !def || entry.claimed || entry.progress < def.target) return { ok: false };
+  if (!entry || !def || entry.claimed === true || (Number(entry.progress) || 0) < def.target) {
+    return { ok: false };
+  }
   return {
     q: {
       ...q,
-      active: q.active.map((e) => (e.id === id ? { ...e, claimed: true } : e)),
+      active: q.active.map((e) => (e?.id === id ? { ...e, claimed: true } : e)),
       completedTotal: (Number(q.completedTotal) || 0) + 1,
     },
     reward: { coins: def.reward.coins, xp: def.reward.xp },
@@ -247,15 +255,16 @@ export function reroll(q, nowMs, pool, ctx) {
   const day = localDay(nowMs);
   if (!q || q.day !== day || q.rerolledDay === day) return { q, ok: false };
   const active = q.active ?? [];
+  // V2/FIX-A (E9): e?. — malformed rows count as replaceable, never throw
   const replaceIdx = active
-    .map((e, i) => (!e.claimed && (Number(e.progress) || 0) === 0 ? i : -1))
+    .map((e, i) => (e?.claimed !== true && (Number(e?.progress) || 0) === 0 ? i : -1))
     .filter((i) => i >= 0);
   if (replaceIdx.length === 0) return { q, ok: false };
   const byId = poolById(pool);
-  const activeIds = new Set(active.map((e) => e.id));
+  const activeIds = new Set(active.map((e) => e?.id).filter((id) => typeof id === 'string'));
   const keptDefs = active
     .filter((_, i) => !replaceIdx.includes(i))
-    .map((e) => byId[e.id])
+    .map((e) => byId[e?.id])
     .filter(Boolean);
   const eligible = (pool ?? []).filter(
     (d) => !activeIds.has(d.id) && isRequireMet(d.requires, ctx),
@@ -279,8 +288,8 @@ export function claimableCount(q, pool) {
   const byId = poolById(pool);
   let n = 0;
   for (const entry of q?.active ?? []) {
-    const def = byId[entry.id];
-    if (def && !entry.claimed && entry.progress >= def.target) n += 1;
+    const def = byId[entry?.id]; // V2/FIX-A (E9): malformed rows never throw
+    if (def && entry.claimed !== true && (Number(entry.progress) || 0) >= def.target) n += 1;
   }
   return n;
 }

@@ -314,6 +314,58 @@ test('reroll: refuses without burning when nothing is replaceable or the roll is
   assert.equal(reroll(stale, now, POOL, FULL_CTX).ok, false);
 });
 
+// ----------------------------------------- V2/FIX-A (E9): malformed rows
+// save.js validate() sanitizes quests.active on load; the engine ALSO has to
+// survive malformed rows injected at runtime (dev console, hostile store
+// writes) — track/claim/reroll/claimableCount skip non-objects, never throw.
+
+test('V2/FIX-A: track() never throws on malformed rows and still advances valid ones', () => {
+  const q = {
+    ...freshQuests(),
+    day: '2026-07-17',
+    active: [
+      { id: 42 },
+      null,
+      'x',
+      [1, 2],
+      { id: 'q.feed3', progress: 'lots', claimed: 'no' }, // junk-typed fields
+      { id: 'q.wash1', progress: 0, claimed: false },
+    ],
+  };
+  let r;
+  assert.doesNotThrow(() => { r = track(q, 'feed', 1, undefined, POOL); });
+  assert.equal(r.changed, true);
+  // junk progress reads as 0 → 0 + 1; junk claimed ('no') is not `true` → tracks
+  assert.equal(r.q.active[4].progress, 1);
+  assert.doesNotThrow(() => { r = track(r.q, 'wash', 1, undefined, POOL); });
+  assert.equal(r.q.active[5].progress, 1);
+  // malformed rows pass through untouched (validate() drops them on load)
+  assert.equal(r.q.active[1], null);
+  assert.equal(r.q.active[2], 'x');
+  // distinct mode with a junk `seen` never throws either
+  const qd = { ...freshQuests(), day: '2026-07-17', active: [{ id: 'q.play2distinct', progress: 0, claimed: false, seen: 'abc' }] };
+  assert.doesNotThrow(() => { r = track(qd, 'minigameFinish', 1, { id: 'runner' }, POOL); });
+  assert.deepEqual(r.q.active[0].seen, ['runner']);
+});
+
+test('V2/FIX-A: claim/claimableCount/reroll never throw on malformed rows', () => {
+  const q = {
+    ...freshQuests(),
+    day: '2026-07-17',
+    active: [null, { id: 42 }, { id: 'q.feed3', progress: 3, claimed: false }],
+  };
+  assert.doesNotThrow(() => claimableCount(q, POOL));
+  assert.equal(claimableCount(q, POOL), 1);
+  let r;
+  assert.doesNotThrow(() => { r = claim(q, 'q.feed3', POOL); });
+  assert.deepEqual(r.reward, { coins: 20, xp: 10 });
+  assert.doesNotThrow(() => { r = reroll(q, dayMs('2026-07-17'), POOL, FULL_CTX); });
+  assert.equal(r.ok, true, 'malformed rows count as replaceable');
+  for (const e of r.q.active) {
+    if (e !== q.active[2]) assert.deepEqual([e.progress, e.claimed], [0, false], 'repaired slot');
+  }
+});
+
 // ---------------------------------------------------------------- purity
 
 test('quest functions are pure: deep-frozen slices never throw/mutate', () => {

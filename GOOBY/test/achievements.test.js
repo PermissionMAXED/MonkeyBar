@@ -689,6 +689,41 @@ test('V2/G23 engine: reroll once per day through the live API', () => {
   resetAchievementsEngineForTests();
 });
 
+test('V2/FIX-A (E7): counter-diff watcher grants §C5.2 harvest/delivery XP', () => {
+  resetAchievementsEngineForTests();
+  const store = createStore(freshState(), { autosave: false });
+  initAchievements({ store, ui: { toast: () => {} }, audio: { play: () => {} } });
+  store.flush(); // settle the boot quest roll
+
+  // harvest +2 XP — same counter bump the garden harvest site makes
+  let xp0 = store.get('xp');
+  store.update((s) => { s.achievements.counters.harvests += 1; });
+  store.flush();
+  assert.equal(store.get('xp'), xp0 + LEVELING.XP_HARVEST);
+
+  // delivery +3 XP, batched deltas pay per unit (deliveryRush track(n))
+  xp0 = store.get('xp');
+  store.update((s) => { s.achievements.counters.deliveries += 2; });
+  store.flush();
+  assert.equal(store.get('xp'), xp0 + 2 * LEVELING.XP_DELIVERY);
+
+  // mixed flush: one harvest + one delivery in the same coalesced change
+  xp0 = store.get('xp');
+  store.update((s) => {
+    s.achievements.counters.harvests += 1;
+    s.achievements.counters.deliveries += 1;
+  });
+  store.flush();
+  assert.equal(store.get('xp'), xp0 + LEVELING.XP_HARVEST + LEVELING.XP_DELIVERY);
+
+  // non-counter changes never grant (no drift from unrelated flushes)
+  xp0 = store.get('xp');
+  store.set('coins', store.get('coins') + 1);
+  store.flush();
+  assert.equal(store.get('xp'), xp0);
+  resetAchievementsEngineForTests();
+});
+
 test('V2/G23 engine: sickEver latch feeds neverSick bookkeeping', () => {
   resetAchievementsEngineForTests();
   const store = createStore(freshState(), { autosave: false });
