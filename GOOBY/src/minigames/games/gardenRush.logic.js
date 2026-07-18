@@ -40,6 +40,10 @@ export const RUSH = Object.freeze({
   WEED_LIFE_SEC: 5,
   /** Autoplay holds 0.75 s (§C1.2) → fill 93.75% ⇒ inside the green zone. */
   AUTOPLAY_HOLD_SEC: 0.75,
+  /** V3/G45 (§C10.2): the one-per-run sprinkler appears at 30 s. */
+  SPRINKLER_AT_SEC: 30,
+  /** Sprinkler restores half of every live plant's wilt ring. */
+  SPRINKLER_FILL_FRAC: 0.5,
 });
 
 /**
@@ -95,6 +99,38 @@ export function releasePoints(fillFrac) {
  */
 export function inPerfectZone(fillFrac) {
   return Math.min(1, Math.max(0, fillFrac)) >= 1 - RUSH.PERFECT_ZONE;
+}
+
+/**
+ * Fill fraction from actual hold duration. Scoring calls this with pointer
+ * timestamps, so a release between slow render frames is not quantized to
+ * the previous RAF tick (§C10.2 audit).
+ * @param {number} heldSec
+ * @returns {number} clamped 0..1
+ */
+export function holdFillFraction(heldSec) {
+  return Math.min(1, Math.max(0, heldSec / RUSH.FILL_SEC));
+}
+
+/**
+ * Restore one live plant's wilt ring by the sprinkler's 50%, capped at full.
+ * @param {number} remainingSec
+ * @param {number} windowSec
+ * @returns {number}
+ */
+export function sprinklerRefill(remainingSec, windowSec) {
+  const window = Math.max(0, windowSec);
+  return Math.min(window, Math.max(0, remainingSec) + window * RUSH.SPRINKLER_FILL_FRAC);
+}
+
+/**
+ * One-shot 30 s spawn gate, robust when a frame crosses the threshold.
+ * @param {number} elapsed
+ * @param {boolean} alreadySpawned
+ * @returns {boolean}
+ */
+export function shouldSpawnSprinkler(elapsed, alreadySpawned) {
+  return !alreadySpawned && elapsed >= RUSH.SPRINKLER_AT_SEC;
 }
 
 /**

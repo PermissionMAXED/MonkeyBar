@@ -29,6 +29,7 @@ import {
   diveCovers,
   isSuperSave,
   savePoints,
+  isShootoutAt,
   cheersAt,
   autoplayErrAt,
 } from './goalieGooby.logic.js';
@@ -165,10 +166,15 @@ export default {
     this.now = 0; // internal clock (slow-mo scaled — round timer uses elapsed)
     this.slowmoT = 0;
     this.emotionT = 0;
+    this.shootoutStarted = false;
+    this.shootoutShots = 0;
     /** @type {{lane: number, v: 'up'|'mid'|'down', t: number}|null} */
     this.dive = null;
     /** kick machine: 'gap' | 'telegraph' | 'flight' */
-    this.kick = { state: 'gap', t: 0.9, lane: 2, kind: 'straight', flight: 0, botAt: -1, botLane: 2, botV: 'mid' };
+    this.kick = {
+      state: 'gap', t: 0.9, lane: 2, kind: 'straight', flight: 0,
+      botAt: -1, botLane: 2, botV: 'mid', shootout: false,
+    };
 
     const camera = ctx.camera;
     camera.position.set(0, 0.6, 10);
@@ -434,7 +440,7 @@ export default {
   },
 
   /** Start the next kick's telegraph (§C1.2: wind-up + lane flash). */
-  startTelegraph(elapsed) {
+  startTelegraph(elapsed, shootout = false) {
     const { rng } = this.ctx;
     const k = this.kick;
     const kick = rollKick(rng, elapsed);
@@ -442,8 +448,10 @@ export default {
     k.t = 0;
     k.lane = kick.lane;
     k.kind = kick.kind;
-    k.telegraph = telegraphSecAt(elapsed);
-    k.flight = flightSecAt(this.cheers);
+    k.shootout = shootout;
+    k.telegraph = shootout ? GOALIE.SHOOTOUT_TELEGRAPH_SEC : telegraphSecAt(elapsed);
+    k.flight = shootout ? GOALIE.SHOOTOUT_FLIGHT_SEC : flightSecAt(this.cheers);
+    if (shootout) this.shootoutShots += 1;
     // kicker trots to the lane and winds up
     const kx = this.laneXs[k.lane] * 0.55;
     const grp = this.kicker.group;
@@ -464,6 +472,20 @@ export default {
         else k.botLane = (k.lane + 1 + Math.floor(rng() * (GOALIE.LANES - 1))) % GOALIE.LANES;
       }
     }
+  },
+
+  /** Replace the normal kick loop with the exact five-shot last-10-s finale. */
+  startShootout(elapsed) {
+    this.shootoutStarted = true;
+    this.shootoutShots = 0;
+    this.slowmoT = 0;
+    this.deflect = null;
+    this.ball.visible = false;
+    if (this.dive) this.recoverDive();
+    this.ctx.hud.banner(t('mg.goalie.shootout'));
+    if (this.autoplay) console.log('[goalieGooby] penalty shootout — 5 shots, saves x2');
+    this.ctx.audio.play('goalie.cheer');
+    this.startTelegraph(elapsed, true);
   },
 
   /** Telegraph over — the ball is away. */
@@ -489,7 +511,7 @@ export default {
     const saved = dive != null && diveCovers(dive.t, arriveT) && saveMatches(kicked, dive);
     if (saved) {
       const superSave = isSuperSave(dive.t, arriveT);
-      const pts = savePoints(superSave);
+      const pts = savePoints(superSave, k.shootout);
       this.score += pts;
       this.saves += 1;
       this.ctx.onScore(pts);
@@ -542,7 +564,7 @@ export default {
       this.gooby.setEmotion('sad');
       this.gooby.play('sadSlump');
       this.emotionT = 1.2;
-      if (this.goals >= GOALIE.MAX_GOALS) {
+      if (this.goals >= GOALIE.MAX_GOALS && !this.shootoutStarted) {
         this.ctx.hud.banner(t('mg.goalie.over'));
         this.endRound();
         return;
@@ -557,13 +579,14 @@ export default {
     if (this.phase !== 'play') return;
     this.phase = 'ending';
     this.endT = 0;
+    this.slowmoT = 0; // audit: slow-mo never survives the round boundary
     this.ball.visible = false;
     this.ctx.audio.play('ui.win');
     this.gooby.setEmotion(this.score >= 40 ? 'ecstatic' : 'happy');
     this.gooby.play('happyBounce');
     this.particles.emit('confetti', this.gooby.group.position.clone().add(new THREE.Vector3(0, 1.6, 0)), { count: 16 });
     if (this.autoplay) {
-      console.log(`[goalieGooby] autoplay run ended — score ${this.score} (saves ${this.saves}, conceded ${this.goals})`);
+      console.log(`[goalieGooby] autoplay run ended — score ${this.score} (saves ${this.saves}, conceded ${this.goals}, shootout ${this.shootoutShots}/5)`);
     }
   },
 
@@ -589,7 +612,7 @@ export default {
     const ctx = this.ctx;
     // slow-mo (§C1.2 super save): scales the scene clock, not the round timer
     const sdt = this.slowmoT > 0 ? dt * SLOWMO_SCALE : dt;
-    if (this.slowmoT > 0) this.slowmoT -= dt;
+    if (this.slowmoT > 0) this.slowmoT = Math.max(0, this.slowmoT - dt);
     this.now += sdt;
 
     this.gooby.update(sdt);
@@ -634,6 +657,7 @@ export default {
 
     const remaining = GOALIE.DURATION_SEC - elapsed;
     ctx.hud.setTime(remaining);
+    if (!this.shootoutStarted && isShootoutAt(elapsed)) this.startShootout(elapsed);
 
     // dive recovery once its cover window lapses
     if (this.dive && this.now - this.dive.t > GOALIE.DIVE_HOLD_SEC) this.recoverDive();
@@ -646,7 +670,15 @@ export default {
       this.doDive(k.botLane, k.botV);
     }
     if (k.state === 'gap') {
-      if (k.t >= GOALIE.GAP_SEC / speedMultAt(this.cheers) && remaining > 1.4) {
+      if (this.shootoutStarted) {
+        if (
+          this.shootoutShots < GOALIE.SHOOTOUT_SHOTS
+          && k.t >= GOALIE.SHOOTOUT_GAP_SEC
+          && remaining > GOALIE.SHOOTOUT_TELEGRAPH_SEC + GOALIE.SHOOTOUT_FLIGHT_SEC
+        ) {
+          this.startTelegraph(elapsed, true);
+        }
+      } else if (k.t >= GOALIE.GAP_SEC / speedMultAt(this.cheers) && remaining > 1.4) {
         this.startTelegraph(elapsed);
       }
     } else if (k.state === 'telegraph') {
@@ -698,6 +730,7 @@ export default {
     this.deflect = null;
     this.dive = null;
     this.kick = null;
+    this.slowmoT = 0;
     this.ctx = null;
     this.gooby = null;
     this.particles = null;

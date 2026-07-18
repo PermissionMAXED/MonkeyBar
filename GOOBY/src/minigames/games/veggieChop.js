@@ -22,12 +22,16 @@ import {
   waveSizeAt,
   spawnIntervalAt,
   rollItem,
+  rollVeggie,
+  frenzySpawnInterval,
+  frenzyCountAt,
   makeArc,
   arcPos,
   arcApex,
   chopPoints,
+  comboAfterHit,
   applyPoints,
-  segmentHitsCircle,
+  segmentHitsMovingCircle,
 } from './veggieChop.logic.js';
 
 const ITEM_SIZE = 0.62;
@@ -203,7 +207,7 @@ export default {
     ...VEGGIES.map((v) => `food-kit/${v.key}`),
     ...VEGGIES.map((v) => `food-kit/${v.half}`),
     'food-kit/soda',
-    'food-kit/cutting-board',
+    'kaykit-restaurant/cuttingboard',
     'food-kit/frying-pan',
     'food-kit/mug',
   ],
@@ -222,6 +226,9 @@ export default {
     this.spawnT = 0.7; // head start before the first lob
     this.swipeChops = 0; // veggies chopped by the CURRENT swipe (combo)
     this.itemSeq = 0;
+    this.frenzyCount = 0;
+    this.frenzy = null;
+    this.propLogged = false;
 
     const camera = ctx.camera;
     camera.position.set(0, 0, 10);
@@ -266,10 +273,13 @@ export default {
     counter.position.set(0, -this.halfH + 0.9, -2.6);
     scene.add(counter);
     // the arena: a giant cutting board facing the camera (§C1.3)
-    const board = fitModel(ctx.assets.getModel('food-kit/cutting-board'), 5.6);
-    board.rotation.x = Math.PI / 2;
-    board.position.set(0, -0.7, -1.6);
-    scene.add(board);
+    // V3/G45 §C11.1: the one-mesh Restaurant-Bits board replaces the
+    // food-kit stand-in; gameplay arcs/hit radii remain data-driven.
+    this.board = fitModel(ctx.assets.getModel('kaykit-restaurant/cuttingboard'), 5.6);
+    // Local X (long edge) → screen Y, local Z → screen X, local Y → camera.
+    this.board.rotation.set(0, Math.PI / 2, Math.PI / 2);
+    this.board.position.set(0, -0.7, -1.6);
+    scene.add(this.board);
     // counter props: frying pan + mug tucked into the corners
     const pan = fitModel(ctx.assets.getModel('food-kit/frying-pan'), 1.15);
     pan.position.set(-this.halfW + 0.75, -this.halfH + 0.75, -1.2);
@@ -386,11 +396,11 @@ export default {
   },
 
   /** Lob a wave of 1–3 items (§C1.2), planning the bot swipes at apex. */
-  spawnWave(elapsed) {
+  spawnWave(elapsed, { size: forcedSize = null, veggieOnly = false, quiet = false } = {}) {
     const { rng } = this.ctx;
-    const size = waveSizeAt(rng, elapsed);
+    const size = forcedSize ?? waveSizeAt(rng, elapsed);
     for (let i = 0; i < size; i += 1) {
-      const roll = rollItem(rng, elapsed);
+      const roll = veggieOnly ? rollVeggie(rng) : rollItem(rng, elapsed);
       const arc = makeArc(rng, this.halfW, this.launchY);
       const holder = this.takeModel(roll.key);
       holder.position.set(arc.x0, arc.y0, 0);
@@ -406,6 +416,8 @@ export default {
         arc,
         t: -i * 0.14, // stagger the wave slightly
         holder,
+        prevX: arc.x0,
+        prevY: arc.y0,
         spinX: (rng() - 0.5) * 3.2,
         spinZ: (rng() - 0.5) * 2.2,
         active: true,
@@ -416,7 +428,19 @@ export default {
       };
       this.items.push(item);
     }
-    this.ctx.audio.play('chop.lob');
+    if (!quiet) this.ctx.audio.play('chop.lob');
+  },
+
+  /** Start one 8-veggie / 3-second no-junk frenzy (§C10.2). */
+  startFrenzy() {
+    this.frenzy = { remaining: CHOP.FRENZY_ITEMS, spawnT: 0 };
+    this.spawnT = Math.max(this.spawnT, CHOP.FRENZY_DURATION_SEC);
+    this.ctx.hud.banner(t('mg.chop.frenzy'));
+    if (this.autoplay) {
+      console.log(`[veggieChop] frenzy ${this.frenzyCount} — ${CHOP.FRENZY_ITEMS} veggies/${CHOP.FRENZY_DURATION_SEC}s, junk 0`);
+    }
+    this.ctx.audio.play('combo.up');
+    this.gooby.play('happyBounce');
   },
 
   /** Add a point to the swipe-trail ribbon. */
@@ -468,9 +492,17 @@ export default {
     for (const item of this.items) {
       if (!item.active || item.t < 0) continue;
       const p = item.holder.position;
-      if (!segmentHitsCircle(ax, ay, bx, by, p.x, p.y, CHOP.HIT_RADIUS)) continue;
+      if (!segmentHitsMovingCircle(
+        ax, ay, bx, by,
+        item.prevX ?? p.x, item.prevY ?? p.y,
+        p.x, p.y,
+        CHOP.HIT_RADIUS
+      )) continue;
       if (item.kind === 'veggie') this.chopVeggie(item);
-      else this.chopJunk(item);
+      else {
+        this.chopJunk(item);
+        break; // junk ends the combo/stroke immediately (§C10.2 audit)
+      }
     }
   },
 
@@ -479,7 +511,7 @@ export default {
     const pos = item.holder.position.clone();
     item.active = false;
     this.returnModel(item.key, item.holder);
-    this.swipeChops += 1;
+    this.swipeChops = comboAfterHit(this.swipeChops, 'veggie');
     const pts = chopPoints(this.swipeChops);
     this.score = applyPoints(this.score, pts);
     this.ctx.onScore(pts);
@@ -518,6 +550,7 @@ export default {
     this.ctx.onScore(CHOP.JUNK_PTS);
     this.ctx.hud.setScore(this.score);
     this.stunT = CHOP.STUN_SEC;
+    this.swipeChops = comboAfterHit(this.swipeChops, 'junk');
     this.trail.length = 0;
     this.lastDrag = null;
     this.ctx.audio.play('chop.junk');
@@ -616,13 +649,37 @@ export default {
 
     const remaining = CHOP.DURATION_SEC - elapsed;
     ctx.hud.setTime(remaining);
+    if (this.autoplay && !this.propLogged && elapsed > 0.5) {
+      this.propLogged = true;
+      console.log(`[veggieChop] prop kaykit-restaurant/cuttingboard — drawCalls ${ctx.renderer.info.render.calls}`);
+    }
     if (this.stunT > 0) this.stunT -= dt;
 
-    // wave cadence (§C1.2: arcs of 1–3, ramping)
-    this.spawnT -= dt;
-    if (this.spawnT <= 0 && remaining > 1.2) {
-      this.spawnWave(elapsed);
-      this.spawnT = spawnIntervalAt(elapsed);
+    // V3/G45 frenzy every 25 s: exactly 8 veggies across 3 s, never junk.
+    const reachedFrenzies = frenzyCountAt(elapsed);
+    if (reachedFrenzies > this.frenzyCount && remaining > CHOP.FRENZY_DURATION_SEC) {
+      this.frenzyCount = reachedFrenzies;
+      this.startFrenzy();
+    }
+    if (this.frenzy) {
+      this.frenzy.spawnT -= dt;
+      const cadence = frenzySpawnInterval();
+      while (this.frenzy.spawnT <= 0 && this.frenzy.remaining > 0) {
+        this.spawnWave(elapsed, { size: 1, veggieOnly: true, quiet: true });
+        this.frenzy.remaining -= 1;
+        this.frenzy.spawnT += cadence;
+      }
+      if (this.frenzy.remaining <= 0) {
+        this.frenzy = null;
+        this.ctx.audio.play('chop.lob');
+      }
+    } else {
+      // normal wave cadence (§C1.2: arcs of 1–3, ramping)
+      this.spawnT -= dt;
+      if (this.spawnT <= 0 && remaining > 1.2) {
+        this.spawnWave(elapsed);
+        this.spawnT = spawnIntervalAt(elapsed);
+      }
     }
 
     // flying items along their arcs
@@ -631,6 +688,8 @@ export default {
       item.t += dt;
       if (item.t < 0) continue; // wave stagger
       const p = arcPos(item.arc, item.t);
+      item.prevX = item.holder.position.x;
+      item.prevY = item.holder.position.y;
       item.holder.position.set(p.x, p.y, 0);
       item.holder.rotation.x += item.spinX * dt;
       item.holder.rotation.z += item.spinZ * dt;
@@ -677,6 +736,8 @@ export default {
     this.trailMesh = null;
     this.missMats = [];
     this.bootMat = null;
+    this.board = null;
+    this.frenzy = null;
     this.ctx = null;
     this.gooby = null;
     this.particles = null;

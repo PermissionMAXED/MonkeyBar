@@ -39,6 +39,10 @@ export const SAYS = Object.freeze({
    * §C1.1's typical column. */
   AUTOPLAY_ERR_RAMP: 0.0025,
   AUTOPLAY_ERR_CAP: 0.08,
+  /** V3/G45 (§C10.2): rounds 6+ append a two-pad chord step. */
+  CHORD_FROM_ROUND: 6,
+  /** Both chord pads must be tapped within this 250 ms interval. */
+  CHORD_WINDOW_MS: 250,
 });
 
 /**
@@ -66,8 +70,40 @@ export function stepMsAt(round) {
  * @param {() => number} rng 0..1
  * @returns {number[]}
  */
-export function extendSequence(seq, rng) {
-  return [...seq, Math.min(SAYS.PADS - 1, Math.floor(rng() * SAYS.PADS))];
+export function extendSequence(seq, rng, round = 1) {
+  const first = Math.min(SAYS.PADS - 1, Math.floor(rng() * SAYS.PADS));
+  if (round < SAYS.CHORD_FROM_ROUND) return [...seq, first];
+  // Pick the second pad from the remaining PADS−1 values, so a chord can
+  // never contain the same pad twice.
+  const rolled = Math.min(SAYS.PADS - 2, Math.floor(rng() * (SAYS.PADS - 1)));
+  const second = rolled >= first ? rolled + 1 : rolled;
+  return [...seq, Object.freeze([first, second])];
+}
+
+/**
+ * Whether one sequence step is a V3/G45 two-pad chord.
+ * @param {number|readonly number[]} step
+ * @returns {boolean}
+ */
+export function isChordStep(step) {
+  return Array.isArray(step) && step.length === 2 && step[0] !== step[1];
+}
+
+/**
+ * Judge taps against a chord without depending on frame cadence. The two
+ * chord pads may be tapped in either order, but must be distinct and no more
+ * than 250 ms apart (§C10.2).
+ * @param {readonly number[]} step chord pad indices
+ * @param {number} firstPad
+ * @param {number|null} secondPad
+ * @param {number} gapMs elapsed between first and second tap
+ * @returns {'waiting'|'complete'|'wrong'|'late'}
+ */
+export function chordTapResult(step, firstPad, secondPad = null, gapMs = 0) {
+  if (!isChordStep(step) || !step.includes(firstPad)) return 'wrong';
+  if (secondPad == null) return 'waiting';
+  if (secondPad === firstPad || !step.includes(secondPad)) return 'wrong';
+  return gapMs <= SAYS.CHORD_WINDOW_MS ? 'complete' : 'late';
 }
 
 /**

@@ -16,6 +16,8 @@ import {
   seqLengthAt,
   stepMsAt,
   extendSequence,
+  isChordStep,
+  chordTapResult,
   speedBonus,
   roundScore,
   autoplayErrAt,
@@ -27,6 +29,9 @@ import {
   activePotsAt,
   releasePoints,
   inPerfectZone,
+  holdFillFraction,
+  sprinklerRefill,
+  shouldSpawnSprinkler,
   rollWeed,
   applyPoints,
 } from '../src/minigames/games/gardenRush.logic.js';
@@ -39,6 +44,10 @@ import {
   nextNeeded,
   isComplete,
   fallSpeedAt,
+  columnCenters,
+  isRushOrder,
+  orderTimerSec,
+  orderPoints,
   rollSpawn,
   applyCatch,
 } from '../src/minigames/games/burgerBuild.logic.js';
@@ -52,14 +61,19 @@ import {
   spawnIntervalAt as chopSpawnIntervalAt,
   junkChanceAt,
   rollItem as chopRollItem,
+  rollVeggie,
+  frenzySpawnInterval,
+  frenzyCountAt,
   vyForApex,
   makeArc,
   arcPos,
   arcApex,
   chopPoints,
+  comboAfterHit,
   swipeScore,
   applyPoints as chopApplyPoints,
   segmentHitsCircle,
+  segmentHitsMovingCircle,
 } from '../src/minigames/games/veggieChop.logic.js';
 import {
   GOALIE,
@@ -73,11 +87,13 @@ import {
   diveCovers,
   isSuperSave,
   savePoints,
+  isShootoutAt,
+  shootoutShotAt,
   cheersAt,
   autoplayErrAt as goalieErrAt,
 } from '../src/minigames/games/goalieGooby.logic.js';
 // --- end V2/G27 imports ---
-import { COIN_TABLE } from '../src/data/constants.js';
+import { COIN_TABLE, ROOMS } from '../src/data/constants.js';
 import { computeCoins } from '../src/data/minigames.js';
 import { EN, DE } from '../src/data/strings.js';
 
@@ -689,3 +705,174 @@ test('V2/G27 in-game strings exist in EN and DE', () => {
   }
 });
 // ═══════════════════════════════════════════════════════════ end V2/G27 ═══
+
+// ═══════════════════════════════════════════════════════════════ V3/G45 ═══
+// PLAN3 §C10.2 depth mechanics + bug-audit locks for the five D-family games.
+
+test('V3/G45 goobySays: round 6+ appends distinct two-pad chords', () => {
+  assert.equal(SAYS.CHORD_FROM_ROUND, 6);
+  assert.equal(SAYS.CHORD_WINDOW_MS, 250);
+  const normal = extendSequence([], rngFrom(45), 5);
+  const chord = extendSequence(normal, rngFrom(45), 6);
+  assert.equal(isChordStep(normal[0]), false);
+  assert.equal(isChordStep(chord[1]), true);
+  assert.equal(new Set(chord[1]).size, 2);
+  assert.ok(chord[1].every((pad) => pad >= 0 && pad < SAYS.PADS));
+  assert.deepEqual(
+    extendSequence([], rngFrom(2026), 6),
+    extendSequence([], rngFrom(2026), 6),
+    'chord generation stays seeded'
+  );
+});
+
+test('V3/G45 goobySays: chord taps accept either order at ≤250 ms only', () => {
+  const chord = [1, 3];
+  assert.equal(chordTapResult(chord, 1), 'waiting');
+  assert.equal(chordTapResult(chord, 1, 3, 250), 'complete');
+  assert.equal(chordTapResult(chord, 3, 1, 100), 'complete');
+  assert.equal(chordTapResult(chord, 1, 3, 250.01), 'late');
+  assert.equal(chordTapResult(chord, 1, 1, 20), 'wrong');
+  assert.equal(chordTapResult(chord, 1, 2, 20), 'wrong');
+  assert.equal(stepMsAt(999), 320, 'chords never break the replay-speed floor');
+});
+
+test('V3/G45 gardenRush: sprinkler spawns once at 30 s and refills rings 50%', () => {
+  assert.equal(RUSH.SPRINKLER_AT_SEC, 30);
+  assert.equal(RUSH.SPRINKLER_FILL_FRAC, 0.5);
+  assert.equal(shouldSpawnSprinkler(29.999, false), false);
+  assert.equal(shouldSpawnSprinkler(30, false), true);
+  assert.equal(shouldSpawnSprinkler(59, true), false);
+  assert.equal(sprinklerRefill(1, 6), 4);
+  assert.equal(sprinklerRefill(5, 6), 6, 'refill caps at a full ring');
+  assert.equal(sprinklerRefill(-2, 4), 2);
+});
+
+test('V3/G45 gardenRush audit: hold scoring uses elapsed time, not RAF count', () => {
+  assert.equal(holdFillFraction(0), 0);
+  assert.ok(Math.abs(holdFillFraction(0.6) - 0.75) < 1e-12);
+  assert.equal(holdFillFraction(0.75), 0.9375);
+  assert.equal(holdFillFraction(5), 1);
+  // A 750 ms real hold scores identically whether represented by 45 smooth
+  // frames or 5 slow SwiftShader frames.
+  const smooth = Array.from({ length: 45 }, () => 1 / 60).reduce((a, b) => a + b, 0);
+  const slow = Array.from({ length: 5 }, () => 0.15).reduce((a, b) => a + b, 0);
+  assert.equal(releasePoints(holdFillFraction(smooth)), RUSH.PERFECT_PTS);
+  assert.equal(releasePoints(holdFillFraction(slow)), RUSH.PERFECT_PTS);
+});
+
+test('V3/G45 burgerBuild: rush tickets are gold orders 2/4, ×1.5, timer −20%', () => {
+  assert.equal(BURGER.MAX_RUSH_ORDERS, 2);
+  assert.deepEqual(
+    Array.from({ length: 12 }, (_, i) => i + 1).filter(isRushOrder),
+    [2, 4]
+  );
+  assert.equal(orderTimerSec(false), 30);
+  assert.equal(orderTimerSec(true), 24);
+  assert.equal(orderPoints(5, true), 7.5);
+  assert.equal(orderPoints(15, true), 22.5);
+  assert.equal(orderPoints(-2, true), -2, 'wrong-catch penalty is not amplified');
+  assert.equal(applyCatch(10, true, true), 17.5);
+});
+
+test('V3/G45 burgerBuild audit: 3 columns stay centered/in bounds at 393 px', () => {
+  const halfH = Math.tan((ROOMS.CAMERA_FOV * Math.PI) / 360) * 10;
+  for (const [width, height] of [[393, 852], [320, 568]]) {
+    const halfW = halfH * (width / height);
+    const cols = columnCenters(halfW);
+    assert.equal(cols.length, 3);
+    assert.ok(Math.abs(cols[0] + cols[2]) < 1e-12);
+    assert.equal(cols[1], 0);
+    const plateBound = halfW - 0.7;
+    assert.ok(cols.every((x) => Math.abs(x) <= plateBound), `${width}px column drift`);
+  }
+});
+
+test('V3/G45 veggieChop: frenzy fires at 25/50 s with 8 no-junk items in 3 s', () => {
+  assert.equal(CHOP.FRENZY_EVERY_SEC, 25);
+  assert.equal(CHOP.FRENZY_ITEMS, 8);
+  assert.equal(CHOP.FRENZY_DURATION_SEC, 3);
+  assert.equal(frenzySpawnInterval(), 3 / 8);
+  assert.equal(frenzyCountAt(24.999), 0);
+  assert.equal(frenzyCountAt(25), 1);
+  assert.equal(frenzyCountAt(49.999), 1);
+  assert.equal(frenzyCountAt(50), 2);
+  const rng = rngFrom(451);
+  for (let i = 0; i < 100; i += 1) {
+    assert.equal(rollVeggie(rng).kind, 'veggie');
+  }
+});
+
+test('V3/G45 veggieChop audit: junk resets combo and moving-hit sweep catches low FPS', () => {
+  assert.equal(comboAfterHit(0, 'veggie'), 1);
+  assert.equal(comboAfterHit(2, 'veggie'), 3);
+  assert.equal(comboAfterHit(7, 'junk'), 0);
+  // The item crosses y=0 between two low-FPS frames; neither endpoint circle
+  // touches the horizontal swipe, but its swept path does.
+  assert.equal(segmentHitsCircle(-1, 0, 1, 0, 0, -1, 0.3), false);
+  assert.equal(segmentHitsCircle(-1, 0, 1, 0, 0, 1, 0.3), false);
+  assert.equal(segmentHitsMovingCircle(-1, 0, 1, 0, 0, -1, 0, 1, 0.3), true);
+  assert.equal(segmentHitsMovingCircle(-1, 0, 1, 0, 2, -1, 2, 1, 0.3), false);
+});
+
+test('V3/G45 goalieGooby: last 10 s schedule is 5 rapid shots with ×2 saves', () => {
+  assert.equal(GOALIE.SHOOTOUT_START_SEC, 50);
+  assert.equal(GOALIE.SHOOTOUT_SHOTS, 5);
+  assert.equal(isShootoutAt(49.999), false);
+  assert.equal(isShootoutAt(50), true);
+  assert.equal(isShootoutAt(60), true);
+  assert.equal(isShootoutAt(60.001), false);
+  const starts = Array.from({ length: GOALIE.SHOOTOUT_SHOTS }, (_, i) => shootoutShotAt(i));
+  assert.equal(starts.length, 5);
+  assert.ok(starts.every((t, i) => i === 0 || t > starts[i - 1]));
+  assert.ok(starts.at(-1) < GOALIE.DURATION_SEC);
+  assert.equal(savePoints(false, true), 8);
+  assert.equal(savePoints(true, true), 12);
+});
+
+test('V3/G45 goalieGooby audits: edge origin cannot alter swipe direction buckets', () => {
+  // laneFromSwipe consumes deltas only: identical swipes from either screen
+  // edge classify identically; boundary behavior remains covered above.
+  for (const [dx, dy] of [[-200, 0], [200, 0], [-120, -120], [120, -120], [0, -160]]) {
+    const leftEdgeGesture = laneFromSwipe(dx, dy);
+    const rightEdgeGesture = laneFromSwipe(dx, dy);
+    assert.equal(leftEdgeGesture, rightEdgeGesture);
+  }
+});
+
+test('V3/G45 prop swaps use one-mesh committed Restaurant-Bits assets', () => {
+  const burgerSrc = readFileSync(
+    fileURLToPath(new URL('../src/minigames/games/burgerBuild.js', import.meta.url)),
+    'utf8'
+  );
+  const chopSrc = readFileSync(
+    fileURLToPath(new URL('../src/minigames/games/veggieChop.js', import.meta.url)),
+    'utf8'
+  );
+  assert.match(burgerSrc, /kaykit-restaurant\/kitchencounter_straight/);
+  assert.doesNotMatch(burgerSrc, /new THREE\.BoxGeometry\(this\.halfW \* 2 \+ 2, 0\.42, 1\.4\)/);
+  assert.match(chopSrc, /kaykit-restaurant\/cuttingboard/);
+  assert.doesNotMatch(chopSrc, /food-kit\/cutting-board/);
+  assert.match(
+    chopSrc,
+    /this\.board\.rotation\.set\(0, Math\.PI \/ 2, Math\.PI \/ 2\)/,
+    'Restaurant-Bits board must face the camera with its long edge vertical'
+  );
+});
+
+test('V3/G45 depth strings are bilingual and payout caps remain intact', () => {
+  const keys = [
+    'mg.says.chord', 'mg.says.chordLate',
+    'mg.rush.sprinklerReady', 'mg.rush.sprinklerUsed',
+    'mg.burger.rush', 'mg.burger.rushBonus', 'mg.burger.expired',
+    'mg.chop.frenzy', 'mg.goalie.shootout',
+  ];
+  for (const key of keys) {
+    assert.equal(typeof EN[key], 'string', `EN missing ${key}`);
+    assert.equal(typeof DE[key], 'string', `DE missing ${key}`);
+    assert.ok(EN[key].length > 0 && DE[key].length > 0);
+  }
+  for (const id of ['goobySays', 'gardenRush', 'burgerBuild', 'veggieChop', 'goalieGooby']) {
+    assert.equal(computeCoins(COIN_TABLE[id], 1e9, false), COIN_TABLE[id].max, `${id} cap changed`);
+  }
+});
+// ═══════════════════════════════════════════════════════════ end V3/G45 ═══

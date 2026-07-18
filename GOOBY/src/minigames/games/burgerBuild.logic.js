@@ -36,6 +36,14 @@ export const BURGER = Object.freeze({
    * tuned so 5-run raw scores land near §C1.1's typical ≈ 60 → ~15c. */
   AUTOPLAY_TICK_SEC: 0.3,
   AUTOPLAY_DISTRACT: 0.42,
+  /** V3/G45 (§C10.2): every second and fourth ticket is a gold rush order. */
+  RUSH_ORDER_NUMBERS: Object.freeze([2, 4]),
+  /** Positive rush-order points are worth exactly ×1.5. */
+  RUSH_SCORE_MULT: 1.5,
+  /** Normal order deadline; rush tickets get 20% less time. */
+  ORDER_TIMER_SEC: 30,
+  RUSH_TIMER_MULT: 0.8,
+  MAX_RUSH_ORDERS: 2,
 });
 
 /** The 5 middle-layer ingredients (§C1.2 — bun/patty/cheese/tomato/salad/onion). */
@@ -99,6 +107,47 @@ export function fallSpeedAt(completedBurgers) {
 }
 
 /**
+ * Three data-driven column centers for any portrait viewport. Keeping this
+ * math pure makes the 393 px drift audit reproducible without DOM state.
+ * @param {number} halfW visible world half-width
+ * @returns {readonly number[]}
+ */
+export function columnCenters(halfW) {
+  const spacing = Math.max(0, Math.min(2.1, halfW - 0.95));
+  return Object.freeze([-spacing, 0, spacing]);
+}
+
+/**
+ * Rush tickets are deterministic orders 2 and 4, hence never exceed two per
+ * round even when earlier orders time out.
+ * @param {number} orderNumber 1-based
+ * @returns {boolean}
+ */
+export function isRushOrder(orderNumber) {
+  return BURGER.RUSH_ORDER_NUMBERS.includes(Math.floor(orderNumber));
+}
+
+/**
+ * Per-order deadline: rush orders are exactly 20% shorter (§C10.2).
+ * @param {boolean} rush
+ * @returns {number} seconds
+ */
+export function orderTimerSec(rush) {
+  return BURGER.ORDER_TIMER_SEC * (rush ? BURGER.RUSH_TIMER_MULT : 1);
+}
+
+/**
+ * Scale positive points for a gold rush ticket. Penalties stay unchanged so
+ * a rush ticket is a reward opportunity, not a harsher wrong-catch rule.
+ * @param {number} points
+ * @param {boolean} rush
+ * @returns {number}
+ */
+export function orderPoints(points, rush) {
+  return points > 0 && rush ? points * BURGER.RUSH_SCORE_MULT : points;
+}
+
+/**
  * Roll the id of the next falling item: the next-needed layer when forced by
  * the starvation guard or the NEXT_WEIGHT roll, otherwise a uniform pick from
  * every raining id (buns included — wrong-catch bait).
@@ -122,6 +171,7 @@ export function rollSpawn(rng, needed, sinceNeededSec) {
  * @param {boolean} correct whether the caught item was the next-needed layer
  * @returns {number} new score ≥ 0
  */
-export function applyCatch(score, correct) {
-  return Math.max(0, score + (correct ? BURGER.CATCH_PTS : BURGER.WRONG_PTS));
+export function applyCatch(score, correct, rush = false) {
+  const points = correct ? orderPoints(BURGER.CATCH_PTS, rush) : BURGER.WRONG_PTS;
+  return Math.max(0, score + points);
 }

@@ -47,6 +47,13 @@ export const GOALIE = Object.freeze({
   /** Bot flub odds grow as the telegraph shrinks (human-ish ramp). */
   AUTOPLAY_ERR_BASE: 0.07,
   AUTOPLAY_ERR_RAMP: 0.48,
+  /** V3/G45 (§C10.2): five-shot finale over the last ten seconds. */
+  SHOOTOUT_START_SEC: 50,
+  SHOOTOUT_SHOTS: 5,
+  SHOOTOUT_TELEGRAPH_SEC: 0.38,
+  SHOOTOUT_FLIGHT_SEC: 0.42,
+  SHOOTOUT_GAP_SEC: 0.28,
+  SHOOTOUT_SAVE_MULT: 2,
 });
 
 /** @typedef {'straight'|'lob'|'roller'} KickKind */
@@ -170,8 +177,30 @@ export function isSuperSave(diveT, arriveT) {
  * @param {boolean} superSave
  * @returns {number}
  */
-export function savePoints(superSave) {
-  return GOALIE.SAVE_PTS + (superSave ? GOALIE.SUPER_PTS : 0);
+export function savePoints(superSave, shootout = false) {
+  const base = GOALIE.SAVE_PTS + (superSave ? GOALIE.SUPER_PTS : 0);
+  return base * (shootout ? GOALIE.SHOOTOUT_SAVE_MULT : 1);
+}
+
+/**
+ * Whether the penalty-shootout finale is active.
+ * @param {number} elapsed round seconds
+ * @returns {boolean}
+ */
+export function isShootoutAt(elapsed) {
+  return elapsed >= GOALIE.SHOOTOUT_START_SEC && elapsed <= GOALIE.DURATION_SEC;
+}
+
+/**
+ * Nominal start time for one of the five rapid telegraphed finale shots.
+ * @param {number} index zero-based
+ * @returns {number}
+ */
+export function shootoutShotAt(index) {
+  const cycle = GOALIE.SHOOTOUT_TELEGRAPH_SEC
+    + GOALIE.SHOOTOUT_FLIGHT_SEC
+    + GOALIE.SHOOTOUT_GAP_SEC;
+  return GOALIE.SHOOTOUT_START_SEC + Math.max(0, index) * cycle;
 }
 
 /**

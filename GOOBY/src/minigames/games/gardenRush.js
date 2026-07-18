@@ -22,6 +22,9 @@ import {
   activePotsAt,
   releasePoints,
   inPerfectZone,
+  holdFillFraction,
+  sprinklerRefill,
+  shouldSpawnSprinkler,
   rollWeed,
   applyPoints,
 } from './gardenRush.logic.js';
@@ -149,6 +152,9 @@ export default {
     this.spawnT = 0.8;
     this.endT = 0;
     this.autoT = 0;
+    this.sprinklerSpawned = false;
+    this.sprinklerUsed = false;
+    this.sprinklerAutoT = 0;
     /** @type {{pot: object, fillT: number}|null} active watering hold */
     this.hold = null;
 
@@ -290,6 +296,29 @@ export default {
     this.can.visible = false;
     scene.add(this.can);
 
+    // --- V3/G45 sprinkler powerup: one tap restores every plant ring 50% ---
+    this.sprinkler = new THREE.Group();
+    const sprinklerMat = new THREE.MeshStandardMaterial({
+      color: '#59C9B9', emissive: '#59C9B9', emissiveIntensity: 0.2, roughness: 0.45,
+    });
+    const sprinklerTopMat = new THREE.MeshStandardMaterial({ color: '#FFD166', roughness: 0.5 });
+    this.ownedMats.push(sprinklerMat, sprinklerTopMat);
+    const sprinklerBody = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.25, 0.34, 0.35, 14),
+      sprinklerMat
+    );
+    const sprinklerTop = new THREE.Mesh(
+      new THREE.TorusGeometry(0.38, 0.07, 8, 20),
+      sprinklerTopMat
+    );
+    sprinklerTop.rotation.x = Math.PI / 2;
+    sprinklerTop.position.y = 0.25;
+    this.ownedGeos.push(sprinklerBody.geometry, sprinklerTop.geometry);
+    this.sprinkler.add(sprinklerBody, sprinklerTop);
+    this.sprinkler.position.set(0, 0.55, 3.05);
+    this.sprinkler.visible = false;
+    scene.add(this.sprinkler);
+
     // --- Gooby cheering at the garden's edge ---
     this.particles = createParticles(scene);
     this.floats = createFloatTexts(scene, ctx.camera);
@@ -305,16 +334,20 @@ export default {
     this.onPointerDown = (e) => {
       if (this.autoplay || this.phase !== 'play') return;
       const ndc = { nx: (e.clientX / innerWidth) * 2 - 1, ny: -(e.clientY / innerHeight) * 2 + 1 };
+      if (this.sprinkler.visible && ctx.input.pick(ctx.camera, [this.sprinkler], ndc)) {
+        this.activateSprinkler();
+        return;
+      }
       const hit = ctx.input.pick(ctx.camera, this.pots.filter((p) => p.inScene).map((p) => p.group), ndc);
       if (!hit) return;
       let obj = hit.object;
       while (obj && obj.parent && !this.pots.some((p) => p.group === obj)) obj = obj.parent;
       const pot = this.pots.find((p) => p.group === obj);
-      if (pot && (pot.state === 'sprout' || pot.state === 'weed')) this.startHold(pot);
+      if (pot && (pot.state === 'sprout' || pot.state === 'weed')) this.startHold(pot, e.timeStamp);
     };
-    this.onPointerUp = () => {
+    this.onPointerUp = (e) => {
       if (this.autoplay) return;
-      this.releaseHold();
+      this.releaseHold(e.timeStamp);
     };
     const el = ctx.renderer.domElement;
     el.addEventListener('pointerdown', this.onPointerDown);
@@ -356,9 +389,9 @@ export default {
     if (this.hold?.pot === pot) this.cancelHold();
   },
 
-  startHold(pot) {
+  startHold(pot, inputStartMs = null) {
     if (this.hold) return;
-    this.hold = { pot, fillT: 0 };
+    this.hold = { pot, fillT: 0, inputStartMs };
     this.can.visible = true;
     this.can.position.copy(pot.pos).add(new THREE.Vector3(-0.35, 1.85, 0));
     this.can.rotation.z = -0.5;
@@ -377,11 +410,14 @@ export default {
   },
 
   /** Release the watering hold — §C1.2 perfect/early/weed outcomes. */
-  releaseHold() {
+  releaseHold(inputEndMs = null) {
     const hold = this.hold;
     if (!hold) return;
     const pot = hold.pot;
-    const frac = Math.min(1, hold.fillT / RUSH.FILL_SEC);
+    const eventHeldSec = Number.isFinite(hold.inputStartMs) && Number.isFinite(inputEndMs)
+      ? Math.max(0, (inputEndMs - hold.inputStartMs) / 1000)
+      : 0;
+    const frac = holdFillFraction(Math.max(hold.fillT, eventHeldSec));
     this.cancelHold();
     const popPos = pot.pos.clone().add(new THREE.Vector3(0, 1.7, 0));
     if (pot.state === 'weed') {
@@ -416,6 +452,24 @@ export default {
     pot.state = 'watered';
     pot.ring.visible = false;
     pot.cooldownT = 0.55; // grown-flash beat before the pot frees up
+  },
+
+  /** Fire the one-per-run sprinkler and refill every live plant ring 50%. */
+  activateSprinkler() {
+    if (!this.sprinklerSpawned || this.sprinklerUsed) return;
+    this.sprinklerUsed = true;
+    this.sprinkler.visible = false;
+    let refilled = 0;
+    for (const pot of this.pots) {
+      if (!pot.inScene || pot.state !== 'sprout') continue;
+      pot.wiltT = sprinklerRefill(pot.wiltT, pot.wiltWindow);
+      refilled += 1;
+      this.particles.emit('bubbles', pot.pos.clone().add(new THREE.Vector3(0, 1.1, 0)), { count: 4 });
+    }
+    this.ctx.hud.banner(t('mg.rush.sprinklerUsed', { n: refilled }));
+    if (this.autoplay) console.log(`[gardenRush] sprinkler fired — rings ${refilled}, refill 50%`);
+    this.ctx.audio.play('garden.water');
+    this.gooby.play('happyBounce');
   },
 
   /**
@@ -501,6 +555,23 @@ export default {
 
     const remaining = RUSH.DURATION_SEC - elapsed;
     ctx.hud.setTime(remaining);
+
+    if (shouldSpawnSprinkler(elapsed, this.sprinklerSpawned)) {
+      this.sprinklerSpawned = true;
+      this.sprinkler.visible = true;
+      this.sprinklerAutoT = 0.35;
+      ctx.hud.banner(t('mg.rush.sprinklerReady'));
+      ctx.audio.play('combo.up');
+      tween({
+        from: 0.01, to: 1, duration: 0.45, ease: easings.easeOutBack,
+        onUpdate: (v) => this.sprinkler.scale.setScalar(v),
+      });
+    }
+    if (this.sprinkler.visible) {
+      this.sprinkler.rotation.y += dt * 1.8;
+      this.sprinklerAutoT -= dt;
+      if (this.autoplay && this.sprinklerAutoT <= 0) this.activateSprinkler();
+    }
 
     // waves: pots #7/#8 pop in (§C1.2)
     const active = activePotsAt(elapsed);
@@ -639,6 +710,7 @@ export default {
     this.particles = null;
     this.floats = null;
     this.can = null;
+    this.sprinkler = null;
     this.fillSprite = null;
     this.ownedGeos = [];
     this.ownedMats = [];

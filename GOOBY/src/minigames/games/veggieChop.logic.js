@@ -40,6 +40,11 @@ export const CHOP = Object.freeze({
    * junk). Human-ish: skips some veggies, aims with positional error. */
   AUTOPLAY_CHOP_RATE: 0.965,
   AUTOPLAY_AIM_ERR: 0.14,
+  /** V3/G45 (§C10.2): frenzy starts every 25 s. */
+  FRENZY_EVERY_SEC: 25,
+  /** Each frenzy launches exactly 8 veggies over 3 s, with zero junk. */
+  FRENZY_DURATION_SEC: 3,
+  FRENZY_ITEMS: 8,
 });
 
 /**
@@ -114,8 +119,34 @@ export function rollItem(rng, elapsed) {
     const key = JUNK_ITEMS[Math.min(JUNK_ITEMS.length - 1, Math.floor(rng() * JUNK_ITEMS.length))];
     return { kind: 'junk', key };
   }
+  return rollVeggie(rng);
+}
+
+/**
+ * Roll a guaranteed veggie (the frenzy's no-junk contract).
+ * @param {() => number} rng
+ * @returns {{kind: 'veggie', key: string, half: string, juice: string}}
+ */
+export function rollVeggie(rng) {
   const v = VEGGIES[Math.min(VEGGIES.length - 1, Math.floor(rng() * VEGGIES.length))];
   return { kind: 'veggie', key: v.key, half: v.half, juice: v.juice };
+}
+
+/**
+ * Exact cadence needed to fit eight frenzy veggies inside three seconds.
+ * @returns {number}
+ */
+export function frenzySpawnInterval() {
+  return CHOP.FRENZY_DURATION_SEC / CHOP.FRENZY_ITEMS;
+}
+
+/**
+ * Count frenzy starts reached by a round time (25 s and 50 s in a 60 s run).
+ * @param {number} elapsed
+ * @returns {number}
+ */
+export function frenzyCountAt(elapsed) {
+  return Math.floor(Math.max(0, elapsed) / CHOP.FRENZY_EVERY_SEC);
 }
 
 /**
@@ -181,6 +212,17 @@ export function chopPoints(k) {
 }
 
 /**
+ * Advance the current swipe combo, or reset it immediately on junk. Keeping
+ * this state transition pure locks the §C10.2 junk-reset audit.
+ * @param {number} current
+ * @param {'veggie'|'junk'} kind
+ * @returns {number}
+ */
+export function comboAfterHit(current, kind) {
+  return kind === 'junk' ? 0 : Math.max(0, current) + 1;
+}
+
+/**
  * Total for a swipe that chops n veggies: 2n + (n−1) — the combo counter
  * (§C1.5). Equals the sum of chopPoints(1..n).
  * @param {number} n veggies chopped in one swipe
@@ -222,4 +264,40 @@ export function segmentHitsCircle(ax, ay, bx, by, cx, cy, r) {
   const px = ax + t * dx - cx;
   const py = ay + t * dy - cy;
   return px * px + py * py <= r * r;
+}
+
+/**
+ * Low-FPS swipe audit: test the stroke against the entire path an item moved
+ * over its last render frame, not only its latest center. This prevents a
+ * lob from tunneling through a visible swipe when SwiftShader drops frames.
+ * @param {number} ax @param {number} ay swipe start
+ * @param {number} bx @param {number} by swipe end
+ * @param {number} cx0 @param {number} cy0 previous item center
+ * @param {number} cx1 @param {number} cy1 current item center
+ * @param {number} r hit radius
+ * @returns {boolean}
+ */
+export function segmentHitsMovingCircle(ax, ay, bx, by, cx0, cy0, cx1, cy1, r) {
+  if (segmentsIntersect(ax, ay, bx, by, cx0, cy0, cx1, cy1)) return true;
+  return segmentHitsCircle(ax, ay, bx, by, cx0, cy0, r)
+    || segmentHitsCircle(ax, ay, bx, by, cx1, cy1, r)
+    || segmentHitsCircle(cx0, cy0, cx1, cy1, ax, ay, r)
+    || segmentHitsCircle(cx0, cy0, cx1, cy1, bx, by, r);
+}
+
+/** Segment intersection including collinear/touching cases. */
+function segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
+  const cross = (px, py, qx, qy, rx, ry) => (qx - px) * (ry - py) - (qy - py) * (rx - px);
+  const abC = cross(ax, ay, bx, by, cx, cy);
+  const abD = cross(ax, ay, bx, by, dx, dy);
+  const cdA = cross(cx, cy, dx, dy, ax, ay);
+  const cdB = cross(cx, cy, dx, dy, bx, by);
+  const eps = 1e-9;
+  const between = (v, p, q) => v >= Math.min(p, q) - eps && v <= Math.max(p, q) + eps;
+  const on = (v, x, y, px, py, qx, qy) =>
+    Math.abs(v) <= eps && between(x, px, qx) && between(y, py, qy);
+  if (((abC > eps && abD < -eps) || (abC < -eps && abD > eps))
+    && ((cdA > eps && cdB < -eps) || (cdA < -eps && cdB > eps))) return true;
+  return on(abC, cx, cy, ax, ay, bx, by) || on(abD, dx, dy, ax, ay, bx, by)
+    || on(cdA, ax, ay, cx, cy, dx, dy) || on(cdB, bx, by, cx, cy, dx, dy);
 }

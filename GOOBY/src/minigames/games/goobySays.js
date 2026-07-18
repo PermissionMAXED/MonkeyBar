@@ -13,7 +13,16 @@ import { tween, easings } from '../../gfx/tween.js';
 import { createParticles } from '../../gfx/particles.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js';
-import { SAYS, seqLengthAt, stepMsAt, extendSequence, roundScore, autoplayErrAt } from './goobySays.logic.js';
+import {
+  SAYS,
+  seqLengthAt,
+  stepMsAt,
+  extendSequence,
+  isChordStep,
+  chordTapResult,
+  roundScore,
+  autoplayErrAt,
+} from './goobySays.logic.js';
 
 /** Pad palette (§C1.2 binding: carrot-orange, teal, pink, yellow). */
 const PAD_COLORS = ['#FF9F5A', '#59C9B9', '#FF7BA9', '#FFD166'];
@@ -74,6 +83,7 @@ export default {
     this.reactions = [];
     this.endT = 0;
     this.autoT = 0;
+    this.chordPending = null;
     this.score = 0;
 
     const camera = ctx.camera;
@@ -209,12 +219,22 @@ export default {
     }
   },
 
+  /** Light one normal step or both pads of a chord simultaneously. */
+  lightStep(step, options = {}) {
+    if (isChordStep(step)) {
+      for (const pad of step) this.lightPad(pad, options);
+    } else {
+      this.lightPad(step, options);
+    }
+  },
+
   /** Start a round: extend the sequence and play it back. */
   startWatch() {
     this.phase = 'watch';
-    this.sequence = extendSequence(this.sequence, this.ctx.rng);
+    this.chordPending = null;
+    this.sequence = extendSequence(this.sequence, this.ctx.rng, this.round);
     while (this.sequence.length < seqLengthAt(this.round)) {
-      this.sequence = extendSequence(this.sequence, this.ctx.rng);
+      this.sequence = extendSequence(this.sequence, this.ctx.rng, this.round);
     }
     this.playIdx = 0;
     this.stepT = 0.55;
@@ -227,6 +247,7 @@ export default {
     this.phase = 'repeat';
     this.inputIdx = 0;
     this.reactT = 0;
+    this.chordPending = null;
     this.ctx.hud.banner(t('mg.says.go'));
     this.gooby.lookAt(new THREE.Vector3(0, 1.5, 6));
   },
@@ -236,10 +257,40 @@ export default {
     if (this.phase !== 'repeat') return;
     const expected = this.sequence[this.inputIdx];
     this.lightPad(i);
-    if (i !== expected) {
+    if (isChordStep(expected)) {
+      if (!this.chordPending) {
+        const status = chordTapResult(expected, i);
+        if (status !== 'waiting') {
+          this.gameOver('mg.says.oops');
+          return;
+        }
+        this.chordPending = { firstPad: i, gapT: 0 };
+        this.ctx.hud.banner(t('mg.says.chord'));
+        if (this.autoplay) {
+          console.log(`[goobySays] chord round ${this.round} — pads ${expected.join('+')}`);
+        }
+        return;
+      }
+      const status = chordTapResult(
+        expected,
+        this.chordPending.firstPad,
+        i,
+        this.chordPending.gapT * 1000
+      );
+      this.chordPending = null;
+      if (status !== 'complete') {
+        this.gameOver(status === 'late' ? 'mg.says.chordLate' : 'mg.says.oops');
+        return;
+      }
+    } else if (i !== expected) {
       this.gameOver('mg.says.oops');
       return;
     }
+    this.completeInputStep();
+  },
+
+  /** Advance after one normal step or one fully-entered chord. */
+  completeInputStep() {
     this.reactions.push(this.reactT * 1000);
     this.reactT = 0;
     this.inputIdx += 1;
@@ -260,6 +311,7 @@ export default {
   gameOver(bannerKey) {
     this.phase = 'over';
     this.endT = 0;
+    this.chordPending = null;
     this.ctx.hud.banner(t(bannerKey));
     this.ctx.audio.play('gooby.squeakDizzy');
     this.gooby.setEmotion('dizzy');
@@ -293,7 +345,7 @@ export default {
       this.stepT -= dt;
       if (this.stepT <= 0) {
         if (this.playIdx < this.sequence.length) {
-          this.lightPad(this.sequence[this.playIdx], { sing: true });
+          this.lightStep(this.sequence[this.playIdx], { sing: true });
           this.playIdx += 1;
           this.stepT = stepMsAt(this.round) / 1000;
         } else {
@@ -305,6 +357,13 @@ export default {
 
     if (this.phase === 'repeat') {
       this.reactT += dt;
+      if (this.chordPending) {
+        this.chordPending.gapT += dt;
+        if (this.chordPending.gapT * 1000 > SAYS.CHORD_WINDOW_MS) {
+          this.gameOver('mg.says.chordLate');
+          return;
+        }
+      }
       if (this.reactT * 1000 > SAYS.INPUT_TIMEOUT_MS) {
         this.gameOver('mg.says.timeout');
         return;
@@ -312,10 +371,16 @@ export default {
       if (this.autoplay) {
         this.autoT -= dt;
         if (this.autoT <= 0) {
-          this.autoT = SAYS.AUTOPLAY_TAP_MS / 1000;
-          const want = this.sequence[this.inputIdx];
+          const step = this.sequence[this.inputIdx];
+          const chord = isChordStep(step);
+          this.autoT = chord && !this.chordPending
+            ? Math.min(0.12, SAYS.CHORD_WINDOW_MS / 2000)
+            : SAYS.AUTOPLAY_TAP_MS / 1000;
+          const want = chord
+            ? (this.chordPending ? step.find((pad) => pad !== this.chordPending.firstPad) : step[0])
+            : step;
           // Human-ish slip: ramps with round length, ends typical runs ~round 8.
-          const slip = this.ctx.rng() < autoplayErrAt(this.round);
+          const slip = !this.chordPending && this.ctx.rng() < autoplayErrAt(this.round);
           this.pressPad(slip ? (want + 1 + Math.floor(this.ctx.rng() * (SAYS.PADS - 1))) % SAYS.PADS : want);
         }
       }
@@ -355,6 +420,7 @@ export default {
     this.pads = [];
     this.beams = [];
     this.ball = null;
+    this.chordPending = null;
     this.stageGroup = null;
     this.ownedGeos = [];
     this.ownedMats = [];

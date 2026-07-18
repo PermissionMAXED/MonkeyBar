@@ -21,6 +21,10 @@ import {
   nextNeeded,
   isComplete,
   fallSpeedAt,
+  columnCenters,
+  isRushOrder,
+  orderTimerSec,
+  orderPoints,
   rollSpawn,
   applyCatch,
 } from './burgerBuild.logic.js';
@@ -118,7 +122,7 @@ function makeCheckerTexture() {
 /** @type {object} §E8 plugin */
 export default {
   id: 'burgerBuild',
-  assetKeys: Object.values(MODEL_KEYS),
+  assetKeys: [...Object.values(MODEL_KEYS), 'kaykit-restaurant/kitchencounter_straight'],
 
   /** @param {object} ctx §E8 game context */
   init(ctx) {
@@ -135,6 +139,12 @@ export default {
     this.endT = 0;
     this.autoT = 0;
     this.autoTargetX = 0;
+    this.orderNumber = 1;
+    this.rushOrders = 0;
+    this.rush = isRushOrder(this.orderNumber);
+    this.orderT = orderTimerSec(this.rush);
+    this.ticketSecond = -1;
+    this.propLogged = false;
 
     const camera = ctx.camera;
     camera.position.set(0, 0, 10);
@@ -142,8 +152,7 @@ export default {
     this.halfH = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * 10;
     this.halfW = this.halfH * (innerWidth / innerHeight);
     this.boundX = this.halfW - 0.7;
-    this.colW = Math.min(2.1, this.halfW - 0.95);
-    this.colX = [-this.colW, 0, this.colW];
+    this.colX = [...columnCenters(this.halfW)];
     this.plateY = -this.halfH + 1.55;
 
     const scene = ctx.scene;
@@ -182,12 +191,16 @@ export default {
     ));
     stripe.position.set(0, this.halfH - 4.55, -3); // diner wall stripe under the ticket
     scene.add(stripe);
-    const counter = own(new THREE.Mesh(
-      new THREE.BoxGeometry(this.halfW * 2 + 2, 0.42, 1.4),
-      new THREE.MeshStandardMaterial({ color: '#F2E3CF', roughness: 0.7 })
-    ));
-    counter.position.set(0, this.plateY - 0.55, -0.4);
-    scene.add(counter);
+    // V3/G45 §C11.1: one-mesh Restaurant-Bits counter replaces the primitive
+    // box without changing the data-driven catch plane or draw-call count.
+    this.counter = fitModel(
+      ctx.assets.getModel('kaykit-restaurant/kitchencounter_straight'),
+      this.halfW * 2 + 1.8
+    );
+    this.counter.scale.z *= 0.36;
+    this.counter.scale.y *= 0.72;
+    this.counter.position.set(0, this.plateY - 0.55, -0.4);
+    scene.add(this.counter);
 
     // --- ticket (canvas sprite, top-left under the HUD) ---
     this.ticketCanvas = document.createElement('canvas');
@@ -260,17 +273,20 @@ export default {
     const g = this.ticketCanvas.getContext('2d');
     const W = 200, H = 264;
     g.clearRect(0, 0, W, H);
-    g.fillStyle = 'rgba(255,252,244,0.96)';
-    g.strokeStyle = '#D64545';
+    g.fillStyle = this.rush ? 'rgba(255,238,153,0.98)' : 'rgba(255,252,244,0.96)';
+    g.strokeStyle = this.rush ? '#D99A18' : '#D64545';
     g.lineWidth = 5;
     g.beginPath();
     g.roundRect(4, 4, W - 8, H - 8, 14);
     g.fill();
     g.stroke();
     g.fillStyle = '#4A3B36';
-    g.font = '900 26px system-ui, sans-serif';
+    g.font = `900 ${this.rush ? 21 : 26}px system-ui, sans-serif`;
     g.textAlign = 'center';
-    g.fillText(t('mg.burger.order'), W / 2, 34);
+    g.fillText(t(this.rush ? 'mg.burger.rush' : 'mg.burger.order'), W / 2, 31);
+    g.font = '800 16px system-ui, sans-serif';
+    g.textAlign = 'right';
+    g.fillText(`${Math.max(0, Math.ceil(this.orderT))}s`, W - 14, 54);
     const rows = this.ticket.length;
     const rowH = Math.min(28, (H - 64) / rows);
     for (let i = 0; i < rows; i += 1) {
@@ -340,7 +356,7 @@ export default {
    * @param {boolean} correct next-needed catch?
    */
   addCatchPoints(correct) {
-    const next = applyCatch(this.score, correct);
+    const next = applyCatch(this.score, correct, this.rush);
     const delta = next - this.score;
     this.score = next;
     if (delta !== 0) this.ctx.onScore(delta);
@@ -352,7 +368,7 @@ export default {
     this.despawnItem(item);
     if (item.id === needed) {
       this.addCatchPoints(true);
-      this.floats.spawn(`+${BURGER.CATCH_PTS}`, pos, '#2E8B57');
+      this.floats.spawn(`+${orderPoints(BURGER.CATCH_PTS, this.rush)}`, pos, this.rush ? '#D99A18' : '#2E8B57');
       this.ctx.audio.play('catch.good');
       this.stackLayer(item.id);
       this.placed += 1;
@@ -396,8 +412,9 @@ export default {
   /** Completed burger: +15, comical bite, then a new ticket (§C1.2). */
   completeBurger() {
     this.completed += 1;
-    this.score += BURGER.COMPLETE_PTS;
-    this.ctx.onScore(BURGER.COMPLETE_PTS);
+    const completePoints = orderPoints(BURGER.COMPLETE_PTS, this.rush);
+    this.score += completePoints;
+    this.ctx.onScore(completePoints);
     this.ctx.hud.banner(t('mg.burger.complete'));
     this.ctx.audio.play('combo.up');
     this.phase = 'bite';
@@ -407,18 +424,39 @@ export default {
     this.ctx.audio.play('eat.chomp');
     this.particles.emit('crumbs', this.plate.position.clone().add(new THREE.Vector3(0, this.stackTopY, 0)), { count: 8 });
     this.particles.emit('hearts', this.gooby.group.position.clone().add(new THREE.Vector3(0, 1.6, 0)), { count: 4 });
+    if (this.rush) {
+      this.ctx.hud.banner(t('mg.burger.rushBonus', { n: completePoints }));
+      this.ctx.audio.play('combo.up');
+    }
   },
 
   /** After the bite: clear the plate and pull the next seeded ticket. */
-  newTicket() {
+  newTicket({ expired = false } = {}) {
     for (const mesh of this.stackMeshes) this.plate.remove(mesh);
     this.stackMeshes = [];
+    for (const item of this.items) {
+      if (item.active) this.despawnItem(item);
+    }
+    this.items = [];
     this.stackTopY = 0.05;
     this.ticket = makeTicket(this.ctx.rng);
     this.placed = 0;
+    this.sinceNeeded = 0;
+    this.orderNumber += 1;
+    this.rush = isRushOrder(this.orderNumber);
+    if (this.rush) this.rushOrders += 1;
+    this.orderT = orderTimerSec(this.rush);
+    this.ticketSecond = -1;
     this.drawTicket();
     this.gooby.setEmotion('happy');
-    this.ctx.hud.banner(t('mg.burger.newOrder'));
+    this.ctx.hud.banner(t(expired ? 'mg.burger.expired' : 'mg.burger.newOrder'));
+    if (this.rush) {
+      this.ctx.hud.banner(t('mg.burger.rush'));
+      this.ctx.audio.play('combo.up');
+      if (this.autoplay) {
+        console.log(`[burgerBuild] rush order ${this.orderNumber} — timer ${this.orderT}s, points x${BURGER.RUSH_SCORE_MULT}`);
+      }
+    }
     if (this.completed === 1) this.ctx.hud.banner(t('mg.burger.speedUp'));
   },
 
@@ -468,6 +506,10 @@ export default {
 
     const remaining = BURGER.DURATION_SEC - elapsed;
     ctx.hud.setTime(remaining);
+    if (this.autoplay && !this.propLogged && elapsed > 0.5) {
+      this.propLogged = true;
+      console.log(`[burgerBuild] prop kaykit-restaurant/kitchencounter_straight — drawCalls ${ctx.renderer.info.render.calls}`);
+    }
 
     if (this.phase === 'bite') {
       this.biteT -= dt;
@@ -477,6 +519,13 @@ export default {
       }
     } else {
       this.sinceNeeded += dt;
+      this.orderT = Math.max(0, this.orderT - dt);
+      const ticketSecond = Math.ceil(this.orderT);
+      if (ticketSecond !== this.ticketSecond) {
+        this.ticketSecond = ticketSecond;
+        this.drawTicket();
+      }
+      if (this.orderT <= 0) this.newTicket({ expired: true });
     }
 
     if (this.autoplay) {
@@ -547,6 +596,7 @@ export default {
     this.floats = null;
     this.plate = null;
     this.ticketSprite = null;
+    this.counter = null;
     this.ownedGeos = [];
     this.ownedMats = [];
     this.ownedTexs = [];
