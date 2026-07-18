@@ -129,6 +129,30 @@ export function swatchStyle(entry) {
 
 let wired = false;
 
+// V2/FIX-D (E17): ONE module-level try-on renderer for the Skins tab, reused
+// across mounts AND tab re-renders (renderBody rebuilds the stage per render).
+// Browsers cap live WebGL contexts (Chrome ≈16) and renderer.dispose() alone
+// never releases a context, so the old renderer-per-render pattern eventually
+// evicted the MAIN scene canvas and home rendered blank until reload.
+/** @type {object|null} THREE.WebGLRenderer — untyped: three.js only ever
+ * loads dynamically here (node:test import-chain rule, see mountSkinStage) */
+let skinRenderer = null;
+
+// V2/FIX-D (E16): module-scoped layout guards — styles.css belongs to another
+// agent, so the shop's own fixes live in this injected block (same pattern as
+// the other screens' data-owner styles).
+// P1-3: long one-word DE wallpaper names („Sternennacht", „Sonnenuntergang")
+//   painted over the neighbouring swatch's text at 390-430px — wrap them
+//   inside the 72px swatch column instead (same RE3 ruling as .shop-name).
+// P1-4: single-word tab labels (EN "Furniture") leaked into the neighbouring
+//   wrapped tab at 320px — shrink slightly, allow in-word wrapping and clip
+//   as a last resort; min-height keeps every tab ≥44px tall (§D5).
+const SHOP_FIX_CSS = `
+.swatch .swatch-name{max-width:100%;text-align:center;line-height:1.2;overflow-wrap:anywhere;}
+.swatch .swatch-price{max-width:100%;flex-wrap:wrap;justify-content:center;text-align:center;}
+.shop-tabs .shop-tab{min-width:0;min-height:46px;overflow:hidden;overflow-wrap:anywhere;font-size:clamp(11px,3.4vw,13px);line-height:1.2;padding:6px 3px;}
+`;
+
 /**
  * Register the shop screen + quick-delivery hooks. Called once from the G11
  * marker in systems/shopTrip.js (browser only).
@@ -139,6 +163,13 @@ export function registerShopScreen(deps) {
   if (wired || typeof document === 'undefined') return;
   wired = true;
   const { store, ui, audio } = deps;
+
+  if (!document.querySelector('style[data-owner="v2fd-shop"]')) {
+    const style = document.createElement('style');
+    style.dataset.owner = 'v2fd-shop';
+    style.textContent = SHOP_FIX_CSS;
+    document.head.appendChild(style); // V2/FIX-D (E16): after styles.css → wins ties
+  }
 
   ui.registerScreen('shop', createShopScreen(deps));
   installPanelHooks(deps);
@@ -616,7 +647,12 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
       const { createGooby } = await import('../character/gooby.js');
       const skinsMod = await import('../character/skins.js');
       if (!bodyEl || !stageEl.isConnected) return; // tab switched meanwhile
-      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      // V2/FIX-D (E17): reuse the one module-level context across mounts —
+      // never a renderer per render (see the skinRenderer note up top).
+      if (!skinRenderer) {
+        skinRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      }
+      const renderer = skinRenderer;
       renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
       const scene = new THREE.Scene();
       const hemi = new THREE.HemisphereLight('#fff5e8', '#b8a898', 1.05);
@@ -666,7 +702,8 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
           window.removeEventListener('resize', resize);
           skinsMod.clearSkinPreview(gooby);
           gooby.dispose();
-          renderer.dispose();
+          // V2/FIX-D (E17): detach the canvas, KEEP the shared context alive
+          renderer.domElement.remove();
         },
       };
       if (selSkin) skinStage.setSkin(selSkin);

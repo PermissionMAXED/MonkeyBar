@@ -24,7 +24,7 @@ import { icon } from './icons.js';
 import { createGooby } from '../character/gooby.js';
 import { applyOutfits, buildOutfitItem } from '../character/outfitAttach.js';
 import { applySkin, previewSkin, clearSkinPreview } from '../character/skins.js'; // V2/G22
-import { buySkin } from '../systems/economy.js'; // V2/G22 (§C8.5)
+import { buySkin, spend } from '../systems/economy.js'; // V2/G22 (§C8.5) + V2/FIX-D: spend (§C1.5)
 
 const PREVIEW_H = 280;
 const THUMB_SIZE = 108;
@@ -63,17 +63,34 @@ const WARDROBE_CSS = `
 /** @type {Map<string, string>} outfit id → rendered thumbnail dataURL (session cache) */
 const thumbCache = new Map();
 
+// V2/FIX-D (E17): ONE module-level WebGL context, shared by the try-on stage
+// AND the thumbnail baker and reused across opens. Browsers cap live WebGL
+// contexts (Chrome ≈16); the old renderer-per-mount pattern leaked a context
+// per wardrobe open (renderer.dispose() alone never releases the GL context),
+// so ~15 opens evicted the MAIN scene canvas and home rendered blank forever.
+/** @type {THREE.WebGLRenderer|null} */
+let sharedRenderer = null;
+
+/** @returns {THREE.WebGLRenderer|null} the module's one preview context */
+function getSharedRenderer() {
+  if (!sharedRenderer) {
+    try {
+      // preserveDrawingBuffer: ensureThumbs() reads pixels back via toDataURL
+      sharedRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+    } catch (err) {
+      console.warn('[wardrobe] preview renderer unavailable:', err);
+      return null;
+    }
+  }
+  return sharedRenderer;
+}
+
 /** Render 3D thumbnails for every catalog item once per session (Kenney-free,
  * pure primitives — the same builders the rig wears). */
 function ensureThumbs() {
   if (thumbCache.size >= OUTFITS.length) return;
-  let renderer;
-  try {
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
-  } catch (err) {
-    console.warn('[wardrobe] thumbnail renderer unavailable:', err);
-    return;
-  }
+  const renderer = getSharedRenderer(); // V2/FIX-D (E17): no context of its own
+  if (!renderer) return;
   renderer.setSize(THUMB_SIZE, THUMB_SIZE);
   renderer.setPixelRatio(1);
   const scene = new THREE.Scene();
@@ -107,7 +124,8 @@ function ensureThumbs() {
     scene.remove(item);
     item.traverse((obj) => obj.geometry?.dispose?.());
   }
-  renderer.dispose();
+  // V2/FIX-D (E17): no dispose — the context is shared with the try-on stage
+  // (mount's resize() restores the stage size right after baking).
 }
 
 /**
@@ -180,8 +198,12 @@ export function registerWardrobe({ store, ui, audio }) {
     let gooby = null;
     let raf = 0;
     const scene = new THREE.Scene();
+    // V2/FIX-D (E17): bake thumbnails BEFORE sizing the stage — both share the
+    // one module-level context, and resize() below restores the stage size.
+    ensureThumbs();
     try {
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer = getSharedRenderer();
+      if (!renderer) throw new Error('WebGL unavailable');
       renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
       const hemi = new THREE.HemisphereLight('#fff5e8', '#b8a898', 1.05);
       const dir = new THREE.DirectionalLight('#fff2dd', 1.4);
@@ -231,8 +253,6 @@ export function registerWardrobe({ store, ui, audio }) {
     hint.textContent = buyMode ? t('wardrobe.buyHint') : t('wardrobe.equipHint');
     body.appendChild(hint);
 
-    ensureThumbs();
-
     const equipped = () => store.get('outfits.equipped') ?? {};
     const owned = () => store.get('outfits.owned') ?? [];
     // V2/G22 skin slices (§B2 — defaults cream/cream)
@@ -277,16 +297,15 @@ export function registerWardrobe({ store, ui, audio }) {
     }
 
     function buy(def) {
-      const coins = store.get('coins') ?? 0;
-      if (coins < def.price) {
+      // V2/FIX-D (E13, §C1.5): the single money path — economy.spend gates
+      // affordability AND feeds profile.coinsSpent (stats-screen truth); the
+      // old direct store.update coin subtraction bypassed both.
+      if (!spend(store, def.price, 'outfit')) {
         ui.toast('toast.notEnoughCoins');
         audio.play('ui.error');
         return;
       }
-      // G11's economy.spend may take over this path once merged; direct spend
-      // keeps the wave-4 wardrobe self-contained (atomic single update).
       store.update((state) => {
-        state.coins -= def.price;
         if (!state.outfits.owned.includes(def.id)) state.outfits.owned.push(def.id);
         state.outfits.equipped[def.slot] = def.id; // new outfits go straight on
       });
@@ -451,7 +470,9 @@ export function registerWardrobe({ store, ui, audio }) {
       clearSkinPreview(live.gooby); // V2/G22: drop local fur try-on clones
       live.gooby.dispose();
     }
-    live.renderer?.dispose();
+    // V2/FIX-D (E17): detach the canvas but KEEP the shared renderer alive for
+    // the next open — disposing a per-mount renderer leaked its GL context.
+    live.renderer?.domElement?.remove();
     live = null;
   }
 
