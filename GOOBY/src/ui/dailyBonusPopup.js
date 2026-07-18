@@ -14,23 +14,25 @@ import { getFood } from '../data/foods.js';
 import { t } from '../data/strings.js';
 import { icon } from './icons.js';
 
+// V3/G33 (§B3): mechanical px→rem sweep (÷16) of this injected CSS string —
+// exemptions (1px hairlines/999px pills/shadows/@media px) per PLAN3 §B3.
 const DAILY_CSS = `
 .g12-daily{text-align:center;}
-.g12-daily-title{margin:0 0 2px;font-size:24px;font-weight:800;color:var(--brown);}
-.g12-daily-sub{margin:0 0 14px;font-size:13.5px;font-weight:700;opacity:.6;}
-.g12-daily-cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px;margin-bottom:14px;}
-.g12-daily-slot{display:flex;flex-direction:column;align-items:center;gap:2px;min-width:0;background:rgba(74,59,54,.06);border:2.5px solid transparent;border-radius:13px;padding:7px 1px;}
-.g12-daily-slot-day{font-size:10px;font-weight:800;opacity:.55;white-space:nowrap;}
-.g12-daily-slot-coins{display:inline-flex;align-items:center;gap:1px;font-size:11px;font-weight:800;color:var(--brown);white-space:nowrap;}
+.g12-daily-title{margin:0 0 0.125rem;font-size:1.5rem;font-weight:800;color:var(--brown);}
+.g12-daily-sub{margin:0 0 0.875rem;font-size:0.8438rem;font-weight:700;opacity:.6;}
+.g12-daily-cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:0.3125rem;margin-bottom:0.875rem;}
+.g12-daily-slot{display:flex;flex-direction:column;align-items:center;gap:0.125rem;min-width:0;background:rgba(74,59,54,.06);border:0.1563rem solid transparent;border-radius:0.8125rem;padding:0.4375rem 1px;}
+.g12-daily-slot-day{font-size:0.625rem;font-weight:800;opacity:.55;white-space:nowrap;}
+.g12-daily-slot-coins{display:inline-flex;align-items:center;gap:1px;font-size:0.6875rem;font-weight:800;color:var(--brown);white-space:nowrap;}
 .g12-daily-slot-coins svg{color:var(--yellow);}
-.g12-daily-slot-food{font-size:10px;line-height:1;}
+.g12-daily-slot-food{font-size:0.625rem;line-height:1;}
 .g12-daily-slot.g12-past{background:rgba(89,201,185,.18);}
 .g12-daily-slot.g12-past .g12-daily-slot-day{color:var(--teal-dark);opacity:1;}
 .g12-daily-slot.g12-today{border-color:var(--pink);background:rgba(255,123,169,.12);transform:scale(1.06);}
 .g12-daily-slot.g12-today .g12-daily-slot-day{color:var(--pink-dark);opacity:1;}
-.g12-daily-reward{min-height:30px;display:flex;align-items:center;justify-content:center;gap:8px;font-size:17px;font-weight:800;color:var(--brown);margin-bottom:10px;}
+.g12-daily-reward{min-height:1.875rem;display:flex;align-items:center;justify-content:center;gap:0.5rem;font-size:1.0625rem;font-weight:800;color:var(--brown);margin-bottom:0.625rem;}
 .g12-daily-reward svg{color:var(--yellow);}
-.g12-daily-streak{font-size:12.5px;font-weight:800;color:var(--teal-dark);margin-bottom:12px;}
+.g12-daily-streak{font-size:0.7813rem;font-weight:800;color:var(--teal-dark);margin-bottom:0.75rem;}
 `;
 
 /**

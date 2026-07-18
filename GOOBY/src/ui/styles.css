@@ -1,5 +1,14 @@
 /* GOOBY pastel brand system (§D5). Later agents append their screen styles.
-   Baseline: portrait 390×844, fluid 320–480. Touch targets ≥ 48 px. */
+   Baseline: portrait 390×844, fluid 320–480. Touch targets ≥ 48 px.
+
+   V3/G33 (PLAN3 §B3 rem sweep): ALL DOM-UI font sizes, paddings, margins,
+   radii and fixed dimensions are rem (÷16, ≤4 decimals) so the root
+   font-size (16 · settings.uiScale/100, set on <html> + data-ui-scale attr)
+   scales the whole overlay 85–130 %. Exemptions that STAY px: 1px hairlines,
+   box/text-shadows, 999px pill-radius sentinels, @media conditions, env()
+   safe-area insets, keyframe/transform motion offsets, and the 44px real-px
+   tap-target floor inside max(44px, 2.75rem)-style rules. New declarations
+   must be rem-based — scripts/px-audit.mjs (npm run px-audit) gates this. */
 
 :root {
   /* palette (§D5 — mirrored in data/constants.js UI_COLORS) */
@@ -16,8 +25,8 @@
   --stat-energy: #ffd166;
   --stat-hygiene: #6ec6ff;
   --stat-fun: #ff7ba9;
-  --card-radius: 20px;
-  --btn-radius: 18px;
+  --card-radius: 1.25rem;
+  --btn-radius: 1.125rem;
   --shadow-soft: 0 6px 24px rgba(74, 59, 54, 0.14);
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -44,16 +53,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  min-height: 48px;
-  min-width: 48px;
-  padding: 10px 22px;
+  gap: 0.5rem;
+  min-height: max(44px, 3rem);
+  min-width: max(44px, 3rem);
+  padding: 0.625rem 1.375rem;
   border: none;
   border-radius: var(--btn-radius);
   background: var(--pink);
-  border-bottom: 4px solid var(--pink-dark);
+  border-bottom: 0.25rem solid var(--pink-dark);
   color: var(--white);
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 800;
   font-family: inherit;
   cursor: pointer;
@@ -80,8 +89,8 @@
 }
 .btn.btn-round {
   border-radius: 50%;
-  width: 52px;
-  height: 52px;
+  width: 3.25rem;
+  height: 3.25rem;
   padding: 0;
 }
 .btn svg {
@@ -94,7 +103,7 @@
   background: var(--white);
   border-radius: var(--card-radius);
   box-shadow: var(--shadow-soft);
-  padding: 20px;
+  padding: 1.25rem;
 }
 
 /* ---------- full screens & panels (§E6) ---------- */
@@ -108,7 +117,9 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: calc(16px + var(--safe-top)) calc(16px + var(--safe-right)) calc(16px + var(--safe-bottom)) calc(16px + var(--safe-left));
+  /* V3/G33 (§C1.4): full-bleed backdrop, content clears the insets —
+     padding-bottom: max(16px, calc(var(--safe-bottom) + 4px)) rule shape. */
+  padding: max(1rem, calc(var(--safe-top) + 0.25rem)) max(1rem, var(--safe-right)) max(1rem, calc(var(--safe-bottom) + 0.25rem)) max(1rem, var(--safe-left));
   z-index: 100;
 }
 
@@ -124,11 +135,11 @@
 }
 .panel {
   width: 100%;
-  max-width: 480px;
+  max-width: 30rem;
   background: var(--white);
   border-radius: var(--card-radius) var(--card-radius) 0 0;
   box-shadow: var(--shadow-soft);
-  padding: 20px 20px calc(20px + var(--safe-bottom));
+  padding: 1.25rem 1.25rem max(1.25rem, calc(var(--safe-bottom) + 0.25rem)); /* V3/G33 §C1.4 sheet rule */
   animation: panel-up 180ms ease-out;
 }
 @keyframes panel-up {
@@ -141,13 +152,13 @@
 .toast {
   position: absolute;
   left: 50%;
-  bottom: calc(76px + var(--safe-bottom));
+  bottom: calc(4.75rem + var(--safe-bottom));
   transform: translateX(-50%);
   background: var(--brown);
   color: var(--white);
-  font-size: 16px;
+  font-size: 1rem;
   font-weight: 700;
-  padding: 12px 22px;
+  padding: 0.75rem 1.375rem;
   border-radius: 999px;
   box-shadow: var(--shadow-soft);
   pointer-events: none;
@@ -170,13 +181,13 @@
 
 .home-title {
   position: absolute;
-  top: calc(64px + var(--safe-top));
+  top: calc(4rem + var(--safe-top));
   left: 0;
   right: 0;
   text-align: center;
-  font-size: 64px;
+  font-size: 4rem;
   font-weight: 800;
-  letter-spacing: 6px;
+  letter-spacing: 0.375rem;
   color: var(--pink);
   text-shadow: 0 4px 0 rgba(224, 95, 141, 0.35), 0 10px 30px rgba(255, 123, 169, 0.35);
   pointer-events: none;
@@ -184,11 +195,11 @@
 }
 .home-subtitle {
   position: absolute;
-  top: calc(148px + var(--safe-top));
+  top: calc(9.25rem + var(--safe-top));
   left: 0;
   right: 0;
   text-align: center;
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 700;
   color: var(--brown);
   opacity: 0.55;
@@ -205,28 +216,29 @@
 }
 .mg-hud .mg-top {
   position: absolute;
-  top: calc(12px + var(--safe-top));
-  left: calc(12px + var(--safe-left));
-  right: calc(12px + var(--safe-right));
+  /* V3/G33 (§C1.4): minigame pause/exit row — top: max(10px, var(--safe-top)) */
+  top: max(0.75rem, var(--safe-top));
+  left: max(0.75rem, var(--safe-left));
+  right: max(0.75rem, var(--safe-right));
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 0.625rem;
 }
 .mg-pill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 0.5rem;
   background: rgba(255, 255, 255, 0.92);
   border-radius: 999px;
-  padding: 10px 18px;
-  font-size: 18px;
+  padding: 0.625rem 1.125rem;
+  font-size: 1.125rem;
   font-weight: 800;
   box-shadow: var(--shadow-soft);
-  min-height: 28px;
+  min-height: 1.75rem;
 }
 .mg-pill .mg-label {
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 700;
   opacity: 0.55;
   text-transform: uppercase;
@@ -241,7 +253,7 @@
   left: 0;
   right: 0;
   text-align: center;
-  font-size: 32px;
+  font-size: 2rem;
   font-weight: 800;
   color: var(--white);
   text-shadow: 0 3px 12px rgba(74, 59, 54, 0.45);
@@ -264,7 +276,7 @@
   z-index: 60;
 }
 .mg-countdown .mg-count {
-  font-size: 120px;
+  font-size: 7.5rem;
   font-weight: 800;
   color: var(--white);
   text-shadow: 0 6px 0 rgba(224, 95, 141, 0.5), 0 16px 40px rgba(74, 59, 54, 0.35);
@@ -279,44 +291,44 @@
 
 /* pause + results */
 .mg-overlay-title {
-  font-size: 34px;
+  font-size: 2.125rem;
   font-weight: 800;
-  margin: 0 0 6px;
+  margin: 0 0 0.375rem;
   text-align: center;
 }
 .mg-results-rows {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin: 18px 0 22px;
-  width: min(320px, 80vw);
+  gap: 0.625rem;
+  margin: 1.125rem 0 1.375rem;
+  width: min(20rem, 80vw);
 }
 .mg-results-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   background: var(--bg-cream);
-  border-radius: 14px;
-  padding: 12px 16px;
-  font-size: 18px;
+  border-radius: 0.875rem;
+  padding: 0.75rem 1rem;
+  font-size: 1.125rem;
   font-weight: 700;
 }
 .mg-results-row .mg-value {
   font-weight: 800;
-  font-size: 22px;
+  font-size: 1.375rem;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 0.375rem;
 }
 .mg-badge {
   display: inline-block;
   background: var(--yellow);
   color: var(--brown);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 800;
   border-radius: 999px;
-  padding: 4px 10px;
-  margin-left: 8px;
+  padding: 0.25rem 0.625rem;
+  margin-left: 0.5rem;
 }
 .mg-badge.mg-badge-pink {
   background: var(--pink);
@@ -324,7 +336,7 @@
 }
 .mg-btn-row {
   display: flex;
-  gap: 12px;
+  gap: 0.75rem;
   justify-content: center;
   flex-wrap: wrap;
 }
@@ -334,15 +346,15 @@
 .stat-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 0.375rem;
   background: rgba(255, 255, 255, 0.92);
   border-radius: 999px;
-  padding: 6px 10px;
+  padding: 0.375rem 0.625rem;
   box-shadow: var(--shadow-soft);
 }
 .stat-pill .stat-track {
-  width: 54px;
-  height: 10px;
+  width: 3.375rem;
+  height: 0.625rem;
   border-radius: 999px;
   background: rgba(74, 59, 54, 0.12);
   overflow: hidden;
@@ -367,20 +379,20 @@
    so the chip never overlaps the pills at 320px width. */
 .sleep-chip {
   position: absolute;
-  top: calc(104px + var(--safe-top));
+  top: calc(6.5rem + var(--safe-top));
   left: 50%;
   transform: translateX(-50%);
-  max-width: calc(100vw - 24px);
+  max-width: calc(100vw - 1.5rem);
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 0.5rem;
   background: rgba(38, 42, 66, 0.88);
   color: #fff;
-  font-size: 16px;
+  font-size: 1rem;
   font-weight: 800;
   border-radius: 999px;
-  padding: 10px 18px;
-  min-height: 48px;
+  padding: 0.625rem 1.125rem;
+  min-height: max(44px, 3rem);
   box-shadow: var(--shadow-soft);
   pointer-events: auto;
   cursor: pointer;
@@ -392,11 +404,11 @@
   display: inline-block;
 }
 .sleep-chip .sleep-chip-energy {
-  font-size: 13px;
+  font-size: 0.8125rem;
   opacity: 0.85;
   background: rgba(255, 255, 255, 0.14);
   border-radius: 999px;
-  padding: 3px 9px;
+  padding: 0.1875rem 0.5625rem;
 }
 @keyframes sleep-zzz {
   0%, 100% { transform: translateY(0); opacity: 0.75; }
@@ -410,18 +422,18 @@
 }
 .perm-icon {
   color: var(--pink);
-  margin-bottom: 4px;
+  margin-bottom: 0.25rem;
 }
 .perm-title {
-  font-size: 24px;
+  font-size: 1.5rem;
   font-weight: 800;
-  margin: 0 0 8px;
+  margin: 0 0 0.5rem;
 }
 .perm-body {
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.45;
   opacity: 0.8;
-  margin: 0 0 18px;
+  margin: 0 0 1.125rem;
 }
 .btn[disabled] {
   opacity: 0.45;
@@ -438,10 +450,10 @@
   -webkit-overflow-scrolling: touch;
 }
 .settings-wrap {
-  width: min(420px, 100%);
+  width: min(26.25rem, 100%);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 1rem;
   align-self: center;
   margin: auto 0;
   flex: none;
@@ -449,47 +461,54 @@
 .settings-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 0.75rem;
+  flex-wrap: wrap; /* V3/G33 §C1.2: long DE title wraps below the back button */
 }
 .settings-title {
-  font-size: 30px;
+  /* V3/G33 §C1.2: compress via min() at 320px × 115/130 % („Einstellungen") */
+  font-size: min(1.875rem, 8vw);
   font-weight: 800;
   margin: 0;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 0.5rem;
 }
 .settings-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0.375rem;
 }
 .settings-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px 4px;
-  border-bottom: 2px solid rgba(74, 59, 54, 0.07);
+  gap: 0.75rem;
+  padding: 0.75rem 0.25rem;
+  border-bottom: 0.125rem solid rgba(74, 59, 54, 0.07);
   flex-wrap: wrap;
 }
 .settings-row:last-child {
   border-bottom: none;
 }
 .settings-label {
-  font-size: 17px;
+  font-size: 1.0625rem;
   font-weight: 800;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 0.375rem;
 }
 .settings-value {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 0.625rem;
+  /* V3/G33 §C1.2: status text + button wrap inside the row at 320px × 130 % */
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 100%;
+  min-width: 0;
 }
 .settings-status {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 700;
   opacity: 0.6;
 }
@@ -502,28 +521,32 @@
 }
 .settings-footer {
   text-align: center;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 700;
   opacity: 0.45;
 }
 .seg {
   display: inline-flex;
   background: rgba(74, 59, 54, 0.08);
-  border-radius: 14px;
-  padding: 3px;
-  gap: 3px;
+  border-radius: 0.875rem;
+  padding: 0.1875rem;
+  gap: 0.1875rem;
+  /* V3/G33 §C1.2: segments wrap instead of clipping (320px × 115/130 %) */
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 100%;
 }
 .seg-btn {
   border: none;
   background: transparent;
   color: var(--brown);
   font-family: inherit;
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 800;
-  min-height: 44px; /* F3: ≥44px touch target */
-  min-width: 52px;
-  padding: 6px 12px;
-  border-radius: 11px;
+  min-height: max(44px, 2.75rem); /* F3: ≥44px touch target */
+  min-width: max(44px, 3.25rem);
+  padding: 0.375rem 0.75rem;
+  border-radius: 0.6875rem;
   cursor: pointer;
 }
 .seg-btn.seg-on {
@@ -540,47 +563,47 @@
   padding-right: 0;
 }
 .shop-wrap {
-  width: min(480px, 100%);
+  width: min(30rem, 100%);
   height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 0 14px;
+  gap: 0.625rem;
+  padding: 0 0.875rem;
 }
 .shop-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 0.625rem;
   flex-wrap: wrap; /* F3: the Go-home button wraps below at 320px, never clips */
   flex: none;
 }
 .shop-title {
-  font-size: clamp(21px, 7vw, 28px); /* F3: shrink before the pill/button do */
+  font-size: clamp(1.3125rem, 7vw, 1.75rem); /* F3: shrink before the pill/button do */
   font-weight: 800;
   margin: 0;
   flex: 1;
   min-width: 0;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 0.5rem;
 }
 .shop-coins {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 0.375rem;
   background: var(--white);
   border-radius: 999px;
-  padding: 8px 14px;
-  font-size: 17px;
+  padding: 0.5rem 0.875rem;
+  font-size: 1.0625rem;
   font-weight: 800;
   box-shadow: var(--shadow-soft);
   flex: none; /* F3: the coins pill never squishes */
 }
 /* F3: compact Go-home button so the trip header fits narrow widths */
 .shop-head .shop-home {
-  min-height: 44px;
-  padding: 8px 14px;
-  font-size: 15px;
+  min-height: max(44px, 2.75rem);
+  padding: 0.5rem 0.875rem;
+  font-size: 0.9375rem;
   flex: none;
 }
 .shop-coins svg {
@@ -588,16 +611,16 @@
 }
 .shop-hint {
   background: rgba(255, 209, 102, 0.28);
-  border-radius: 14px;
-  padding: 9px 14px;
-  font-size: 14px;
+  border-radius: 0.875rem;
+  padding: 0.5625rem 0.875rem;
+  font-size: 0.875rem;
   font-weight: 700;
   text-align: center;
   flex: none;
 }
 .shop-tabs {
   display: flex;
-  gap: 6px;
+  gap: 0.375rem;
   flex: none;
 }
 .shop-tab {
@@ -606,13 +629,13 @@
 .shop-tab {
   flex: 1;
   border: none;
-  min-height: 46px;
-  padding: 6px 4px;
-  border-radius: 14px;
+  min-height: max(44px, 2.875rem);
+  padding: 0.375rem 0.25rem;
+  border-radius: 0.875rem;
   background: rgba(255, 255, 255, 0.7);
   color: var(--brown);
   font-family: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 800;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
@@ -625,30 +648,30 @@
 .shop-body {
   flex: 1;
   overflow-y: auto;
-  padding: 2px 2px 24px;
+  padding: 0.125rem 0.125rem 1.5rem;
   -webkit-overflow-scrolling: touch;
 }
 .shop-section {
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 800;
   opacity: 0.6;
-  margin: 14px 2px 8px;
+  margin: 0.875rem 0.125rem 0.5rem;
 }
 .shop-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr)); /* F3: tracks may shrink */
-  gap: 10px;
+  gap: 0.625rem;
 }
 .shop-card {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
+  gap: 0.1875rem;
   background: var(--white);
-  border-radius: 16px;
+  border-radius: 1rem;
   border: none;
-  padding: 12px 6px 10px;
+  padding: 0.75rem 0.375rem 0.625rem;
   font-family: inherit;
   color: var(--brown);
   cursor: pointer;
@@ -659,14 +682,14 @@
   transform: scale(0.96);
 }
 .shop-card.shop-card-sel {
-  outline: 3px solid var(--teal);
+  outline: 0.1875rem solid var(--teal);
 }
 .shop-card .shop-emoji {
-  font-size: 34px;
+  font-size: 2.125rem;
   line-height: 1.15;
 }
 .shop-card .shop-name {
-  font-size: 11.5px;
+  font-size: 0.7188rem;
   font-weight: 700;
   opacity: 0.8;
   text-align: center;
@@ -679,15 +702,15 @@
 .shop-card .shop-price {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  font-size: 13px;
+  gap: 0.1875rem;
+  font-size: 0.8125rem;
   font-weight: 800;
 }
 .shop-card .shop-price svg {
   color: var(--yellow-dark);
 }
 .shop-card .shop-state {
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 800;
   color: var(--teal-dark);
   /* F6 (RE3): decor slot cards render item names here too — same wrap rule */
@@ -696,26 +719,26 @@
 }
 .shop-card .shop-count {
   position: absolute;
-  top: 5px;
-  right: 7px;
+  top: 0.3125rem;
+  right: 0.4375rem;
   background: var(--teal);
   color: var(--white);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 800;
   border-radius: 999px;
-  padding: 1px 7px;
+  padding: 1px 0.4375rem;
 }
 .shop-buybar {
   display: flex;
   flex-wrap: wrap; /* F3: name row on top, stepper+buy row below — the single
                       row crushed the item name to nothing at ≤375px */
   align-items: center;
-  gap: 8px 10px;
+  gap: 0.5rem 0.625rem;
   background: var(--white);
-  border-radius: 18px;
+  border-radius: 1.125rem;
   box-shadow: var(--shadow-soft);
-  padding: 10px 12px;
-  margin-bottom: 4px;
+  padding: 0.625rem 0.75rem;
+  margin-bottom: 0.25rem;
 }
 .shop-buybar .shop-buybar-info {
   flex: 1 1 100%;
@@ -728,59 +751,59 @@
   flex: 1; /* F3: stepper left, buy button right on the controls row */
 }
 .shop-buybar .shop-buybar-name {
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 800;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .shop-buybar .shop-buybar-total {
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 700;
   opacity: 0.65;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 0.25rem;
 }
 .shop-qty {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 0.375rem;
 }
 .qty-btn {
   /* F3: ≥44px touch target */
-  width: 44px;
-  height: 44px;
+  width: 2.75rem;
+  height: 2.75rem;
   border: none;
-  border-radius: 12px;
+  border-radius: 0.75rem;
   background: var(--bg-cream);
   color: var(--brown);
-  font-size: 20px;
+  font-size: 1.25rem;
   font-weight: 800;
   font-family: inherit;
   cursor: pointer;
 }
 .qty-n {
-  min-width: 26px;
+  min-width: 1.625rem;
   text-align: center;
-  font-size: 17px;
+  font-size: 1.0625rem;
   font-weight: 800;
 }
 .shop-buybar .btn {
-  min-height: 44px;
-  padding: 8px 16px;
-  font-size: 16px;
+  min-height: max(44px, 2.75rem);
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
 }
 .shop-banner {
   display: flex;
   flex-wrap: wrap; /* F7: trailing hint/button drops to its own row instead of
                       crushing the pitch text at narrow widths */
   align-items: center;
-  gap: 10px;
+  gap: 0.625rem;
   background: linear-gradient(100deg, rgba(89, 201, 185, 0.18), rgba(255, 209, 102, 0.22));
-  border-radius: 16px;
-  padding: 10px 12px;
-  margin: 2px 0 10px;
+  border-radius: 1rem;
+  padding: 0.625rem 0.75rem;
+  margin: 0.125rem 0 0.625rem;
 }
 .shop-banner .shop-banner-text {
   flex: 1 1 160px; /* F7: real basis so long trailing content wraps below
@@ -792,40 +815,40 @@
   min-width: 0;
 }
 .shop-banner .shop-banner-title {
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 800;
 }
 .shop-banner .shop-banner-body {
-  font-size: 12.5px;
+  font-size: 0.7813rem;
   font-weight: 700;
   opacity: 0.7;
 }
 .shop-banner .btn {
-  min-height: 42px;
-  padding: 6px 14px;
-  font-size: 14px;
+  min-height: 2.625rem;
+  padding: 0.375rem 0.875rem;
+  font-size: 0.875rem;
   flex: none;
 }
 .shop-outfits-card {
   text-align: center;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0.75rem;
   align-items: center;
-  padding: 26px 18px;
+  padding: 1.625rem 1.125rem;
 }
 .shop-outfits-card .shop-outfits-emoji {
-  font-size: 52px;
+  font-size: 3.25rem;
   line-height: 1;
 }
 .swatch-row {
   display: flex;
-  gap: 10px;
+  gap: 0.625rem;
   flex-wrap: wrap;
 }
 .swatch {
   position: relative;
-  width: 72px;
+  width: 4.5rem;
   border: none;
   background: none;
   padding: 0;
@@ -834,31 +857,31 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
+  gap: 0.1875rem;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
 .swatch .swatch-chip {
-  width: 60px;
-  height: 60px;
-  border-radius: 16px;
+  width: 3.75rem;
+  height: 3.75rem;
+  border-radius: 1rem;
   box-shadow: 0 3px 10px rgba(74, 59, 54, 0.18);
-  border: 3px solid var(--white);
+  border: 0.1875rem solid var(--white);
 }
 .swatch.swatch-on .swatch-chip {
   border-color: var(--teal);
-  outline: 2px solid var(--teal);
+  outline: 0.125rem solid var(--teal);
 }
 .swatch .swatch-name {
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 800;
   opacity: 0.75;
 }
 .swatch .swatch-price {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  font-size: 11.5px;
+  gap: 0.1875rem;
+  font-size: 0.7188rem;
   font-weight: 800;
 }
 .swatch .swatch-price svg {
@@ -866,19 +889,20 @@
 }
 .room-chips {
   display: flex;
-  gap: 6px;
-  margin: 4px 0 10px;
+  gap: 0.375rem;
+  margin: 0.25rem 0 0.625rem;
   flex-wrap: wrap;
 }
 .room-chip {
   border: none;
   border-radius: 999px;
-  min-height: 44px; /* F3: ≥44px touch target */
-  padding: 6px 14px;
+  min-height: max(44px, 2.75rem); /* F3: ≥44px touch target */
+  min-width: max(44px, 2.75rem); /* V3/G33 §B3: short labels stay ≥44px wide */
+  padding: 0.375rem 0.875rem;
   background: rgba(255, 255, 255, 0.75);
   color: var(--brown);
   font-family: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 800;
   cursor: pointer;
 }
@@ -890,33 +914,33 @@
 .decor-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
+  gap: 0.625rem;
+  margin-bottom: 0.625rem;
 }
 .decor-title {
-  font-size: 22px;
+  font-size: 1.375rem;
   font-weight: 800;
   margin: 0;
   flex: 1;
 }
 .decor-sub {
-  font-size: 13.5px;
+  font-size: 0.8438rem;
   font-weight: 700;
   opacity: 0.6;
-  margin: -6px 0 10px;
+  margin: -0.375rem 0 0.625rem;
 }
 .decor-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr)); /* F3: tracks may shrink */
-  gap: 10px;
+  gap: 0.625rem;
   max-height: 44vh;
   overflow-y: auto;
 }
 .decor-back {
-  width: 44px;
-  height: 44px;
+  width: 2.75rem;
+  height: 2.75rem;
   border: none;
-  border-radius: 14px;
+  border-radius: 0.875rem;
   background: var(--bg-cream);
   color: var(--brown);
   font-family: inherit;
@@ -929,9 +953,9 @@
 /* quick-delivery order chip injected into the fridge tray */
 .g11-order-btn {
   width: 100%;
-  margin-top: 12px;
-  min-height: 46px;
-  font-size: 16px;
+  margin-top: 0.75rem;
+  min-height: max(44px, 2.875rem);
+  font-size: 1rem;
 }
 /* ---------- end G11 ---------- */
 
@@ -939,8 +963,8 @@
 /* G14 */
 .g14-toggle {
   position: relative;
-  width: 52px;
-  height: 30px;
+  width: 3.25rem;
+  height: 1.875rem;
   border: none;
   border-radius: 999px;
   background: rgba(74, 59, 54, 0.18);
@@ -950,10 +974,10 @@
 }
 .g14-toggle .g14-knob {
   position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 24px;
-  height: 24px;
+  top: 0.1875rem;
+  left: 0.1875rem;
+  width: 1.5rem;
+  height: 1.5rem;
   border-radius: 50%;
   background: var(--white);
   box-shadow: 0 2px 6px rgba(74, 59, 54, 0.25);
@@ -963,13 +987,15 @@
   background: var(--teal);
 }
 .g14-toggle.g14-on .g14-knob {
-  transform: translateX(22px);
+  transform: translateX(1.375rem); /* V3/G33 §B3: knob travel scales with the pill */
 }
-/* F3: invisible hit-area expansion — visual 52×30 stays, taps get ≥44px */
+/* F3: invisible hit-area expansion — visual 52×30 stays, taps get ≥44px.
+   V3/G33 §B3: the halo now GUARANTEES a ≥44 real-px hit box at every uiScale
+   (pill is 3.25×1.875rem — 44.2×25.5 px at 85 %). */
 .g14-toggle::after {
   content: '';
   position: absolute;
-  inset: -8px -4px;
+  inset: calc((1.875rem - max(44px, 2.875rem)) / 2) calc((3.25rem - max(44px, 3.75rem)) / 2);
 }
 
 /* onboarding overlay (§C8.1): floats over the live scene, input passes through */
@@ -985,13 +1011,13 @@
 .g14-ob-card {
   position: absolute;
   left: 50%;
-  bottom: calc(116px + var(--safe-bottom));
+  bottom: calc(7.25rem + var(--safe-bottom));
   transform: translateX(-50%);
-  width: min(86vw, 360px);
+  width: min(86vw, 22.5rem);
   background: var(--white);
   border-radius: var(--card-radius);
   box-shadow: var(--shadow-soft);
-  padding: 14px 18px 16px;
+  padding: 0.875rem 1.125rem 1rem;
   text-align: center;
   pointer-events: auto;
   animation: g14-card-in 260ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
@@ -1001,39 +1027,39 @@
   to { transform: translateX(-50%) translateY(0) scale(1); opacity: 1; }
 }
 .g14-ob-step {
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 800;
   color: var(--brown);
   opacity: 0.45;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.0313rem;
 }
 .g14-ob-title {
-  font-size: 20px;
+  font-size: 1.25rem;
   font-weight: 900;
   color: var(--brown);
-  margin-top: 2px;
+  margin-top: 0.125rem;
 }
 .g14-ob-body {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
   color: var(--brown);
   opacity: 0.75;
-  margin-top: 6px;
+  margin-top: 0.375rem;
   line-height: 1.35;
 }
 .g14-ob-btns {
   display: flex;
-  gap: 8px;
+  gap: 0.5rem;
   justify-content: center;
-  margin-top: 10px;
+  margin-top: 0.625rem;
   flex-wrap: wrap;
 }
 .g14-ob-btns:empty {
   display: none;
 }
 .g14-ob-skip {
-  font-size: 12px;
-  min-height: 44px; /* F3: ≥44px touch target */
+  font-size: 0.75rem;
+  min-height: max(44px, 2.75rem); /* F3: ≥44px touch target */
 }
 
 /* HUD-tour spotlight pulse (§C8.1 #5) */
@@ -1059,30 +1085,30 @@
 /* G14: feed step — the food tray sheet owns the bottom, card moves up top */
 .g14-ob-card.g14-top {
   bottom: auto;
-  top: calc(86px + var(--safe-top));
+  top: calc(5.375rem + var(--safe-top));
 }
 
 /* ---------- V2/G21: vet clinic + destination picker (PLAN2 §C9) ---------- */
 
 /* vet arrival panel (screen id 'vetPanel', ui/vetPanel.js) */
 .vet-wrap {
-  width: min(480px, 100%);
+  width: min(30rem, 100%);
   max-height: 100%;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 0 14px;
+  gap: 0.625rem;
+  padding: 0 0.875rem;
 }
 .vet-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 0.625rem;
   flex-wrap: wrap; /* F3 rule: the Go-home button wraps below at 320px */
   flex: none;
 }
 .vet-title {
-  font-size: clamp(21px, 7vw, 28px);
+  font-size: clamp(1.3125rem, 7vw, 1.75rem);
   font-weight: 800;
   margin: 0;
   flex: 1;
@@ -1091,20 +1117,20 @@
      to the next flex line instead at 320px DE. */
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 0.5rem;
 }
 .vet-head .vet-home {
-  min-height: 44px;
-  padding: 8px 14px;
-  font-size: 15px;
+  min-height: max(44px, 2.75rem);
+  padding: 0.5rem 0.875rem;
+  font-size: 0.9375rem;
   flex: none;
   margin-left: auto; /* right-aligned even on its own wrap line (320px DE) */
 }
 .vet-hint {
   background: rgba(255, 209, 102, 0.28);
-  border-radius: 14px;
-  padding: 9px 14px;
-  font-size: 14px;
+  border-radius: 0.875rem;
+  padding: 0.5625rem 0.875rem;
+  font-size: 0.875rem;
   font-weight: 700;
   text-align: center;
   flex: none;
@@ -1115,20 +1141,20 @@
 .vet-body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 0.625rem;
 }
 .vet-doc {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 0.75rem;
   background: var(--white);
   border-radius: var(--card-radius);
   box-shadow: var(--shadow-soft);
-  padding: 12px 14px;
+  padding: 0.75rem 0.875rem;
 }
 .vet-avatar {
   position: relative;
-  font-size: 40px;
+  font-size: 2.5rem;
   line-height: 1;
   flex: none;
 }
@@ -1137,45 +1163,45 @@
   left: 50%;
   top: 44%;
   transform: translate(-50%, -50%);
-  font-size: 22px;
+  font-size: 1.375rem;
 }
 .vet-doc-text {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 0.1875rem;
   min-width: 0;
 }
 .vet-doc-name {
   font-weight: 800;
-  font-size: 16px;
+  font-size: 1rem;
 }
 .vet-doc-line {
-  font-size: 14px;
+  font-size: 0.875rem;
   opacity: 0.8;
   overflow-wrap: anywhere;
 }
 .vet-bandage-badge {
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 .vet-actions {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0.5rem;
 }
 .vet-action {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 5px;
+  gap: 0.3125rem;
   text-align: left;
   background: var(--white);
   border: none;
   border-radius: var(--card-radius);
   box-shadow: var(--shadow-soft);
-  padding: 13px 15px;
+  padding: 0.8125rem 0.9375rem;
   font: inherit;
   cursor: pointer;
-  min-height: 44px; /* F3: touch target */
+  min-height: max(44px, 2.75rem); /* F3: touch target */
 }
 .vet-action:disabled {
   opacity: 0.55;
@@ -1185,17 +1211,17 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 0.5rem;
 }
 .vet-action-name {
   font-weight: 800;
-  font-size: 16px;
+  font-size: 1rem;
 }
 .vet-action .shop-price {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  font-size: 14px;
+  gap: 0.1875rem;
+  font-size: 0.875rem;
   font-weight: 800;
   flex: none;
 }
@@ -1203,7 +1229,7 @@
   color: var(--yellow-dark);
 }
 .vet-action-desc {
-  font-size: 13px;
+  font-size: 0.8125rem;
   opacity: 0.75;
   overflow-wrap: anywhere;
 }
@@ -1212,22 +1238,22 @@
 .vet-report {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0.5rem;
   background: var(--white);
   border-radius: var(--card-radius);
   box-shadow: var(--shadow-soft);
-  padding: 14px 15px;
+  padding: 0.875rem 0.9375rem;
 }
 .vet-report-title {
   font-weight: 800;
-  font-size: 16px;
+  font-size: 1rem;
 }
 .vet-report-row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 10px;
-  font-size: 14px;
+  gap: 0.625rem;
+  font-size: 0.875rem;
 }
 .vet-report-row > span:first-child {
   opacity: 0.65;
@@ -1243,46 +1269,46 @@
 .vet-band-yellow { color: var(--yellow-dark); }
 .vet-band-orange { color: #e07a3f; }
 .vet-report-done {
-  margin-top: 4px;
+  margin-top: 0.25rem;
 }
 
 /* destination picker sheet (§C9.2 „Laden / Tierarzt") */
 .dest-pick {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 0.625rem;
   text-align: center;
 }
 .dest-option {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 0.75rem;
   text-align: left;
   background: var(--bg-cream);
   border: none;
   border-radius: var(--card-radius);
-  padding: 13px 15px;
+  padding: 0.8125rem 0.9375rem;
   font: inherit;
   cursor: pointer;
-  min-height: 44px; /* F3: touch target */
+  min-height: max(44px, 2.75rem); /* F3: touch target */
 }
 .dest-emoji {
-  font-size: 30px;
+  font-size: 1.875rem;
   line-height: 1;
   flex: none;
 }
 .dest-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0.125rem;
   min-width: 0;
 }
 .dest-name {
   font-weight: 800;
-  font-size: 16px;
+  font-size: 1rem;
 }
 .dest-sub {
-  font-size: 13px;
+  font-size: 0.8125rem;
   opacity: 0.75;
   overflow-wrap: anywhere;
 }
@@ -1292,21 +1318,21 @@
 /* junk 🍬 badge on food cards (§C7 — informed players, no nagging) */
 .g22-junk {
   position: absolute;
-  top: 4px;
-  left: 7px;
-  font-size: 13px;
+  top: 0.25rem;
+  left: 0.4375rem;
+  font-size: 0.8125rem;
   filter: drop-shadow(0 1px 1px rgba(74, 59, 54, 0.25));
 }
 /* Care row (§C7): medicine/fertilizer/seeds — distinctly NOT eatable-looking */
 .g22-care-hint {
-  margin: -2px 2px 8px;
+  margin: -0.125rem 0.125rem 0.5rem;
   opacity: 0.65;
-  font-size: 12.5px;
+  font-size: 0.7813rem;
   font-weight: 700;
 }
 .shop-card.g22-care-card {
   background: linear-gradient(#f2fbf7, #e8f6ef);
-  border: 2px dashed rgba(63, 160, 145, 0.45);
+  border: 0.125rem dashed rgba(63, 160, 145, 0.45);
 }
 .shop-card.g22-locked {
   opacity: 0.55;
@@ -1315,12 +1341,12 @@
 .g22-skin-stage {
   position: relative;
   width: 100%;
-  height: 200px;
-  border-radius: 20px;
+  height: 12.5rem;
+  border-radius: 1.25rem;
   overflow: hidden;
   background: linear-gradient(#dff3f0, #fff6ec);
   box-shadow: var(--shadow-soft);
-  margin: 4px 0 12px;
+  margin: 0.25rem 0 0.75rem;
 }
 .g22-skin-stage canvas {
   display: block;
@@ -1329,44 +1355,44 @@
 }
 .g22-skin-badge {
   position: absolute;
-  top: 10px;
-  left: 12px;
+  top: 0.625rem;
+  left: 0.75rem;
   background: rgba(255, 255, 255, 0.9);
   border-radius: 999px;
-  padding: 6px 12px;
-  font-size: 13px;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 800;
   color: var(--pink-dark);
   box-shadow: var(--shadow-soft);
 }
 .g22-skin-chip {
-  width: 44px;
-  height: 44px;
+  width: 2.75rem;
+  height: 2.75rem;
   border-radius: 50%;
-  border: 3px solid rgba(74, 59, 54, 0.12);
+  border: 0.1875rem solid rgba(74, 59, 54, 0.12);
 }
 .shop-card.g22-skin-tryon {
-  outline: 3px solid var(--pink);
+  outline: 0.1875rem solid var(--pink);
 }
 .g22-skin-buy {
-  margin-top: 2px;
-  min-height: 44px; /* F3: ≥44px touch target */
-  padding: 4px 14px;
-  font-size: 13px;
-  border-radius: 12px;
+  margin-top: 0.125rem;
+  min-height: max(44px, 2.75rem); /* F3: ≥44px touch target */
+  padding: 0.25rem 0.875rem;
+  font-size: 0.8125rem;
+  border-radius: 0.75rem;
 }
 /* wardrobe Fur cards reuse the chip at the outfit-thumb size */
 .g12-wr-item .g22-skin-chip {
-  width: 54px;
-  height: 54px;
+  width: 3.375rem;
+  height: 3.375rem;
   background-clip: padding-box;
 }
 /* 4 wardrobe categories (Fur added) must fit 320 px — shrink + ellipsize the
    longest label (DE „Halsschmuck") instead of clipping mid-glyph. Double
    selector: the base rule is a runtime-injected <style> that loads later. */
 .g12-wr-tabs .g12-wr-tab {
-  padding: 4px 4px;
-  font-size: clamp(11px, 3.4vw, 14px);
+  padding: 0.25rem 0.25rem;
+  font-size: clamp(0.6875rem, 3.4vw, 0.875rem);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1376,31 +1402,31 @@
 /* =========== V2/G19 — garden panels + forecast chip (PLAN2 §C2/§C11.3) === */
 
 .g19-title {
-  margin: 0 0 4px;
-  font-size: 21px;
+  margin: 0 0 0.25rem;
+  font-size: 1.3125rem;
   font-weight: 800;
 }
 .g19-hint {
-  margin: 4px 0 10px;
-  font-size: 14px;
+  margin: 0.25rem 0 0.625rem;
+  font-size: 0.875rem;
   font-weight: 600;
   color: rgba(74, 59, 54, 0.62);
 }
 .g19-price {
-  margin: 2px 0 10px;
-  font-size: 17px;
+  margin: 0.125rem 0 0.625rem;
+  font-size: 1.0625rem;
   font-weight: 800;
 }
 .g19-lockmsg {
-  margin: 0 0 10px;
-  font-size: 14px;
+  margin: 0 0 0.625rem;
+  font-size: 0.875rem;
   font-weight: 700;
   color: var(--pink-dark);
 }
 .g19-empty {
-  padding: 18px 6px;
+  padding: 1.125rem 0.375rem;
   text-align: center;
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 700;
   color: rgba(74, 59, 54, 0.55);
 }
@@ -1408,11 +1434,11 @@
 .g19-rows {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  max-height: min(52vh, 420px);
+  gap: 0.5rem;
+  max-height: min(52vh, 26.25rem);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 2px;
+  padding: 0.125rem;
 }
 /* V2 fix (E16): a row is a COLUMN — info line on top, action buttons on
    their own full-width line below — and `flex: none` so the scrollable
@@ -1425,29 +1451,29 @@
   flex-direction: column;
   align-items: stretch;
   flex: none;
-  gap: 8px;
+  gap: 0.5rem;
   background: var(--bg-cream);
-  border-radius: 14px;
-  padding: 8px 10px;
-  min-height: 56px;
+  border-radius: 0.875rem;
+  padding: 0.5rem 0.625rem;
+  min-height: max(44px, 3.5rem);
 }
 .g19-row-main {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 0.5rem;
   min-width: 0;
-  min-height: 40px;
+  min-height: 2.5rem;
 }
 .g19-actions {
   display: flex;
-  gap: 8px;
+  gap: 0.5rem;
 }
 .g19-row.g19-locked {
   opacity: 0.55;
   filter: grayscale(0.6);
 }
 .g19-emoji {
-  font-size: 26px;
+  font-size: 1.625rem;
   line-height: 1;
   flex: 0 0 auto;
 }
@@ -1459,14 +1485,14 @@
   flex: 1 1 auto;
 }
 .g19-name {
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 800;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .g19-sub {
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
   color: rgba(74, 59, 54, 0.6);
   white-space: nowrap;
@@ -1475,7 +1501,7 @@
 }
 .g19-count {
   flex: 0 0 auto;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   color: rgba(74, 59, 54, 0.7);
@@ -1483,18 +1509,18 @@
 /* compact in-row buttons — ≥44px targets (§D5/F3). V2 fix (E16): they share
    the .g19-actions line equally and can never wrap under the next row. */
 .btn.g19-btn {
-  min-height: 44px;
+  min-height: max(44px, 2.75rem);
   min-width: 0;
-  padding: 6px 10px;
-  font-size: 14px;
-  border-radius: 13px;
-  border-bottom-width: 3px;
+  padding: 0.375rem 0.625rem;
+  font-size: 0.875rem;
+  border-radius: 0.8125rem;
+  border-bottom-width: 0.1875rem;
   flex: 1 1 0;
   white-space: nowrap;
 }
 .g19-btnrow {
   display: flex;
-  gap: 10px;
+  gap: 0.625rem;
 }
 .btn.g19-btn-wide {
   flex: 1 1 auto;
@@ -1504,18 +1530,18 @@
    (~98px like .sleep-chip), right-aligned so the centered sleep chip fits */
 .g19-chip {
   position: absolute;
-  top: calc(104px + var(--safe-top));
-  right: calc(12px + var(--safe-right));
+  top: calc(6.5rem + var(--safe-top));
+  right: calc(0.75rem + var(--safe-right));
   pointer-events: auto; /* #ui root is pointer-events: none */
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  min-height: 44px; /* §D5 touch target */
-  min-width: 44px;
+  gap: 0.25rem;
+  min-height: max(44px, 2.75rem); /* §D5 touch target */
+  min-width: max(44px, 2.75rem);
   border: none;
   background: rgba(255, 255, 255, 0.88);
   border-radius: 999px;
-  padding: 8px 12px;
+  padding: 0.5rem 0.75rem;
   box-shadow: var(--shadow-soft);
   cursor: pointer;
   z-index: 40;
@@ -1529,7 +1555,7 @@
   align-items: center;
 }
 .g19-chip-arrow {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 800;
   color: rgba(74, 59, 54, 0.5);
 }
@@ -1537,8 +1563,265 @@
   opacity: 0.75;
 }
 .g19-forecast-row {
-  margin: 6px 0;
+  margin: 0.375rem 0;
   flex-direction: row; /* V2 fix (E16): .g19-row went column — this row stays inline */
   align-items: center;
 }
 /* ---------- end V2/G19 ---------- */
+
+/* =============== V3/G33 — core UX: UI scale, settings 3.0, dev panel ====== */
+/* (PLAN3 §B3/§B4/§B9/§C1/§C2.1/§C4 — styles.css is G33-exclusive this wave) */
+
+/* §C1.2: arcade grid drops 3 → 2 columns when the effective rem width
+   (viewportWidth / (uiScale/100)) < 350 — ≤ 100 % always keeps 3 columns.
+   Breakpoints: 350 · 1.15 = 402.5 → ≤ 402px; 350 · 1.3 = 455 → ≤ 454px. */
+@media (max-width: 402px) {
+  html[data-ui-scale='115'] .g5-arcade-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 454px) {
+  html[data-ui-scale='130'] .g5-arcade-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* §C1.2 pill wrap follow-up: when the 4 HUD stat pills wrap 2×2 (viewport <
+   ~20.4rem effective) the HUD top block grows ~1.75rem taller — the floating
+   chips (sleep §C1.4, garden forecast §C11.3, sick §C3.4) drop below it.
+   Breakpoints = 20.4rem · scale: 326px @100 %, 375px @115 %, 424px @130 %. */
+@media (max-width: 326px) {
+  .sleep-chip,
+  .g19-chip {
+    top: calc(8.25rem + var(--safe-top));
+  }
+  .g23-sick-chip {
+    top: calc(12.5rem + var(--safe-top));
+  }
+}
+@media (max-width: 375px) {
+  html[data-ui-scale='115'] .sleep-chip,
+  html[data-ui-scale='115'] .g19-chip {
+    top: calc(8.25rem + var(--safe-top));
+  }
+  html[data-ui-scale='115'] .g23-sick-chip {
+    top: calc(12.5rem + var(--safe-top));
+  }
+}
+@media (max-width: 424px) {
+  html[data-ui-scale='130'] .sleep-chip,
+  html[data-ui-scale='130'] .g19-chip {
+    top: calc(8.25rem + var(--safe-top));
+  }
+  html[data-ui-scale='130'] .g23-sick-chip {
+    top: calc(12.5rem + var(--safe-top));
+  }
+}
+
+/* --- settings 3.0 (§C2.1): section labels + 5 volume slider rows --- */
+.settings-section {
+  font-size: 0.8125rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  opacity: 0.45;
+  margin: 0.25rem 0.25rem -0.5rem;
+}
+/* volume row = label line on top, full-width controls line below — fits
+   320px × 130 % (§C1.2: wrap/compress, never clip) */
+.settings-row.g33-vol-row {
+  flex-direction: column;
+  /* nowrap: the base .settings-row wraps, but a WRAPPED column flex sizes its
+     line to the items' max-content (the slider+toggle line would push past the
+     card at 320px × 130 %) — single-line column stretches to the row instead */
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 0.25rem;
+}
+.g33-vol-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-width: 0;
+}
+.g33-vol-slider {
+  flex: 1;
+  min-width: 0;
+  min-height: max(44px, 2.75rem); /* §B3 tap-target rule */
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.g33-vol-slider::-webkit-slider-runnable-track {
+  height: 0.625rem;
+  border-radius: 999px;
+  background: rgba(74, 59, 54, 0.12);
+}
+.g33-vol-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-top: -0.5625rem;
+  border-radius: 50%;
+  background: var(--pink);
+  border: 3px solid var(--white);
+  box-shadow: 0 2px 6px rgba(74, 59, 54, 0.25);
+}
+.g33-vol-slider::-moz-range-track {
+  height: 0.625rem;
+  border-radius: 999px;
+  background: rgba(74, 59, 54, 0.12);
+}
+.g33-vol-slider::-moz-range-thumb {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  background: var(--pink);
+  border: 3px solid var(--white);
+  box-shadow: 0 2px 6px rgba(74, 59, 54, 0.25);
+}
+.g33-vol-slider:disabled::-webkit-slider-thumb {
+  background: rgba(74, 59, 54, 0.25);
+}
+.g33-vol-readout {
+  flex: none;
+  min-width: 2.9em;
+  text-align: right;
+  font-size: 0.875rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+.g33-vol-muted .g33-vol-readout,
+.g33-vol-muted .settings-label {
+  opacity: 0.4;
+}
+
+/* --- UI-Größe row (§C1.1): 4-stop segment + live „Aa" preview glyph --- */
+.g33-scale-aa {
+  font-size: 1.375rem; /* rem → previews the live scale */
+  font-weight: 800;
+  color: var(--pink-dark);
+  flex: none;
+}
+.seg.g33-scale-seg {
+  flex-wrap: wrap; /* 320px × 130 %: the 4 stops wrap instead of clipping */
+  justify-content: flex-end;
+}
+.g33-scale-seg .seg-btn {
+  min-width: max(44px, 2.75rem);
+  padding: 0.375rem 0.5rem;
+  font-size: 0.8125rem;
+}
+
+/* --- „Entwickler" row (§B4 — rendered only when settings.devUnlocked) --- */
+.g33-dev-row .btn {
+  min-height: max(44px, 2.75rem);
+  padding: 0.5rem 0.875rem;
+  font-size: 0.9375rem;
+}
+
+/* --- hidden dev panel (§C4.2 — screen id 'devPanel') --- */
+.screen-devPanel {
+  justify-content: flex-start;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.g33-dev-wrap {
+  width: min(26.25rem, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  align-self: center;
+  margin: 0 0 auto;
+  flex: none;
+}
+.g33-dev-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.875rem 1rem;
+}
+.g33-dev-card-title {
+  font-size: 0.9375rem;
+  font-weight: 800;
+}
+.g33-dev-card-desc {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  opacity: 0.65;
+  margin: -0.25rem 0 0;
+}
+.g33-dev-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.g33-dev-line .g33-vol-slider {
+  min-height: max(44px, 2.75rem);
+}
+.g33-dev-line .seg {
+  flex-wrap: wrap;
+}
+.g33-dev-line .seg-btn {
+  min-width: max(44px, 2.75rem);
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8125rem;
+}
+.g33-dev-val {
+  flex: none;
+  min-width: 2.9em;
+  text-align: right;
+  font-size: 0.875rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.g33-dev-label {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  opacity: 0.7;
+  flex: none;
+}
+.btn.g33-dev-btn {
+  min-height: max(44px, 2.75rem);
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+  border-bottom-width: 3px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.g33-dev-select {
+  flex: 1 1 8rem;
+  min-width: 0;
+  min-height: max(44px, 2.75rem);
+  border: none;
+  border-radius: 0.75rem;
+  background: var(--bg-cream);
+  color: var(--brown);
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 700;
+  padding: 0.375rem 0.625rem;
+}
+
+/* --- FPS/draw-call overlay chip (§C4.2 #10) — rides above everything --- */
+.g33-overlay {
+  position: absolute;
+  top: max(0.5rem, var(--safe-top));
+  left: max(0.5rem, var(--safe-left));
+  z-index: 600;
+  pointer-events: none;
+  background: rgba(20, 16, 14, 0.78);
+  color: #aef7c1;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.6875rem;
+  line-height: 1.45;
+  font-weight: 600;
+  border-radius: 0.5rem;
+  padding: 0.375rem 0.5625rem;
+  white-space: pre;
+}
+/* ---------- end V3/G33 ---------- */

@@ -19,17 +19,19 @@ import { tierOf } from '../systems/weight.js';
 /** Health state → status face for the sheet header. */
 const STATUS_FACE = { healthy: '💚', queasy: '🤢', sick: '🤒' };
 
+// V3/G33 (§B3): mechanical px→rem sweep (÷16) of this injected CSS string —
+// exemptions (1px hairlines/999px pills/shadows/@media px) per PLAN3 §B3.
 const CSS = `
-.g20-care{display:flex;flex-direction:column;gap:12px;}
-.g20-care-title{margin:0;font-size:22px;font-weight:800;color:var(--brown,#4A3B36);}
-.g20-care-status{display:flex;align-items:center;gap:12px;background:var(--bg-cream,#FFF6EC);border-radius:16px;padding:12px 14px;}
-.g20-care-face{font-size:34px;line-height:1;}
-.g20-care-text{font-size:15px;font-weight:800;color:var(--brown,#4A3B36);}
-.g20-care-weight{font-size:13px;font-weight:700;color:var(--brown,#4A3B36);opacity:.75;padding:0 2px;}
-.g20-care-weight small{display:block;font-size:11px;font-weight:600;opacity:.8;margin-top:2px;}
-.g20-care-actions{display:flex;flex-direction:column;gap:10px;}
-.g20-care .btn{width:100%;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;}
-.g20-care-sub{font-size:11px;font-weight:700;opacity:.85;}
+.g20-care{display:flex;flex-direction:column;gap:0.75rem;}
+.g20-care-title{margin:0;font-size:1.375rem;font-weight:800;color:var(--brown,#4A3B36);}
+.g20-care-status{display:flex;align-items:center;gap:0.75rem;background:var(--bg-cream,#FFF6EC);border-radius:1rem;padding:0.75rem 0.875rem;}
+.g20-care-face{font-size:2.125rem;line-height:1;}
+.g20-care-text{font-size:0.9375rem;font-weight:800;color:var(--brown,#4A3B36);}
+.g20-care-weight{font-size:0.8125rem;font-weight:700;color:var(--brown,#4A3B36);opacity:.75;padding:0 0.125rem;}
+.g20-care-weight small{display:block;font-size:0.6875rem;font-weight:600;opacity:.8;margin-top:0.125rem;}
+.g20-care-actions{display:flex;flex-direction:column;gap:0.625rem;}
+.g20-care .btn{width:100%;min-height:max(44px, 3.25rem);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;}
+.g20-care-sub{font-size:0.6875rem;font-weight:700;opacity:.85;}
 .g20-care .btn:disabled{opacity:.55;}
 `;
 

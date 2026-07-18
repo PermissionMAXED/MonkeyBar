@@ -9,27 +9,29 @@ import { progressOf } from '../systems/achievementsEngine.js';
 import { t } from '../data/strings.js';
 import { icon } from './icons.js';
 
+// V3/G33 (§B3): mechanical px→rem sweep (÷16) of this injected CSS string —
+// exemptions (1px hairlines/999px pills/shadows/@media px) per PLAN3 §B3.
 const ACH_CSS = `
 .screen-achievements{justify-content:flex-start;overflow-y:auto;-webkit-overflow-scrolling:touch;}
-.g12-ach-head{width:100%;max-width:440px;display:flex;align-items:center;gap:10px;margin:6px 0 6px;flex:none;}
+.g12-ach-head{width:100%;max-width:27.5rem;display:flex;align-items:center;gap:0.625rem;margin:0.375rem 0 0.375rem;flex:none;}
 /* F3: title shrinks/ellipsizes at narrow widths — never the count pill
    (6vw keeps "Achievements" un-ellipsized beside the pill at 320px) */
-.g12-ach-title{flex:1;min-width:0;margin:0;font-size:clamp(17px,6vw,30px);font-weight:800;color:var(--brown);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.g12-ach-count{flex:none;background:var(--white);border-radius:999px;padding:8px 12px;font-size:15px;font-weight:800;color:var(--teal-dark);box-shadow:var(--shadow-soft);}
-.g12-ach-list{width:100%;max-width:440px;display:flex;flex-direction:column;gap:8px;padding-bottom:18px;flex:none;}
-.g12-ach-tile{display:flex;align-items:center;gap:12px;background:var(--white);border-radius:18px;box-shadow:var(--shadow-soft);padding:10px 14px;}
+.g12-ach-title{flex:1;min-width:0;margin:0;font-size:clamp(1.0625rem,6vw,1.875rem);font-weight:800;color:var(--brown);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.g12-ach-count{flex:none;background:var(--white);border-radius:999px;padding:0.5rem 0.75rem;font-size:0.9375rem;font-weight:800;color:var(--teal-dark);box-shadow:var(--shadow-soft);}
+.g12-ach-list{width:100%;max-width:27.5rem;display:flex;flex-direction:column;gap:0.5rem;padding-bottom:1.125rem;flex:none;}
+.g12-ach-tile{display:flex;align-items:center;gap:0.75rem;background:var(--white);border-radius:1.125rem;box-shadow:var(--shadow-soft);padding:0.625rem 0.875rem;}
 .g12-ach-tile.g12-locked{opacity:.92;}
-.g12-ach-medal{flex:none;width:46px;height:46px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(74,59,54,.08);color:rgba(74,59,54,.35);}
+.g12-ach-medal{flex:none;width:2.875rem;height:2.875rem;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(74,59,54,.08);color:rgba(74,59,54,.35);}
 .g12-ach-tile.g12-done .g12-ach-medal{background:var(--yellow);color:#fff;}
 .g12-ach-body{flex:1;min-width:0;}
-.g12-ach-name{font-size:15px;font-weight:800;color:var(--brown);}
-.g12-ach-desc{font-size:12px;font-weight:700;opacity:.55;margin-top:1px;}
-.g12-ach-bar{margin-top:6px;height:8px;border-radius:999px;background:rgba(74,59,54,.1);overflow:hidden;}
+.g12-ach-name{font-size:0.9375rem;font-weight:800;color:var(--brown);}
+.g12-ach-desc{font-size:0.75rem;font-weight:700;opacity:.55;margin-top:1px;}
+.g12-ach-bar{margin-top:0.375rem;height:0.5rem;border-radius:999px;background:rgba(74,59,54,.1);overflow:hidden;}
 .g12-ach-fill{display:block;height:100%;border-radius:999px;background:var(--teal);transition:width 300ms ease;}
 .g12-ach-tile.g12-done .g12-ach-fill{background:var(--yellow);}
-.g12-ach-side{flex:none;text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:3px;}
-.g12-ach-progress{font-size:12px;font-weight:800;opacity:.6;}
-.g12-ach-reward{display:inline-flex;align-items:center;gap:3px;font-size:13px;font-weight:800;color:var(--brown);background:rgba(255,209,102,.35);border-radius:999px;padding:3px 9px;}
+.g12-ach-side{flex:none;text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:0.1875rem;}
+.g12-ach-progress{font-size:0.75rem;font-weight:800;opacity:.6;}
+.g12-ach-reward{display:inline-flex;align-items:center;gap:0.1875rem;font-size:0.8125rem;font-weight:800;color:var(--brown);background:rgba(255,209,102,.35);border-radius:999px;padding:0.1875rem 0.5625rem;}
 .g12-ach-reward svg{color:var(--yellow);}
 .g12-ach-tile.g12-done .g12-ach-reward{background:var(--yellow);color:#fff;}
 .g12-ach-tile.g12-done .g12-ach-reward svg{color:#fff;}

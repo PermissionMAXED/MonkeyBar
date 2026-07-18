@@ -10,6 +10,11 @@
 //   ?energy=N ?hunger=N ?hygiene=N ?fun=N              stat overrides
 //   ?fast=N                  clock multiplier   ?now=<epochMs>  pin clock
 //   ?reset=1                 wipe save          ?lang=de|en     language
+//   ?petdebug=1              V3/G35 (§C12.2): live pet/tickle gesture overlay
+//                            (region/dx/velocity/reversals + window.__petdebug
+//                            sample log) — implemented in home/interactions.js
+//   ?uiscale=85|100|115|130  UI scale override  ?notch=1  fake notch (V3/G33)
+//   ?open=devPanel           hidden dev panel (registered unconditionally §B4)
 //
 // `?scene=gooby` expects agent G3's `src/character/showcase.js` to provide:
 //
@@ -23,6 +28,8 @@ import * as clock from '../core/clock.js';
 import * as save from '../core/save.js';
 import { setLang } from '../data/strings.js';
 import { STATS, LEVELING } from '../data/constants.js';
+// V3/G33: fake-notch applier for ?notch=1 (PLAN3 §B9 — marked append below)
+import { setFakeNotch } from '../ui/settingsScreen.js';
 
 // Resolved at build/transform time; empty map while G3's file doesn't exist,
 // so boot keeps working (coordination note — do not convert to a static import).
@@ -97,6 +104,22 @@ export async function postBoot({ store, ui, sceneManager, framework }) {
       store.set(`stats.${stat}`, Math.min(STATS.MAX, Math.max(STATS.MIN, v)));
     }
   }
+
+  // ---- V3/G33: core-UX params (PLAN3 §E9, marked append) ----
+  // ?uiscale=85|100|115|130 — persisted UI-scale override; illegal values
+  // normalize to 100 inside the initUiScale change-follower (§B3).
+  // ?notch=1 — force the §B9 fake-notch insets (59/34 px) so the §C1.4
+  // safe-area matrix runs in any browser.
+  // ?open=devPanel needs no code here: the screen id registers
+  // unconditionally in main.js's V3/G33 block (§B4) and the generic
+  // `?open=` routing below shows it.
+  const uiscale = numParam(q, 'uiscale');
+  if (uiscale != null) {
+    store.set('settings.uiScale', uiscale);
+    store.flush();
+  }
+  if (q.get('notch') === '1') setFakeNotch(true);
+  // ---- end V3/G33 append ----
 
   // --- routing ---
   const minigame = q.get('minigame');

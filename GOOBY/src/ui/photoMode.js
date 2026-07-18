@@ -130,19 +130,21 @@ export async function composePhoto(sceneBlob, frameId, caption) {
 
 // ── DOM layer ───────────────────────────────────────────────────────────────
 
+// V3/G33 (§B3): mechanical px→rem sweep (÷16) of this injected CSS string —
+// exemptions (1px hairlines/999px pills/shadows/@media px) per PLAN3 §B3.
 const PHOTO_CSS = `
 body.g23-photo .g5-hud{display:none!important;}
 body.g23-photo .g23-sick-chip{display:none!important;}
 .g23-ph-layer{position:fixed;inset:0;z-index:80;pointer-events:auto;display:flex;flex-direction:column;justify-content:flex-end;}
 .g23-ph-flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity 90ms ease;}
 .g23-ph-flash.g23-on{opacity:.92;}
-.g23-ph-bar{position:relative;display:flex;align-items:center;gap:6px;padding:8px calc(8px + var(--safe-right)) calc(8px + var(--safe-bottom)) calc(8px + var(--safe-left));background:rgba(42,26,60,.78);backdrop-filter:blur(6px);}
-.g23-ph-exit{flex:none;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border:none;border-radius:50%;background:rgba(255,255,255,.16);color:#fff;cursor:pointer;-webkit-tap-highlight-color:transparent;} /* V2 fix (E16): >=44px hit target */
-.g23-ph-pickers{flex:1;min-width:0;display:flex;gap:6px;}
-.g23-ph-pick{flex:1;min-width:0;min-height:44px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;border:none;border-radius:12px;padding:6px 4px;background:rgba(255,255,255,.14);color:#fff;font-family:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;} /* V2 fix (E16): >=44px hit target */
-.g23-ph-pick-k{font-size:8.5px;font-weight:800;opacity:.6;text-transform:uppercase;letter-spacing:.4px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.g23-ph-pick-v{font-size:11px;font-weight:800;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.g23-ph-shutter{flex:none;width:56px;height:56px;border-radius:50%;border:4px solid #fff;background:var(--pink);box-shadow:0 0 0 3px rgba(42,26,60,.4);cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform 90ms ease;}
+.g23-ph-bar{position:relative;display:flex;align-items:center;gap:0.375rem;padding:0.5rem calc(0.5rem + var(--safe-right)) calc(0.5rem + var(--safe-bottom)) calc(0.5rem + var(--safe-left));background:rgba(42,26,60,.78);backdrop-filter:blur(6px);}
+.g23-ph-exit{flex:none;display:inline-flex;align-items:center;justify-content:center;width:2.75rem;height:2.75rem;border:none;border-radius:50%;background:rgba(255,255,255,.16);color:#fff;cursor:pointer;-webkit-tap-highlight-color:transparent;} /* V2 fix (E16): >=44px hit target */
+.g23-ph-pickers{flex:1;min-width:0;display:flex;gap:0.375rem;}
+.g23-ph-pick{flex:1;min-width:0;min-height:max(44px, 2.75rem);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;border:none;border-radius:0.75rem;padding:0.375rem 0.25rem;background:rgba(255,255,255,.14);color:#fff;font-family:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;} /* V2 fix (E16): >=44px hit target */
+.g23-ph-pick-k{font-size:0.5313rem;font-weight:800;opacity:.6;text-transform:uppercase;letter-spacing:0.025rem;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g23-ph-pick-v{font-size:0.6875rem;font-weight:800;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g23-ph-shutter{flex:none;width:3.5rem;height:3.5rem;border-radius:50%;border:0.25rem solid #fff;background:var(--pink);box-shadow:0 0 0 3px rgba(42,26,60,.4);cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform 90ms ease;}
 .g23-ph-shutter:active{transform:scale(.92);}
 .g23-ph-shutter[disabled]{opacity:.5;}
 `;

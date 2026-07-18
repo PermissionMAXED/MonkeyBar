@@ -1,25 +1,145 @@
-// Settings screen (§B: lang/notif toggles [G6]; audio/haptics toggles land
-// with G14): language auto/EN/DE with live switch, notification status +
-// enable/disable (deep-links back into the §C7 permission prompt), reset save
-// behind a double confirm, version footer.
+// Settings screen 3.0 (V3/G33 — PLAN3 §C2.1/§C1.1/§B4): reorganized sections —
+// General (language, notifications), Audio (5 volume slider rows §C2.1 with
+// quick-mute toggles on SFX/Musik + the Haptik toggle), Display (UI-Größe
+// 4-stop segment with live „Aa" preview §C1.1), the hidden dev gate (5× tap
+// on the language „Auto" segment §B4/§C4.1) and the „Entwickler" row that
+// appears once settings.devUnlocked. Reset-save (triple confirm) + version
+// footer unchanged from G6/G14.
+//
+// This module also owns the UI-scale DOM appliers (§B3): applyUiScale /
+// initUiScale (boot + live via the store, emits 'uiScaleChanged' §B10) and
+// the §B9 fake-notch override (setFakeNotch — dev panel / ?notch=1).
 
-import { t, setLang } from '../data/strings.js';
+import { t, getLang, setLang } from '../data/strings.js';
 import { icon } from './icons.js';
 import * as save from '../core/save.js';
 import * as notifications from '../core/notifications.js';
 import { maybeSoftAsk } from './permissionPrompt.js';
 import audio from '../audio/audio.js'; // G14: audio toggles
 import pkg from '../../package.json';
-
-/** G14: the three §D6 audio/haptics toggles (persisted save settings §E3). */
-const AUDIO_TOGGLES = [
-  { key: 'sfx', icon: 'play', labelKey: 'settings.sfx' },
-  { key: 'music', icon: 'music', labelKey: 'settings.music' },
-  { key: 'haptics', icon: 'spring', labelKey: 'settings.haptics' },
-];
+import {
+  UI_SCALES,
+  normalizeUiScale,
+  rootFontPx,
+  VOLUME_ROWS,
+  normalizeVolume,
+  volumesWithDefaults,
+  createDevGate,
+  FAKE_NOTCH,
+} from './settings.logic.js';
+// V3/G33 (§E0.1-11): local fallback tables until G34's strings.js spread lands.
+import { EN as UX_EN, DE as UX_DE } from '../data/strings/v3-ux.js';
 
 /** Language options (§A ruling: bilingual EN+DE, auto from navigator). */
 const LANGS = ['auto', 'en', 'de'];
+
+/** `ui.slider` drag-tick throttle (§C3.1/§D3.5: 80 ms). */
+const SLIDER_TICK_MS = 80;
+
+/**
+ * t() with a graceful fallback to this agent's v3-ux module while G34's
+ * strings.js spread hasn't landed (§E0.1-11 same-wave degradation).
+ * @param {string} key @param {Record<string, string|number>} [vars]
+ * @returns {string}
+ */
+function tx(key, vars) {
+  const viaT = t(key, vars);
+  if (viaT !== key) return viaT;
+  let str = (getLang() === 'de' ? UX_DE : UX_EN)[key];
+  if (str == null) return key;
+  if (vars) for (const [k, v] of Object.entries(vars)) str = str.replaceAll(`{${k}}`, String(v));
+  return str;
+}
+
+// ---------------------------------------------------------------------------
+// V3/G33 — UI scale appliers (§B3) + fake notch (§B9)
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply a uiScale step to the document root: font-size = 16 · scale/100 px
+ * plus the `data-ui-scale` attribute (later agents' CSS keys off it).
+ * @param {number} scale 85|100|115|130 (illegal → 100)
+ * @returns {number} the applied (normalized) scale
+ */
+export function applyUiScale(scale) {
+  const s = normalizeUiScale(scale);
+  if (typeof document !== 'undefined') {
+    document.documentElement.style.fontSize = `${rootFontPx(s)}px`;
+    document.documentElement.dataset.uiScale = String(s);
+  }
+  return s;
+}
+
+/**
+ * Boot-apply the persisted uiScale and follow the store live (§B3: applied at
+ * boot and on change, no reload). Emits the runtime-only 'uiScaleChanged'
+ * store event (§B10) whenever the applied scale actually changes.
+ * @param {{store: object}} deps
+ */
+export function initUiScale({ store }) {
+  let applied = applyUiScale(store.get('settings.uiScale'));
+  store.on('change', () => {
+    const next = normalizeUiScale(store.get('settings.uiScale'));
+    if (next === applied) return;
+    applied = applyUiScale(next);
+    store.emit?.('uiScaleChanged', { scale: applied });
+  });
+}
+
+let fakeNotchOn = false;
+
+/**
+ * §B9 fake-notch toggle: force the root safe-area vars to the iPhone-14-Pro
+ * values (59/34 px) so the §C1.4 40-combo matrix runs in any browser.
+ * @param {boolean} on
+ * @returns {boolean} the new state
+ */
+export function setFakeNotch(on) {
+  fakeNotchOn = !!on;
+  if (typeof document === 'undefined') return fakeNotchOn;
+  const st = document.documentElement.style;
+  if (fakeNotchOn) {
+    st.setProperty('--safe-top', FAKE_NOTCH.top);
+    st.setProperty('--safe-bottom', FAKE_NOTCH.bottom);
+    st.setProperty('--safe-left', FAKE_NOTCH.left);
+    st.setProperty('--safe-right', FAKE_NOTCH.right);
+  } else {
+    st.removeProperty('--safe-top');
+    st.removeProperty('--safe-bottom');
+    st.removeProperty('--safe-left');
+    st.removeProperty('--safe-right');
+  }
+  return fakeNotchOn;
+}
+
+/** @returns {boolean} current fake-notch state (dev panel toggle sync) */
+export function getFakeNotch() {
+  return fakeNotchOn;
+}
+
+/**
+ * Wipe the save and reload for the reset flows (settings §G G6 triple-confirm
+ * + dev panel §C4.2 #11). A bare `save.clear(); location.reload()` loses the
+ * race against the store's pagehide/visibilitychange flush (§E2), which
+ * re-persists the live state during the reload — so clear again AFTER those
+ * flush listeners ran (same-target listeners fire in registration order, and
+ * these register long after the store's boot-time ones).
+ */
+export function resetSaveAndReload() {
+  save.clear();
+  const wipe = () => save.clear();
+  window.addEventListener('pagehide', wipe);
+  document.addEventListener('visibilitychange', wipe);
+  location.reload();
+}
+
+// ---------------------------------------------------------------------------
+
+/** Bespoke gear-wrench icon for the Entwickler row (§B4 — icons.js is a
+ * shared append-only file; V2/G23 precedent keeps bespoke shapes local). */
+const WRENCH_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+  '<path d="M21.6 6.6a5.4 5.4 0 0 1-7.3 6.5L7.4 20a2.3 2.3 0 0 1-3.3-3.3l6.9-6.9a5.4 5.4 0 0 1 6.5-7.3L14 6l.7 3.3L18 10l3.6-3.4z"/></svg>';
 
 /**
  * Human status key for the saved notifications setting (§E3).
@@ -46,6 +166,10 @@ export function createSettingsScreen({ store, ui }) {
   let resetStep = 0;
   /** F3: mount-scoped store subscription (live permission-label refresh). */
   let offChange = null;
+  /** V3/G33: dev-gate tap counter (§B4) — mount-scoped. */
+  const devGate = createDevGate();
+  /** V3/G33: mount-scoped ui.slider tick throttle. */
+  let lastSliderTick = 0;
 
   function render() {
     const el = root;
@@ -53,6 +177,9 @@ export function createSettingsScreen({ store, ui }) {
     const lang = store.get('settings.lang') ?? 'auto';
     const notifSetting = store.get('settings.notifications');
     const granted = notifSetting === 'granted';
+    const volumes = volumesWithDefaults(store.get('settings.volumes'));
+    const uiScale = normalizeUiScale(store.get('settings.uiScale'));
+    const devUnlocked = store.get('settings.devUnlocked') === true;
 
     el.innerHTML = `
       <div class="settings-wrap">
@@ -60,6 +187,7 @@ export function createSettingsScreen({ store, ui }) {
           <button class="btn btn-ghost btn-round settings-back" aria-label="${t('ui.back')}">${icon('arrowLeft', 22)}</button>
           <h1 class="settings-title">${icon('gear', 26)} ${t('settings.title')}</h1>
         </div>
+        <div class="settings-section">${tx('settings.section.general')}</div>
         <div class="card settings-card">
           <div class="settings-row">
             <span class="settings-label">${t('settings.language')}</span>
@@ -76,43 +204,147 @@ export function createSettingsScreen({ store, ui }) {
               </button>
             </span>
           </div>
-          ${AUDIO_TOGGLES.map(({ key, icon: ic, labelKey }) => `
+        </div>
+        <div class="settings-section">${tx('settings.section.audio')}</div>
+        <div class="card settings-card">
+          ${VOLUME_ROWS.map(({ key, labelKey, icon: ic, mute }) => {
+            const muted = mute ? store.get(`settings.${mute}`) === false : false;
+            return `
+          <div class="settings-row g33-vol-row ${muted ? 'g33-vol-muted' : ''}" data-vol-row="${key}">
+            <span class="settings-label">${icon(ic, 18)} ${tx(labelKey)}</span>
+            <span class="g33-vol-controls">
+              <input type="range" class="g33-vol-slider" min="0" max="100" step="5"
+                value="${volumes[key]}" data-vol="${key}" aria-label="${tx(labelKey)}">
+              <span class="g33-vol-readout">${volumes[key]}%</span>
+              ${mute ? `<button class="g14-toggle ${!muted ? 'g14-on' : ''}"
+                data-audio-toggle="${mute}" role="switch" aria-checked="${!muted}"
+                aria-label="${tx('settings.vol.mute', { label: tx(labelKey) })}"><span class="g14-knob"></span></button>` : ''}
+            </span>
+          </div>`;
+          }).join('')}
           <div class="settings-row">
-            <span class="settings-label">${icon(ic, 18)} ${t(labelKey)}</span>
-            <button class="g14-toggle ${store.get(`settings.${key}`) !== false ? 'g14-on' : ''}"
-              data-audio-toggle="${key}" role="switch"
-              aria-checked="${store.get(`settings.${key}`) !== false}"
-              aria-label="${t(labelKey)}"><span class="g14-knob"></span></button>
-          </div>`).join('')}
+            <span class="settings-label">${icon('spring', 18)} ${t('settings.haptics')}</span>
+            <button class="g14-toggle ${store.get('settings.haptics') !== false ? 'g14-on' : ''}"
+              data-audio-toggle="haptics" role="switch"
+              aria-checked="${store.get('settings.haptics') !== false}"
+              aria-label="${t('settings.haptics')}"><span class="g14-knob"></span></button>
+          </div>
+        </div>
+        <div class="settings-section">${tx('settings.section.display')}</div>
+        <div class="card settings-card">
+          <div class="settings-row">
+            <span class="settings-label"><span class="g33-scale-aa">Aa</span> ${tx('settings.uiScale')}</span>
+            <span class="seg g33-scale-seg" role="group">
+              ${UI_SCALES.map((s) => `<button class="seg-btn ${s === uiScale ? 'seg-on' : ''}" data-uiscale="${s}">${s}&hairsp;%</button>`).join('')}
+            </span>
+          </div>
+        </div>
+        ${devUnlocked ? `
+        <div class="card settings-card">
+          <div class="settings-row g33-dev-row">
+            <span class="settings-label">${WRENCH_SVG} ${tx('settings.devRow')}</span>
+            <button class="btn btn-ghost g33-dev-open">${tx('settings.devOpen')}</button>
+          </div>
+        </div>` : ''}
+        <div class="card settings-card">
           <div class="settings-row settings-danger">
             <button class="btn settings-reset-btn">${resetLabel()}</button>
           </div>
         </div>
         <div class="settings-footer">${t('settings.version', { v: pkg.version })}</div>
       </div>`;
-    // G14: audio toggle handlers — flip the persisted setting; audio.js
-    // follows the store live (§D6 mute persistence), so no direct bus pokes.
+
+    // G14: toggle handlers — flip the persisted setting; audio.js follows the
+    // store live (§D6/§C2.3 mute persistence), so no direct bus pokes.
     for (const btn of el.querySelectorAll('[data-audio-toggle]')) {
       btn.addEventListener('click', () => {
         const key = btn.dataset.audioToggle;
         const next = store.get(`settings.${key}`) === false;
         store.set(`settings.${key}`, next);
         store.flush(); // sync events so audio.js sees the new setting NOW
-        if (next) audio.play('ui.pick'); // audible/buzzy confirmation when turning ON
+        // V3/G33 (§D3.5): real toggle samples replace the old ui.pick blip.
+        audio.play(next ? 'ui.toggleOn' : 'ui.toggleOff');
         render();
       });
     }
 
-    el.querySelector('.settings-back').addEventListener('click', () => ui.closeAll());
+    // V3/G33 (§C2.1/§C2.2): volume sliders — live store write-through while
+    // dragging (G32's audio.js store-follow applies the gains); throttled
+    // ui.slider ticks; preview blip on RELEASE via G32's audio.previewBus
+    // (feature-detected — §E0.1-11).
+    for (const slider of el.querySelectorAll('.g33-vol-slider')) {
+      const key = slider.dataset.vol;
+      const row = slider.closest('.g33-vol-row');
+      const readout = row.querySelector('.g33-vol-readout');
+      slider.addEventListener('input', () => {
+        const v = normalizeVolume(slider.value, key);
+        readout.textContent = `${v}%`;
+        store.update((state) => {
+          state.settings.volumes = state.settings.volumes ?? {};
+          state.settings.volumes[key] = v;
+        });
+        store.flush(); // live gain while dragging (§B2.2 store-follow)
+        const nowTick = Date.now();
+        if (nowTick - lastSliderTick >= SLIDER_TICK_MS) {
+          lastSliderTick = nowTick;
+          audio.play('ui.slider');
+        }
+      });
+      slider.addEventListener('change', () => {
+        store.flush();
+        if (typeof audio.previewBus === 'function') {
+          audio.previewBus(key); // §C2.2 per-bus preview blip (G32)
+        } else {
+          audio.play('ui.pick'); // G32 not merged yet — plain confirmation
+        }
+      });
+    }
 
-    for (const btn of el.querySelectorAll('.seg-btn')) {
+    // V3/G33 (§C1.1): UI-Größe 4-stop segment — instant apply via the store
+    // (initUiScale's change-follower sets the root font-size and emits
+    // 'uiScaleChanged'); persists; NO toast (the whole UI visibly changes).
+    for (const btn of el.querySelectorAll('[data-uiscale]')) {
+      btn.addEventListener('click', () => {
+        const s = normalizeUiScale(Number(btn.dataset.uiscale));
+        store.set('settings.uiScale', s);
+        store.flush();
+        audio.play('ui.pick');
+        render();
+      });
+    }
+
+    // V3/G33 (§B4/§C4.1): hidden dev gate — 5× tap on the language „Auto"
+    // segment within the 4 s rolling window; ANY other tap resets the chain
+    // (capture-phase listener on the screen root), as does 2 s of inactivity
+    // (inside devGate). Unlock persists; re-tapping 5× toasts „bereits aktiv".
+    for (const btn of el.querySelectorAll('.seg-btn[data-lang]')) {
       btn.addEventListener('click', () => {
         const chosen = btn.dataset.lang;
+        if (chosen === 'auto') {
+          if (devGate.tap(Date.now())) {
+            if (store.get('settings.devUnlocked') === true) {
+              ui.toast('dev.already');
+            } else {
+              store.set('settings.devUnlocked', true);
+              store.flush();
+              ui.toast('dev.unlocked');
+              audio.play('jingle.achievement');
+            }
+          }
+        }
         store.set('settings.lang', chosen);
         setLang(chosen);
         render(); // live switch (§A)
       });
     }
+
+    // V3/G33: dev-panel entry (rendered only when unlocked — §B4).
+    el.querySelector('.g33-dev-open')?.addEventListener('click', () => {
+      audio.play('ui.tap');
+      ui.showScreen('devPanel');
+    });
+
+    el.querySelector('.settings-back').addEventListener('click', () => ui.closeAll());
 
     el.querySelector('.settings-notif-btn').addEventListener('click', onNotifToggle);
 
@@ -121,8 +353,7 @@ export function createSettingsScreen({ store, ui }) {
       // Double confirm (§G G6): two explicit extra taps, each relabeled.
       resetStep += 1;
       if (resetStep >= 3) {
-        save.clear();
-        location.reload();
+        resetSaveAndReload(); // V3/G33: survives the §E2 pagehide flush
         return;
       }
       render();
@@ -176,12 +407,20 @@ export function createSettingsScreen({ store, ui }) {
     maybeSoftAsk({ store, ui }, { force: true });
   }
 
+  /** V3/G33 (§B4): capture-phase reset — any tap that is NOT the „Auto"
+   * segment resets the dev-gate chain. */
+  function onAnyPointerDown(e) {
+    const target = /** @type {HTMLElement} */ (e.target);
+    if (!target?.closest?.('.seg-btn[data-lang="auto"]')) devGate.reset();
+  }
+
   return {
     /** @param {HTMLElement} el */
     mount(el) {
       root = el;
       resetStep = 0;
       render();
+      el.addEventListener('pointerdown', onAnyPointerDown, true); // V3/G33 §B4
       // F3: re-render from LIVE permission state whenever it changes while
       // the screen is open (the soft-ask panel / OS prompt writes the store).
       let lastNotif = store.get('settings.notifications');
@@ -194,6 +433,7 @@ export function createSettingsScreen({ store, ui }) {
       });
     },
     unmount() {
+      root?.removeEventListener('pointerdown', onAnyPointerDown, true); // V3/G33
       offChange?.();
       offChange = null;
       root = null;

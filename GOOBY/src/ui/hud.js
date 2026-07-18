@@ -22,33 +22,38 @@ const STAT_COLORS = {
   fun: UI_COLORS.STAT_FUN,
 };
 
+// V3/G33 (§B3 rem sweep + §C1.4 safe-area): px → rem ÷16; HUD top row
+// `top: max(8px, var(--safe-top))`, bottom action bar keeps its 44px gap
+// above the room-nav dots via `max(2.75rem, calc(var(--safe-bottom) +
+// 2rem))`; the 4 stat pills WRAP 2×2 below ~4.5rem/pill instead of clipping
+// (§C1.2 — worst case 320px × 130 %).
 const HUD_CSS = `
 .g5-hud{position:absolute;inset:0;pointer-events:none;z-index:40;}
 .g5-hud.g5-hud-hidden{display:none;}
-.g5-hud-top{position:absolute;top:calc(10px + var(--safe-top));left:calc(10px + var(--safe-left));right:calc(10px + var(--safe-right));display:flex;flex-direction:column;gap:8px;}
-.g5-hud-row{display:flex;gap:6px;justify-content:space-between;align-items:center;}
-.g5-hud .stat-pill{flex:1;min-width:0;padding:6px 8px;pointer-events:auto;}
+.g5-hud-top{position:absolute;top:max(0.625rem, var(--safe-top));left:max(0.625rem, var(--safe-left));right:max(0.625rem, var(--safe-right));display:flex;flex-direction:column;gap:0.5rem;}
+.g5-hud-row{display:flex;gap:0.375rem;justify-content:space-between;align-items:center;flex-wrap:wrap;}
+.g5-hud .stat-pill{flex:1;min-width:4.5rem;padding:0.375rem 0.5rem;pointer-events:auto;}
 .g5-hud .stat-pill svg{flex:none;}
-.g5-hud .stat-track{flex:1;min-width:24px;width:auto;display:block;}
+.g5-hud .stat-track{flex:1;min-width:1.5rem;width:auto;display:block;}
 .g5-hud .stat-fill{display:block;}
-.g5-hud-meta{display:flex;gap:8px;align-items:center;justify-content:space-between;}
-.g5-coins{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.92);border-radius:999px;padding:8px 14px;font-size:17px;font-weight:800;color:var(--brown);box-shadow:var(--shadow-soft);}
+.g5-hud-meta{display:flex;gap:0.5rem;align-items:center;justify-content:space-between;}
+.g5-coins{display:inline-flex;align-items:center;gap:0.375rem;background:rgba(255,255,255,.92);border-radius:999px;padding:0.5rem 0.875rem;font-size:1.0625rem;font-weight:800;color:var(--brown);box-shadow:var(--shadow-soft);}
 .g5-coins svg{color:var(--yellow);}
-.g5-ring{position:relative;width:52px;height:52px;flex:none;}
-.g5-ring svg{transform:rotate(-90deg);}
+.g5-ring{position:relative;width:3.25rem;height:3.25rem;flex:none;}
+.g5-ring svg{transform:rotate(-90deg);width:100%;height:100%;}
 .g5-ring .g5-ring-bg{fill:rgba(255,255,255,.92);stroke:rgba(74,59,54,.12);stroke-width:5;}
 .g5-ring .g5-ring-fg{fill:none;stroke:var(--teal);stroke-width:5;stroke-linecap:round;transition:stroke-dashoffset 300ms ease;}
 .g5-ring .g5-ring-label{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;}
-.g5-ring .g5-ring-lvl{font-size:16px;font-weight:800;color:var(--brown);}
-.g5-ring .g5-ring-cap{font-size:8px;font-weight:800;color:var(--brown);opacity:.5;text-transform:uppercase;letter-spacing:.5px;}
-.g5-hud-btns{position:absolute;bottom:calc(44px + var(--safe-bottom));left:calc(8px + var(--safe-left));right:calc(8px + var(--safe-right));display:flex;gap:6px;justify-content:center;flex-wrap:wrap;}
-.g5-hud-btn{pointer-events:auto;display:inline-flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;width:54px;height:54px;border:none;border-radius:18px;background:rgba(255,255,255,.92);border-bottom:4px solid rgba(74,59,54,.14);color:var(--brown);font-family:inherit;font-size:9px;font-weight:800;cursor:pointer;box-shadow:var(--shadow-soft);-webkit-tap-highlight-color:transparent;transition:transform 90ms ease;}
+.g5-ring .g5-ring-lvl{font-size:1rem;font-weight:800;color:var(--brown);}
+.g5-ring .g5-ring-cap{font-size:0.5rem;font-weight:800;color:var(--brown);opacity:.5;text-transform:uppercase;letter-spacing:0.0313rem;}
+.g5-hud-btns{position:absolute;bottom:max(2.75rem, calc(var(--safe-bottom) + 2rem));left:max(0.5rem, var(--safe-left));right:max(0.5rem, var(--safe-right));display:flex;gap:0.375rem;justify-content:center;flex-wrap:wrap;}
+.g5-hud-btn{pointer-events:auto;display:inline-flex;flex-direction:column;align-items:center;justify-content:center;gap:0.125rem;width:max(44px, 3.375rem);height:max(44px, 3.375rem);border:none;border-radius:1.125rem;background:rgba(255,255,255,.92);border-bottom:4px solid rgba(74,59,54,.14);color:var(--brown);font-family:inherit;font-size:0.5625rem;font-weight:800;cursor:pointer;box-shadow:var(--shadow-soft);-webkit-tap-highlight-color:transparent;transition:transform 90ms ease;}
 .g5-hud-btn:active{transform:scale(.94);}
 .g5-hud-btn svg{color:var(--pink);}
 .g5-hud-btn.g5-btn-teal svg{color:var(--teal);}
 .g5-hud-btn.g5-btn-yellow svg{color:#E0A93E;}
 .g5-hud-btn.g5-muted svg{color:rgba(74,59,54,.35);}
-.g5-hud-btn .g5-btn-label{max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g5-hud-btn .g5-btn-label{max-width:3.25rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 `;
 
 /**
@@ -184,14 +189,16 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
   if (!document.querySelector('style[data-owner="g23-hud"]')) {
     const g23Style = document.createElement('style');
     g23Style.dataset.owner = 'g23-hud';
+    // V3/G33 (§B3 rem sweep): px → rem ÷16 (44px tap floor stays real px).
     g23Style.textContent = `
 .g5-hud-btn{position:relative;}
-.g23-badge{position:absolute;top:-5px;right:-5px;min-width:19px;height:19px;padding:0 5px;border-radius:999px;background:var(--pink);color:#fff;font-size:11px;font-weight:800;display:none;align-items:center;justify-content:center;font-variant-numeric:tabular-nums;box-shadow:var(--shadow-soft);}
+.g23-badge{position:absolute;top:-0.3125rem;right:-0.3125rem;min-width:1.1875rem;height:1.1875rem;padding:0 0.3125rem;border-radius:999px;background:var(--pink);color:#fff;font-size:0.6875rem;font-weight:800;display:none;align-items:center;justify-content:center;font-variant-numeric:tabular-nums;box-shadow:var(--shadow-soft);}
 .g23-badge.g23-show{display:inline-flex;}
-/* V2 fix (E16): >=44px hit target; top 172px clears the HUD top block (~98px)
-   AND the sleep chip (top 104px, up to ~62px tall with big emoji glyphs —
-   sick Gooby can still nap, §C3.4, so both chips may show together). */
-.g23-sick-chip{position:absolute;top:calc(172px + var(--safe-top));left:50%;transform:translateX(-50%);display:none;align-items:center;justify-content:center;gap:7px;max-width:86vw;min-height:44px;pointer-events:auto;border:none;border-radius:999px;padding:9px 14px;background:var(--white);color:var(--brown);font-family:inherit;font-size:12px;font-weight:800;box-shadow:var(--shadow-soft);cursor:pointer;-webkit-tap-highlight-color:transparent;animation:g23chip 1.6s ease-in-out infinite;}
+/* V2 fix (E16): >=44px hit target; top 10.75rem clears the HUD top block
+   (~6.125rem) AND the sleep chip (top 6.5rem, up to ~3.875rem tall with big
+   emoji glyphs — sick Gooby can still nap, §C3.4, so both chips may show
+   together). V3/G33: rem so the offsets track the scaled HUD block. */
+.g23-sick-chip{position:absolute;top:calc(10.75rem + var(--safe-top));left:50%;transform:translateX(-50%);display:none;align-items:center;justify-content:center;gap:0.4375rem;max-width:86vw;min-height:max(44px, 2.75rem);pointer-events:auto;border:none;border-radius:999px;padding:0.5625rem 0.875rem;background:var(--white);color:var(--brown);font-family:inherit;font-size:0.75rem;font-weight:800;box-shadow:var(--shadow-soft);cursor:pointer;-webkit-tap-highlight-color:transparent;animation:g23chip 1.6s ease-in-out infinite;}
 .g23-sick-chip.g23-show{display:inline-flex;}
 .g23-sick-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 @keyframes g23chip{0%,100%{transform:translateX(-50%) scale(1);}50%{transform:translateX(-50%) scale(1.035);}}`;
