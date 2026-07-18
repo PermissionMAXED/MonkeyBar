@@ -41,7 +41,11 @@ export const ROOM = Object.freeze({
   furniture: Object.freeze([
     // low fence line at the back (§C2.1: suburban fence-1x4 ×3)
     Object.freeze({ item: 'city-kit-suburban/fence-1x4', at: Object.freeze([-1.65, 0, -1.9]), rotY: 0, scale: 0.42 }),
-    Object.freeze({ item: 'city-kit-suburban/fence-1x4', at: Object.freeze([0, 0, -1.9]), rotY: 0, scale: 0.42 }),
+    // V3/G46 (§C11.1): a real opening replaces the stand-in middle segment.
+    Object.freeze({
+      item: 'nature-kit/fence_gate', at: Object.freeze([0, 0, -1.9]),
+      rotY: 0, scale: 1.15, dressing: 'v3-real-asset',
+    }),
     Object.freeze({ item: 'city-kit-suburban/fence-1x4', at: Object.freeze([1.65, 0, -1.9]), rotY: 0, scale: 0.42 }),
     // back hedge (§C2.1: plant_bushLarge ×3)
     Object.freeze({ item: 'nature-kit/plant_bushLarge', at: Object.freeze([-2.05, 0, -1.62]), rotY: 15, scale: 0.5 }),
@@ -71,7 +75,14 @@ export const ROOM = Object.freeze({
     Object.freeze({ proc: 'fertilizerBag', at: Object.freeze([1.1, 0, 1.35]), rotY: 10, interact: 'fertilizer', anchor: 'fertilizer', hitSize: Object.freeze([0.5, 0.6, 0.5]) }),
 
     // decor slots (§C8.3 — G22's catalog swaps items via decor.js)
-    Object.freeze({ slot: 'gardenBench', proc: 'gardenBench', at: Object.freeze([-1.5, 0, -1.25]), rotY: 30 }),
+    // V3/G46 (§C11.1): nature-kit/bench is intentionally the pack's rustic
+    // log substitute. The catalog/save id stays proc:benchWood; decor.js uses
+    // this same real model when swapping back from the pastel variant.
+    Object.freeze({
+      slot: 'gardenBench', item: 'nature-kit/bench',
+      at: Object.freeze([-1.5, 0, -1.25]), rotY: 30, scale: 0.76,
+      dressing: 'v3-real-asset',
+    }),
     Object.freeze({ slot: 'gardenGnome', at: Object.freeze([0.45, 0, -1.4]) }),
     Object.freeze({ slot: 'birdbath', at: Object.freeze([-1.35, 0, -0.45]) }),
     Object.freeze({

@@ -320,6 +320,26 @@ const TOWER_IDS = Object.freeze(['low-detail-building-a', 'low-detail-building-d
 const TREE_IDS = Object.freeze(['tree_default', 'tree_oak', 'tree_fat', 'tree_pineRoundA']);
 const SHRUB_IDS = Object.freeze(['plant_bush', 'rock_smallA', 'flower_redA', 'flower_yellowA']);
 
+/** V3/G46 (§C11.1): real sidewalk props, batched by key in buildCity(). */
+export const CITY_DRESSING_KEYS = Object.freeze([
+  'kaykit-city/streetlight',
+  'kaykit-city/firehydrant',
+  'kaykit-city/dumpster',
+  'kaykit-city/bench',
+  'kaykit-city/trash_A',
+  'kaykit-city/trash_B',
+]);
+
+/** V3/G46 (§C11.1): six mini-market display props at the shop destination. */
+export const SHOP_DRESSING_KEYS = Object.freeze([
+  'kaykit-restaurant/crate',
+  'kaykit-restaurant/crate_buns',
+  'kaykit-restaurant/crate_tomatoes',
+  'kaykit-restaurant/crate_carrots',
+  'kaykit-city/box_A',
+  'kaykit-city/box_B',
+]);
+
 /** Every GLB asset key the built city needs (preloaded by cityDrive). */
 export const CITY_ASSET_KEYS = Object.freeze([
   'city-kit-roads/road-straight',
@@ -340,6 +360,8 @@ export const CITY_ASSET_KEYS = Object.freeze([
   'car-kit/cone',
   'car-kit/box',
   'minigolf-kit/windmill', // V2/G21: windmillCafe landmark (§C9.3, in layout.buildings)
+  ...CITY_DRESSING_KEYS,
+  ...SHOP_DRESSING_KEYS,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -458,7 +480,8 @@ export function roadPieceFor(n, e, s, w) {
  * @property {Array<Array<[number, number]>>} trafficLoops  closed tile cycles
  * @property {Array<{key: string, x: number, z: number, rotY: number, scale: number,
  *   halfX: number, halfZ: number}>} buildings  incl. AABB half-extents (m)
- * @property {Array<{key: string, x: number, z: number, rotY: number, scale: number}>} nature
+ * @property {Array<{key: string, x: number, z: number, rotY: number, scale: number,
+ *   area?: 'cityDressing'|'shopMarket'}>} nature  nature + instanced static dressing
  * @property {Array<{key: string, kind: 'cone'|'box'|'barrier', x: number, z: number, rotY: number}>} props
  * @property {Array<{x: number, z: number, rotY: number}>} lamps
  */
@@ -680,6 +703,72 @@ export function generateCityLayout(seed) {
       }
     }
   }
+
+  // ── V3/G46 (§C11.1): real city + shop dressing ---------------------------
+  // buildCity already batches layout.nature by model key into InstancedMesh,
+  // so feeding static scenery through that existing path adds one draw call
+  // per distinct model (never one per placement). These are visual-only:
+  // gameplay colliders and all lane/road geometry remain data-driven above.
+  const dressing = [
+    {
+      key: 'kaykit-city/streetlight', scale: 9,
+      spots: [[-52, -52], [52, -52], [52, 52], [-52, 52], [-8, -52], [8, 52], [-52, 8], [52, -8]],
+    },
+    {
+      key: 'kaykit-city/bench', scale: 5,
+      spots: [[-28, -52], [28, 52], [-52, -28], [52, 28]],
+    },
+    {
+      key: 'kaykit-city/firehydrant', scale: 5,
+      spots: [[8, -28], [-8, 28], [28, 8]],
+    },
+    {
+      key: 'kaykit-city/dumpster', scale: 5,
+      spots: [[-28, -8], [28, -8]],
+    },
+    {
+      key: 'kaykit-city/trash_A', scale: 4.5,
+      spots: [[-42, -52], [42, 52], [-52, 42], [52, -22]],
+    },
+    {
+      key: 'kaykit-city/trash_B', scale: 5,
+      spots: [[-18, -52], [18, 52], [-52, 18], [52, -42]],
+    },
+  ];
+  for (const recipe of dressing) {
+    for (const [x, z] of recipe.spots) {
+      nature.push({
+        key: recipe.key,
+        x: x + (rng() - 0.5) * 0.7,
+        z: z + (rng() - 0.5) * 0.7,
+        rotY: rng() * Math.PI * 2,
+        scale: recipe.scale,
+        area: 'cityDressing',
+      });
+    }
+  }
+
+  // The app has no separate 3D shop-interior scene: arrival opens the DOM
+  // shop screen over this destination. Six real crates/boxes therefore form
+  // a readable mini-market display along the shop's street-facing façade,
+  // visible during arrival while preserving the identical shop handoff.
+  const shopDisplay = [
+    ['kaykit-restaurant/crate', 41.7, -24.0, 0.62],
+    ['kaykit-restaurant/crate_buns', 41.7, -21.4, 0.62],
+    ['kaykit-restaurant/crate_tomatoes', 41.7, -18.6, 0.62],
+    ['kaykit-restaurant/crate_carrots', 41.7, -16.0, 0.62],
+    ['kaykit-city/box_A', 43.2, -23.0, 5.5],
+    ['kaykit-city/box_B', 43.2, -17.0, 5.5],
+  ];
+  for (const [key, x, z, scale] of shopDisplay) {
+    nature.push({
+      key, x, z,
+      rotY: (rng() - 0.5) * 0.35,
+      scale,
+      area: 'shopMarket',
+    });
+  }
+  // ── end V3/G46 ------------------------------------------------------------
 
   // --- props: cones / boxes / barriers near the route (§C6.1 obstacles) ----
   const props = [];

@@ -75,6 +75,14 @@ export const ROOM = Object.freeze({
     Object.freeze({ slot: 'plant', item: 'pottedPlant', at: Object.freeze([0.98, 0.49, -1.2]), rotY: 0, scale: 0.75 }),
     // wall-art slot anchor above the sofa (empty until bought — §C5.2)
     Object.freeze({ slot: 'wallArt', at: Object.freeze([-0.85, 1.9, -1.47]), rotY: 0 }),
+    // ---- V3/G46 (§C11.1): committed furniture-kit room dressing ----------
+    // The authored ceiling lamp grounds at its shade; lifting its base to
+    // y=2.70 hangs its chain flush with the 3.2 m ceiling.
+    Object.freeze({
+      item: 'lampSquareCeiling', at: Object.freeze([0, 2.7, -0.18]),
+      rotY: 0, scale: 1.4, dressing: 'v3-real-asset',
+    }),
+    // ---- end V3/G46 --------------------------------------------------------
     // ---- V2/G22 (§C8.1): new slot anchors (empty until bought) ----
     // ceiling-fan anchor just below the 3.2 m ceiling, over the room center
     Object.freeze({ slot: 'ceilingFan', at: Object.freeze([0, 3.08, -0.2]), rotY: 0 }),

@@ -44,11 +44,13 @@ import { ROOM as KITCHEN } from '../src/home/rooms/kitchen.js';
 import { ROOM as LIVING } from '../src/home/rooms/living.js';
 import { ROOM as BATHROOM } from '../src/home/rooms/bathroom.js';
 import { ROOM as BEDROOM } from '../src/home/rooms/bedroom.js';
+import { DECOR_MODEL_KEYS } from '../src/home/decor.js';
 import { defaultState } from '../src/core/save.js';
 import { createStore } from '../src/core/store.js';
 
 const ROOM_DEFS = [KITCHEN, LIVING, BATHROOM, BEDROOM];
 const ASSET_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'assets', 'kenney');
+const KAYKIT_ASSET_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'assets', 'kaykit');
 
 /** isolated store per test (autosave off — no timers keep node alive) */
 const makeStore = () => createStore(defaultState(), { autosave: false });
@@ -545,6 +547,30 @@ test('V2/FIX-C reward catalog: the 4 §C6 claimSet ids exist with valid reward-o
     assert.equal(e.reward, true, `${id} reward flag`);
     assert.equal(e.procedural, true, `${id} built by decor.js`);
     assert.equal(e.default, undefined, `${id} is NOT a free slot default`);
+  }
+});
+
+test('V3/G46 reward visuals use committed models while frozen reward ids stay procedural', () => {
+  const SPEC = {
+    'proc:goldenWateringCan': ['survival-kit/bucket'],
+    'proc:toyCity': [
+      'toy-car-kit/track-narrow-straight',
+      'toy-car-kit/track-narrow-curve',
+      'toy-car-kit/track-narrow-corner-small',
+    ],
+    'proc:candyJar': ['kaykit-restaurant/jar_A_large'],
+  };
+  assert.equal(DECOR_MODEL_KEYS['proc:goldfishBowl'], undefined, 'goldfish bowl stays hand-built');
+  for (const [id, modelKeys] of Object.entries(SPEC)) {
+    const entry = getEntry(id);
+    assert.ok(entry?.reward && entry.procedural, `${id}: frozen reward row changed`);
+    assert.deepEqual(DECOR_MODEL_KEYS[id], modelKeys, `${id}: replacement keys`);
+    for (const key of modelKeys) {
+      const [slug, name] = key.split('/');
+      const root = slug.startsWith('kaykit-') ? KAYKIT_ASSET_DIR : ASSET_DIR;
+      const ext = slug.startsWith('kaykit-') ? 'gltf' : 'glb';
+      assert.ok(existsSync(join(root, slug, `${name}.${ext}`)), `${id}: missing ${key}`);
+    }
   }
 });
 

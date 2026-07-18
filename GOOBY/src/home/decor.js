@@ -46,6 +46,23 @@ import { SLOT_EMOJI, furnEmoji } from '../ui/shopScreen.js';
 import { icon } from '../ui/icons.js';
 import * as assets from '../core/assets.js';
 
+/**
+ * V3/G46 (§C11.1): procedural catalog ids whose RENDERING is upgraded to
+ * committed models. The ids remain frozen for rewards, ownership, placement
+ * and save compatibility; only their visual builders change.
+ */
+export const DECOR_MODEL_KEYS = Object.freeze({
+  'proc:benchWood': Object.freeze(['nature-kit/bench']),
+  'proc:benchPastel': Object.freeze(['nature-kit/bench']),
+  'proc:goldenWateringCan': Object.freeze(['survival-kit/bucket']),
+  'proc:toyCity': Object.freeze([
+    'toy-car-kit/track-narrow-straight',
+    'toy-car-kit/track-narrow-curve',
+    'toy-car-kit/track-narrow-corner-small',
+  ]),
+  'proc:candyJar': Object.freeze(['kaykit-restaurant/jar_A_large']),
+});
+
 let wired = false;
 
 /**
@@ -173,7 +190,15 @@ export function initDecor({ store, ui, audio }) {
     };
 
     const entry = getEntry(itemId); // V2/G22: catalog row drives glb/mount/tint
-    if (entry?.procedural) {
+    const replacementKeys = DECOR_MODEL_KEYS[itemId];
+    if (replacementKeys) {
+      // V3/G46 (§C11.1): preserve the procedural catalog ids while replacing
+      // their scene content with committed models. Explicit preloading keeps
+      // these reward-only assets out of the always-on home preload budget.
+      await assets.preload(replacementKeys);
+      if (rm.getSlotHolder(roomId, slotId) !== holder && holder.parent == null) return;
+      holder.add(buildAssetReplacement(itemId, track));
+    } else if (entry?.procedural) {
       const proc = buildProcedural(itemId, track);
       if (rm.getSlotHolder(roomId, slotId) !== holder && holder.parent == null) return;
       holder.add(proc);
@@ -453,10 +478,6 @@ function buildProcedural(itemId, track) {
     case 'proc:artRainbow':
       return buildWallArt('rainbow', track);
     // ---- V2/G22 (§C8.3): garden decor ----
-    case 'proc:benchWood':
-      return buildGardenBench(track, { seat: '#9A6B47', legs: '#7A5238' });
-    case 'proc:benchPastel':
-      return buildGardenBench(track, { seat: '#8FD8CB', legs: '#FFB7D5' });
     case 'proc:gnome':
       return buildGnome(track, false);
     case 'proc:gnomeGold':
@@ -468,12 +489,6 @@ function buildProcedural(itemId, track) {
     // ---- V2/FIX-C (§C6): the 4 collection-set completion rewards ----
     case 'proc:goldfishBowl':
       return buildGoldfishBowl(track);
-    case 'proc:goldenWateringCan':
-      return buildGoldenWateringCan(track);
-    case 'proc:toyCity':
-      return buildToyCity(track);
-    case 'proc:candyJar':
-      return buildCandyJar(track);
     default: {
       // unknown procedural id: a friendly placeholder cube (never throws)
       const grp = new THREE.Group();
@@ -677,47 +692,8 @@ function buildMiniGooby(track) {
 }
 
 // ---------------------------------------------------------------------------
-// V2/G22 (§C8.3): procedural garden pieces — benches, gnomes, birdbath, path
+// V2/G22 (§C8.3): procedural garden pieces — gnomes, birdbath, path
 // ---------------------------------------------------------------------------
-
-/**
- * Garden bench: 2 chunky legs + seat + backrest slats. The pastel variant is
- * the same build with painted colors (§C8.3).
- * @param {Track} track @param {{seat: string, legs: string}} colors
- */
-function buildGardenBench(track, colors) {
-  const grp = new THREE.Group();
-  grp.name = 'gardenBench';
-  const seatMat = standardMat(colors.seat, { roughness: 0.85 });
-  const legMat = standardMat(colors.legs, { roughness: 0.85 });
-  const legGeo = track.geo(new THREE.BoxGeometry(0.09, 0.24, 0.34));
-  for (const sx of [-1, 1]) {
-    const leg = new THREE.Mesh(legGeo, legMat);
-    leg.position.set(sx * 0.38, 0.12, 0);
-    grp.add(leg);
-  }
-  const slatGeo = track.geo(new THREE.BoxGeometry(0.92, 0.035, 0.13));
-  for (const dz of [-0.11, 0.045]) {
-    const slat = new THREE.Mesh(slatGeo, seatMat);
-    slat.position.set(0, 0.255, dz);
-    grp.add(slat);
-  }
-  const backGeo = track.geo(new THREE.BoxGeometry(0.92, 0.09, 0.035));
-  for (const dy of [0.4, 0.53]) {
-    const back = new THREE.Mesh(backGeo, seatMat);
-    back.position.set(0, dy, -0.185);
-    back.rotation.x = -0.14;
-    grp.add(back);
-  }
-  const postGeo = track.geo(new THREE.BoxGeometry(0.07, 0.36, 0.05));
-  for (const sx of [-1, 1]) {
-    const post = new THREE.Mesh(postGeo, legMat);
-    post.position.set(sx * 0.38, 0.42, -0.17);
-    post.rotation.x = -0.14;
-    grp.add(post);
-  }
-  return grp;
-}
 
 /**
  * Garden gnome (§C8.3): pointy hat, round body, white beard — the golden
@@ -781,7 +757,7 @@ function buildBirdbath(track) {
 
 /**
  * Placement anchors for the reward-only slots (§C6 decos). These slots have
- * no room-def entry (rooms/*.js are frozen wave-1 files), so createSlotHolder
+ * no room-def entry, so createSlotHolder
  * reads this table instead. Spots were picked clear of the fixed
  * interactables and existing decor slots of each room.
  * @type {Record<string, {at: readonly number[], rotY?: number}>}
@@ -845,151 +821,132 @@ function buildGoldfishBowl(track) {
 }
 
 /**
- * Golden watering can (veggies-set reward): the garden tool-can shape
- * (roomManager buildWateringCan) re-built in trophy gold on a little plinth.
- * @param {Track} track
+ * V3/G46 (§C11.1): build a catalog-compatible replacement from committed
+ * models. The cache masters stay immutable; any tint uses tracked material
+ * clones and preserves the loader's metalness normalization.
+ * @param {string} itemId @param {Track} track
  */
-function buildGoldenWateringCan(track) {
+function buildAssetReplacement(itemId, track) {
   const grp = new THREE.Group();
-  grp.name = 'goldenWateringCan';
-  const gold = standardMat('#E8C24A', { roughness: 0.3, metalness: 0.65 });
-  const plinth = new THREE.Mesh(
-    track.geo(new THREE.CylinderGeometry(0.2, 0.24, 0.1, 14)),
-    standardMat('#C9C4BA', { roughness: 0.9 })
-  );
-  plinth.position.y = 0.05;
-  grp.add(plinth);
-  const can = new THREE.Group();
-  can.position.y = 0.1;
-  const body = new THREE.Mesh(track.geo(new THREE.CylinderGeometry(0.13, 0.15, 0.24, 12)), gold);
-  body.position.y = 0.12;
-  can.add(body);
-  const spout = new THREE.Mesh(track.geo(new THREE.CylinderGeometry(0.025, 0.035, 0.28, 8)), gold);
-  spout.position.set(0.19, 0.19, 0);
-  spout.rotation.z = Math.PI / 2.6;
-  can.add(spout);
-  const rose = new THREE.Mesh(track.geo(new THREE.CylinderGeometry(0.05, 0.03, 0.04, 10)), gold);
-  rose.position.set(0.3, 0.26, 0);
-  rose.rotation.z = Math.PI / 2.6;
-  can.add(rose);
-  const handleTop = new THREE.Mesh(track.geo(new THREE.TorusGeometry(0.08, 0.016, 8, 14, Math.PI)), gold);
-  handleTop.position.set(-0.02, 0.24, 0);
-  can.add(handleTop);
-  const handleBack = new THREE.Mesh(track.geo(new THREE.TorusGeometry(0.09, 0.016, 8, 14, Math.PI)), gold);
-  handleBack.position.set(-0.14, 0.13, 0);
-  handleBack.rotation.z = Math.PI / 2;
-  can.add(handleBack);
-  grp.add(can);
-  return grp;
-}
+  grp.name = `${itemId.slice('proc:'.length)}-realAsset`;
+  grp.userData.assetKeys = DECOR_MODEL_KEYS[itemId];
 
-/**
- * Toy city (landmarks-set reward): a palm-sized skyline of pastel block
- * towers on a green base plate, tiny road across.
- * @param {Track} track
- */
-function buildToyCity(track) {
-  const grp = new THREE.Group();
-  grp.name = 'toyCity';
-  const plate = new THREE.Mesh(
-    track.geo(new THREE.BoxGeometry(0.52, 0.03, 0.4)),
-    standardMat('#9FD8A4', { roughness: 0.9 })
-  );
-  plate.position.y = 0.015;
-  grp.add(plate);
-  const road = new THREE.Mesh(
-    track.geo(new THREE.BoxGeometry(0.52, 0.006, 0.07)),
-    standardMat('#8B8B93', { roughness: 0.95 })
-  );
-  road.position.set(0, 0.033, 0.06);
-  grp.add(road);
-  // towers: [x, z, w, h, color] — tallest in back like a real skyline
-  const towers = [
-    [-0.18, -0.1, 0.1, 0.24, '#6EC6FF'],
-    [-0.05, -0.13, 0.09, 0.32, '#FF9E7B'],
-    [0.09, -0.09, 0.11, 0.2, '#FFD166'],
-    [0.2, -0.13, 0.08, 0.27, '#B39DDB'],
-    [-0.16, 0.13, 0.09, 0.12, '#59C9B9'],
-    [0.16, 0.13, 0.1, 0.15, '#FF7BA9'],
-  ];
-  for (const [x, z, w, h, color] of towers) {
-    const tower = new THREE.Mesh(
-      track.geo(new THREE.BoxGeometry(w, h, w)),
-      standardMat(color, { roughness: 0.7 })
-    );
-    tower.position.set(x, 0.03 + h / 2, z);
-    grp.add(tower);
-  }
-  // the sky-tower landmark: a thin spire with a ball top, city centerpiece
-  const spire = new THREE.Mesh(
-    track.geo(new THREE.ConeGeometry(0.028, 0.14, 8)),
-    standardMat('#F4F0E6', { roughness: 0.6 })
-  );
-  spire.position.set(0.02, 0.35, -0.12);
-  const ball = new THREE.Mesh(
-    track.geo(new THREE.SphereGeometry(0.016, 8, 8)),
-    standardMat('#FFD166', { roughness: 0.4, metalness: 0.3 })
-  );
-  ball.position.set(0.02, 0.43, -0.12);
-  const spireBase = new THREE.Mesh(
-    track.geo(new THREE.BoxGeometry(0.09, 0.25, 0.09)),
-    standardMat('#DCD6C6', { roughness: 0.7 })
-  );
-  spireBase.position.set(0.02, 0.155, -0.12);
-  grp.add(spireBase, spire, ball);
-  return grp;
-}
-
-/**
- * Candy jar (treats-set reward): glass jar stuffed with candy balls under a
- * cherry-red lid — kitchen counter eye-candy.
- * @param {Track} track
- */
-function buildCandyJar(track) {
-  const grp = new THREE.Group();
-  grp.name = 'candyJar';
-  const jar = new THREE.Mesh(
-    track.geo(new THREE.CylinderGeometry(0.085, 0.075, 0.17, 14, 1, true)),
-    track.mat(new THREE.MeshStandardMaterial({
-      color: '#EAF6FC', roughness: 0.08, transparent: true, opacity: 0.32, side: THREE.DoubleSide,
-    }))
-  );
-  jar.position.y = 0.085;
-  const bottom = new THREE.Mesh(
-    track.geo(new THREE.CylinderGeometry(0.075, 0.075, 0.012, 14)),
-    track.mat(new THREE.MeshStandardMaterial({
-      color: '#EAF6FC', roughness: 0.08, transparent: true, opacity: 0.4,
-    }))
-  );
-  bottom.position.y = 0.006;
-  const lid = new THREE.Mesh(
-    track.geo(new THREE.CylinderGeometry(0.09, 0.09, 0.035, 14)),
-    standardMat('#E0655F', { roughness: 0.5 })
-  );
-  lid.position.y = 0.19;
-  const knob = new THREE.Mesh(
-    track.geo(new THREE.SphereGeometry(0.022, 10, 8)),
-    standardMat('#FFD166', { roughness: 0.4, metalness: 0.3 })
-  );
-  knob.position.y = 0.22;
-  grp.add(jar, bottom, lid, knob);
-  // candy fill: layered pastel balls (deterministic layout — no Math.random)
-  const candyCols = ['#FF7BA9', '#FFD166', '#59C9B9', '#B39DDB', '#FF9E7B'];
-  const ballGeo = track.geo(new THREE.SphereGeometry(0.021, 8, 8));
-  let i = 0;
-  for (let layer = 0; layer < 3; layer += 1) {
-    const y = 0.028 + layer * 0.038;
-    const r = 0.048 - layer * 0.006;
-    const n = 6 - layer;
-    for (let k = 0; k < n; k += 1) {
-      const a = (k / n) * Math.PI * 2 + layer * 0.7;
-      const ballMesh = new THREE.Mesh(ballGeo, standardMat(candyCols[i % candyCols.length], { roughness: 0.35 }));
-      ballMesh.position.set(Math.cos(a) * r, y, Math.sin(a) * r);
-      grp.add(ballMesh);
-      i += 1;
+  if (itemId === 'proc:benchWood' || itemId === 'proc:benchPastel') {
+    const bench = assets.getModel('nature-kit/bench');
+    bench.scale.setScalar(FURNITURE_SCALE);
+    groundAndCenter(bench);
+    if (itemId === 'proc:benchPastel') {
+      cloneModelMaterials(bench, (mat) => {
+        if (!mat.color) return;
+        mat.color.set(mat.name === 'woodInner' ? '#FFB7D5' : '#8FD8CB');
+        if ('metalness' in mat) mat.metalness = 0;
+        if ('roughness' in mat) mat.roughness = 0.9;
+      }, track);
     }
+    grp.add(bench);
+    return grp;
   }
+
+  if (itemId === 'proc:goldenWateringCan') {
+    const gold = standardMat('#E8C24A', { roughness: 0.38, metalness: 0.55 });
+    const plinth = new THREE.Mesh(
+      track.geo(new THREE.CylinderGeometry(0.2, 0.24, 0.1, 14)),
+      standardMat('#C9C4BA', { roughness: 0.9 })
+    );
+    plinth.position.y = 0.05;
+    const bucket = assets.getModel('survival-kit/bucket');
+    bucket.scale.setScalar(1.48);
+    groundAndCenter(bucket);
+    bucket.position.y = 0.1;
+    cloneModelMaterials(bucket, (mat) => {
+      mat.color?.set('#E8C24A');
+      if ('metalness' in mat) mat.metalness = 0.55;
+      if ('roughness' in mat) mat.roughness = 0.38;
+    }, track);
+    // The real bucket supplies body + handle; the recognizable watering-can
+    // silhouette still needs a compact spout and rose (§C11.1 binding).
+    const spout = new THREE.Mesh(
+      track.geo(new THREE.CylinderGeometry(0.022, 0.034, 0.27, 8)),
+      gold
+    );
+    spout.position.set(0.19, 0.22, 0);
+    spout.rotation.z = Math.PI / 2.55;
+    const rose = new THREE.Mesh(
+      track.geo(new THREE.CylinderGeometry(0.052, 0.028, 0.04, 10)),
+      gold
+    );
+    rose.position.set(0.3, 0.285, 0);
+    rose.rotation.z = Math.PI / 2.55;
+    grp.add(plinth, bucket, spout, rose);
+    return grp;
+  }
+
+  if (itemId === 'proc:toyCity') {
+    const plate = new THREE.Mesh(
+      track.geo(new THREE.BoxGeometry(0.68, 0.035, 0.52)),
+      standardMat('#9FD8A4', { roughness: 0.9 })
+    );
+    plate.position.y = 0.0175;
+    grp.add(plate);
+    const pieces = [
+      ['toy-car-kit/track-narrow-straight', -0.2, 0.01, 0.085, 0],
+      ['toy-car-kit/track-narrow-curve', 0.12, -0.08, 0.082, Math.PI / 2],
+      ['toy-car-kit/track-narrow-corner-small', 0.16, 0.14, 0.09, Math.PI],
+    ];
+    for (const [key, x, z, scale, rotY] of pieces) {
+      const model = assets.getModel(key);
+      model.scale.setScalar(scale);
+      groundAndCenter(model);
+      const holder = new THREE.Group();
+      holder.position.set(x, 0.035, z);
+      holder.rotation.y = rotY;
+      holder.add(model);
+      grp.add(holder);
+    }
+    return grp;
+  }
+
+  if (itemId === 'proc:candyJar') {
+    const jar = assets.getModel('kaykit-restaurant/jar_A_large');
+    jar.scale.setScalar(0.34);
+    groundAndCenter(jar);
+    cloneModelMaterials(jar, (mat) => {
+      if (mat.color) mat.color.lerp(new THREE.Color('#FF7BA9'), 0.24);
+      if ('metalness' in mat) mat.metalness = 0;
+      if ('roughness' in mat) mat.roughness = Math.max(0.55, mat.roughness);
+    }, track);
+    grp.add(jar);
+    return grp;
+  }
+
   return grp;
+}
+
+/**
+ * Clone every distinct material in a model once, mutate the clones, and track
+ * them for slot-swap disposal. Cache-owned masters are never modified.
+ * @param {THREE.Object3D} model
+ * @param {(material: THREE.Material) => void} mutate
+ * @param {Track} track
+ */
+function cloneModelMaterials(model, mutate, track) {
+  const clones = new Map();
+  const cloneOne = (material) => {
+    if (!material) return material;
+    if (!clones.has(material)) {
+      const clone = material.clone();
+      clone.userData = { ...clone.userData, shared: false };
+      mutate(clone);
+      clones.set(material, track.mat(clone));
+    }
+    return clones.get(material);
+  };
+  model.traverse((obj) => {
+    if (!obj.isMesh || !obj.material) return;
+    obj.material = Array.isArray(obj.material)
+      ? obj.material.map(cloneOne)
+      : cloneOne(obj.material);
+  });
 }
 
 /** Free dirt path (§C8.3): 3 flattened earth patches in a walking line. */

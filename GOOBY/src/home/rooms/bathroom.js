@@ -59,6 +59,14 @@ export const ROOM = Object.freeze({
     }),
     // little plant on the sink top (plant decor slot)
     Object.freeze({ slot: 'plant', item: 'plantSmall2', at: Object.freeze([0.58, 0.88, -1.2]), rotY: 0 }),
+    // ---- V3/G46 (§C11.1): committed furniture-kit room dressing ----------
+    // A real ceiling fixture adds a focal point without touching tub/sink
+    // interactions or the saved decor slots.
+    Object.freeze({
+      item: 'lampSquareCeiling', at: Object.freeze([-0.1, 2.7, -0.2]),
+      rotY: 15, scale: 1.35, dressing: 'v3-real-asset',
+    }),
+    // ---- end V3/G46 --------------------------------------------------------
     // ---- V2/G22 (§C8.1): washer slot anchor on the right wall, in front of
     // the toilet (toilet z −1.02, hit depth 0.9 → clear from z ≈ −0.4) ----
     Object.freeze({ slot: 'washer', at: Object.freeze([1.38, 0, 0.1]), rotY: -90 }),

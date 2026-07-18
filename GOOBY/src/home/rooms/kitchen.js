@@ -65,6 +65,14 @@ export const ROOM = Object.freeze({
     }),
     // set dressing
     Object.freeze({ item: 'trashcan', at: Object.freeze([1.42, 0, -1.22]), rotY: 0 }),
+    // ---- V3/G46 (§C11.1): committed furniture-kit room dressing ----------
+    // Real coffee machine fills the last clear counter patch; the appliance
+    // slot and all of its saved variants remain untouched.
+    Object.freeze({
+      item: 'kitchenCoffeeMachine', at: Object.freeze([0.35, 0.71, -1.04]),
+      rotY: 0, scale: 1.05, dressing: 'v3-real-asset',
+    }),
+    // ---- end V3/G46 --------------------------------------------------------
     // ---- V2/G22 (§C8.1): bar slot anchor on the left, facing the table ----
     Object.freeze({
       slot: 'bar', at: Object.freeze([-1.15, 0, 0.62]), rotY: 90,

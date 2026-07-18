@@ -227,6 +227,45 @@ test('every placed furniture item (incl. set pieces + variant sets) exists in th
   }
 });
 
+test('V3/G46 static room dressing uses committed real assets within the per-room cap', () => {
+  const expected = {
+    kitchen: ['kitchenCoffeeMachine'],
+    living: ['lampSquareCeiling'],
+    bathroom: ['lampSquareCeiling'],
+    bedroom: ['plantSmall1'],
+    garden: ['nature-kit/fence_gate', 'nature-kit/bench'],
+  };
+  for (const def of DEFS) {
+    const dressing = def.furniture.filter((entry) => entry.dressing === 'v3-real-asset');
+    assert.ok(dressing.length <= 3, `${def.id}: more than 3 static dressing entries`);
+    assert.deepEqual(dressing.map((entry) => entry.item), expected[def.id], `${def.id}: dressing`);
+    for (const entry of dressing) {
+      assert.ok(itemExists(entry.item), `${def.id}: dressing '${entry.item}' missing from manifest`);
+    }
+  }
+});
+
+test('V3/G46 garden uses real additions but keeps the compost identity item procedural', () => {
+  const items = new Set(
+    GARDEN.furniture.flatMap((entry) => [
+      ...(entry.item ? [entry.item] : []),
+      ...(entry.pieces?.map((piece) => piece.item) ?? []),
+    ])
+  );
+  for (const key of [
+    'nature-kit/bench',
+    'nature-kit/fence_gate',
+    'nature-kit/flower_purpleA',
+    'nature-kit/flower_redA',
+    'nature-kit/stump_round',
+  ]) {
+    assert.ok(items.has(key), `garden missing ${key}`);
+  }
+  const compost = GARDEN.furniture.find((entry) => entry.interact === 'compost');
+  assert.equal(compost?.proc, 'compostBin');
+  assert.equal(compost?.item, undefined);
+});
+
 test('all required anchors are present in their owning rooms', () => {
   for (const def of DEFS) {
     assert.ok(anchorNames(def).has('goobyIdle'), `${def.id}: missing goobyIdle anchor`);

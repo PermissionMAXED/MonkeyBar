@@ -55,6 +55,14 @@ export const ROOM = Object.freeze({
     // plushie bear lying on the bed by the pillow (the GLB is authored lying
     // on its back — on the floor it reads as a knocked-over toy)
     Object.freeze({ slot: 'plushie', item: 'bear', at: Object.freeze([-1.18, 0.31, -0.28]), rotY: -20, scale: 0.75 }),
+    // ---- V3/G46 (§C11.1): committed furniture-kit room dressing ----------
+    // Tiny real plant beside the table lamp; no saved sideTable/floorClutter
+    // placement is consumed.
+    Object.freeze({
+      item: 'plantSmall1', at: Object.freeze([0.07, 0.59, -1.24]),
+      rotY: -18, scale: 1.1, dressing: 'v3-real-asset',
+    }),
+    // ---- end V3/G46 --------------------------------------------------------
     // ---- V2/G22 (§C8.1): new slot anchors (empty until bought) ----
     // side furniture past the bed's footboard on the left (bed spans z ≈ −1.5…0.4)
     Object.freeze({ slot: 'sideTable', at: Object.freeze([-1.4, 0, 0.95]), rotY: 20 }),
