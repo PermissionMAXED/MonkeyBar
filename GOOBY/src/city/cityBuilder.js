@@ -314,11 +314,14 @@ const BUILDINGS = Object.freeze({
 const MAIN_BUILDING_IDS = Object.freeze([
   'building-a', 'building-b', 'building-d', 'building-e', 'building-f', 'building-g', 'building-h',
 ]);
-const TOWER_IDS = Object.freeze(['low-detail-building-a', 'low-detail-building-d', 'low-detail-building-e']);
+const TOWER_IDS = Object.freeze(['low-detail-building-a']);
 
 /** Nature filler palette (nature-kit whitelist §D1). */
-const TREE_IDS = Object.freeze(['tree_default', 'tree_oak', 'tree_fat', 'tree_pineRoundA']);
-const SHRUB_IDS = Object.freeze(['plant_bush', 'rock_smallA', 'flower_redA', 'flower_yellowA']);
+// V3/G46: keep two tree silhouettes plus one background shrub batch while
+// removing old non-collidable scenery calls to fund the real city and shop
+// props without raising the drive baseline (§C11.1).
+const TREE_IDS = Object.freeze(['tree_default', 'tree_pineRoundA']);
+const SHRUB_IDS = Object.freeze(['plant_bush']);
 
 /** V3/G46 (§C11.1): real sidewalk props, batched by key in buildCity(). */
 export const CITY_DRESSING_KEYS = Object.freeze([
@@ -348,7 +351,6 @@ export const CITY_ASSET_KEYS = Object.freeze([
   'city-kit-roads/road-crossroad',
   'city-kit-roads/road-crossing',
   'city-kit-roads/tile-low',
-  'city-kit-roads/light-square-double',
   'city-kit-roads/construction-barrier',
   ...MAIN_BUILDING_IDS.map((id) => `city-kit-commercial/${id}`),
   'city-kit-commercial/building-c',
@@ -790,14 +792,24 @@ export function generateCityLayout(seed) {
     props.push({ key, kind, x: p.x + rx, z: p.z + rz, rotY: rng() * Math.PI * 2 });
   }
 
-  // --- street lamps at the road nodes ---------------------------------------
+  // --- real streetlights at road nodes --------------------------------------
+  // V3/G46 (§C11.1): replace the old separate light-square-double batch with
+  // the already-preloaded KayKit streetlight batch. The placements stay visual
+  // only, so driving geometry and hitboxes remain unchanged.
   const lamps = [];
   for (let r = 0; r < GRID; r++) {
     for (let c = 0; c < GRID; c++) {
       const p = grid[r][c].piece;
       if (p !== 'road-intersection' && p !== 'road-crossroad') continue;
       const { x, z } = tileToWorld(r, c);
-      lamps.push({ x: x + 6.5, z: z + 6.5, rotY: 180 * DEG });
+      nature.push({
+        key: 'kaykit-city/streetlight',
+        x: x + 6.5,
+        z: z + 6.5,
+        rotY: 180 * DEG,
+        scale: 9,
+        area: 'cityDressing',
+      });
     }
   }
 
