@@ -1,6 +1,9 @@
 // Shop trip (§C4) — pure state machine transitions incl. the tow rule,
 // §C4.3 reward math (pickups + arrival + zero-crash), the §C4.2 energy cost
 // and arcade-mode isolation (no shop handoff, §C4.7).
+// V3/G38 (PLAN3 §C8.6/§B8): + the surf travel method („Laufen") — launch
+// spec, reward cap/bonus/×2-after-clamp math, trip counters for both
+// methods, and the unchanged sleep/vet flows.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -14,11 +17,18 @@ import {
   isTripMode, // V2/G21 (§C9.2)
   isVetDiscovered, // V2/G21 (§C9.2)
   canRequestTrip, // V2/FIX-C (P2-7)
+  SURF_TRAVEL, // V3/G38 (§C8.6)
+  isSurfTravel, // V3/G38 (§C8.6)
+  surfTravelRewards, // V3/G38 (§C8.6)
+  clampSurfTravelCoins, // V3/G38 (§C8.6)
+  tripLaunchSpec, // V3/G38 (§C8.6)
+  bumpTripCounters, // V3/G38 (§C4/§C8.6/§C9.2)
 } from '../src/systems/shopTrip.js';
 import { DRIVE, MINIGAME, COIN_TABLE, VET } from '../src/data/constants.js'; // V2/G21: + VET
-import { MINIGAMES } from '../src/data/minigames.js';
+import { MINIGAMES, computeCoins } from '../src/data/minigames.js'; // V3/G38: + computeCoins (×2-after-clamp proof)
 // V2/G21: vetTrip cure/checkup ride economy.payVet (§C3.5) — real store runs
-import { payVet, healthReady } from '../src/systems/economy.js';
+// V3/G38: + awardMinigame (the real surf-travel payout path incl. daily ×2)
+import { payVet, awardMinigame, healthReady } from '../src/systems/economy.js';
 import { defaultState } from '../src/core/save.js';
 import { createStore } from '../src/core/store.js';
 
@@ -237,3 +247,140 @@ test('V2/FIX-C canRequestTrip: awake (or legacy saves without a sleep slice) may
   assert.deepEqual(canRequestTrip({}), { ok: true }); // defensive: no slice
   assert.deepEqual(canRequestTrip(undefined), { ok: true });
 });
+
+// ── V3/G38: surf travel „Laufen" (PLAN3 §C8.6/§B8) ──────────────────────────
+
+test('V3 §B8: surf travel rides the SAME machine states verbatim (start → driveOut → arrive → shop → goHome → home)', () => {
+  // §B8 ruling: only the SCENE between 'start' and 'arrive' differs (the
+  // shoppingSurf run instead of the drive) — tripTransition is untouched.
+  let s = tripTransition(TRIP_STATE.HOME, 'start');
+  assert.equal(s, TRIP_STATE.DRIVE_OUT);
+  s = tripTransition(s, 'arrive'); // finish arch == parking trigger
+  assert.equal(s, TRIP_STATE.SHOP);
+  s = tripTransition(s, 'goHome');
+  assert.equal(s, TRIP_STATE.HOME);
+  // quit from pause mid-run cancels home, exactly like the drive
+  assert.equal(tripTransition(TRIP_STATE.DRIVE_OUT, 'cancel'), TRIP_STATE.HOME);
+});
+
+test('V3 §C8.6: tripLaunchSpec — travel-method field on the trip request', () => {
+  // drive stays the bit-identical default (regression: G39 owns the drive)
+  assert.deepEqual(tripLaunchSpec(), { gameId: 'cityDrive', mode: 'shopTrip', method: 'drive' });
+  assert.deepEqual(tripLaunchSpec('shopTrip', 'drive'), { gameId: 'cityDrive', mode: 'shopTrip', method: 'drive' });
+  // surf method launches G37's shoppingSurf in travel mode
+  assert.deepEqual(tripLaunchSpec('shopTrip', 'surf'), { gameId: 'shoppingSurf', mode: 'surfTravel', method: 'surf' });
+  // the vet destination stays a drive (§C9.2 row unchanged), even if asked
+  assert.deepEqual(tripLaunchSpec('vetTrip', 'surf'), { gameId: 'cityDrive', mode: 'vetTrip', method: 'drive' });
+  assert.deepEqual(tripLaunchSpec('vetTrip'), { gameId: 'cityDrive', mode: 'vetTrip', method: 'drive' });
+  // unknown methods degrade to the drive — never a stranded machine
+  assert.deepEqual(tripLaunchSpec('shopTrip', 'skateboard'), { gameId: 'cityDrive', mode: 'shopTrip', method: 'drive' });
+});
+
+test('V3 §C8.6: isSurfTravel accepts the canonical mode + the G37 §E alias, nothing else', () => {
+  assert.equal(isSurfTravel('surfTravel'), true);
+  assert.equal(isSurfTravel('travel'), true); // G37's §E block naming
+  assert.equal(isSurfTravel('shopTrip'), false);
+  assert.equal(isSurfTravel('vetTrip'), false);
+  assert.equal(isSurfTravel('arcade'), false);
+  assert.equal(isSurfTravel(undefined), false);
+});
+
+test('V3 §C8.6: mode helpers — surf arrival hands off to the SHOP; drive-guidance modes unchanged', () => {
+  // identical arrive → shop handoff (§C8.6 finish arch)
+  assert.equal(isShopHandoff('surfTravel'), true);
+  assert.equal(isShopHandoff('travel'), true);
+  assert.equal(isVetHandoff('surfTravel'), false);
+  // isTripMode stays the cityDrive guidance predicate ('shopTrip'|'vetTrip')
+  // — G39's drive must not see a new guided mode (§C7.3 invariant).
+  assert.equal(isTripMode('surfTravel'), false);
+  assert.equal(isTripMode('travel'), false);
+});
+
+test('V3 §C8.6: reward math — collected coins capped 30, +5 „Sauberer Lauf", max 35', () => {
+  assert.equal(surfTravelRewards({ coins: 12, crashes: 0 }), 12 + SURF_TRAVEL.CLEAN_BONUS); // 17
+  assert.equal(surfTravelRewards({ coins: 12, crashes: 2 }), 12); // crashes forfeit only the bonus
+  assert.equal(surfTravelRewards({ coins: 40, crashes: 0 }), SURF_TRAVEL.MAX_COINS); // 30 cap + 5 = 35
+  assert.equal(surfTravelRewards({ coins: 40, crashes: 3 }), SURF_TRAVEL.COIN_CAP); // 30
+  assert.equal(surfTravelRewards({ coins: 0, crashes: 0 }), SURF_TRAVEL.CLEAN_BONUS); // clean broke run pays 5
+  assert.equal(surfTravelRewards(), SURF_TRAVEL.CLEAN_BONUS); // defensive default
+  // §C8.6 "exactly cityDrive's trip cap": 35 == the drive table max
+  assert.equal(SURF_TRAVEL.MAX_COINS, COIN_TABLE.cityDrive.max);
+  assert.equal(SURF_TRAVEL.COIN_CAP + SURF_TRAVEL.CLEAN_BONUS, SURF_TRAVEL.MAX_COINS);
+});
+
+test('V3 §C8.6: reward math is defensive — fractions floor, negatives clamp', () => {
+  assert.equal(surfTravelRewards({ coins: 12.9, crashes: 1 }), 12);
+  assert.equal(surfTravelRewards({ coins: -5, crashes: 0 }), SURF_TRAVEL.CLEAN_BONUS);
+  assert.equal(clampSurfTravelCoins(99), SURF_TRAVEL.MAX_COINS);
+  assert.equal(clampSurfTravelCoins(17), 17);
+  assert.equal(clampSurfTravelCoins(-3), 0);
+  assert.equal(clampSurfTravelCoins(NaN), 0);
+});
+
+test('V3 §C8.6: daily-first-play ×2 applies AFTER the clamp (shared rules)', () => {
+  const reward = surfTravelRewards({ coins: 40, crashes: 0 }); // clamps to 35
+  assert.equal(computeCoins(COIN_TABLE.shoppingSurf, 0, false, reward), 35);
+  assert.equal(computeCoins(COIN_TABLE.shoppingSurf, 0, true, reward), 70); // ×2 AFTER clamp
+  const smallRun = surfTravelRewards({ coins: 12, crashes: 0 }); // 17, under the cap
+  assert.equal(computeCoins(COIN_TABLE.shoppingSurf, 0, true, smallRun), 34);
+});
+
+test('V3 §C8.6: the REAL payout path — awardMinigame pays the override, ×2 exactly once per day', () => {
+  const store = makeStore();
+  const first = awardMinigame(store, 'shoppingSurf', 35, {
+    coinsOverride: surfTravelRewards({ coins: 40, crashes: 0 }),
+  });
+  assert.equal(first.firstToday, true);
+  assert.equal(first.coins, 70); // 35 clamped, THEN doubled
+  // second travel run the same local day: no ×2 (lastPlayDay is per GAME —
+  // arcade and travel runs share shoppingSurf's daily flag, like cityDrive)
+  const second = awardMinigame(store, 'shoppingSurf', 12, {
+    coinsOverride: surfTravelRewards({ coins: 12, crashes: 2 }),
+  });
+  assert.equal(second.firstToday, false);
+  assert.equal(second.coins, 12);
+});
+
+test('V3 §C8.6: trips counter +1 for BOTH travel methods; vet bump unchanged; surfRuns NOT here', () => {
+  const counters = defaultState().achievements.counters;
+  bumpTripCounters(counters, 'shopTrip'); // drive arrival
+  assert.equal(counters.trips, 1);
+  bumpTripCounters(counters, 'shopTrip'); // surf arrival — same shared bump
+  assert.equal(counters.trips, 2);
+  assert.equal(counters.vetTrips, 0);
+  bumpTripCounters(counters, 'vetTrip');
+  assert.equal(counters.trips, 3);
+  assert.equal(counters.vetTrips, 1);
+  // surfRuns counts finished shoppingSurf ROUNDS (both game modes) and is
+  // bumped ONLY by the framework's onEnd forwarding — never on arrival.
+  assert.equal(counters.surfRuns, 0);
+  // defensive: legacy counter shapes without the keys
+  assert.deepEqual(bumpTripCounters({}), { trips: 1 });
+});
+
+test('V3 §C8.6: energy + unlock spine — travel rate 6 from L1, arcade tile stays 8/L5', () => {
+  assert.equal(SURF_TRAVEL.ENERGY, MINIGAME.DRIVE_ENERGY_COST); // car-game rate
+  assert.equal(SURF_TRAVEL.ENERGY, 6);
+  const meta = MINIGAMES.find((m) => m.id === 'shoppingSurf');
+  assert.ok(meta, 'shoppingSurf registered in data/minigames.js');
+  // the ARCADE tile keeps its own row (§C8.5): 8 energy, L5 — the framework
+  // charges SURF_TRAVEL.ENERGY and skips the lock ONLY for travel launches.
+  assert.equal(meta.energyCost, MINIGAME.ENERGY_COST);
+  assert.equal(meta.minLevel, 5);
+});
+
+test('V3 §C8.6: binding run numbers — 700 m fixed distance, 7 m/s forgiveness jog', () => {
+  assert.equal(SURF_TRAVEL.DISTANCE_M, 700);
+  assert.equal(SURF_TRAVEL.JOG_SPEED, 7);
+  assert.equal(SURF_TRAVEL.GAME_ID, 'shoppingSurf');
+  assert.equal(SURF_TRAVEL.MODE, 'surfTravel');
+});
+
+test('V3 §C8.6: sleeping gate covers BOTH methods — the chooser sheet never opens asleep', () => {
+  // canRequestTrip guards the sheet itself; both options live behind it, so
+  // one refusal blocks Fahren AND Laufen (v2 rule carried forward).
+  const asleep = defaultState();
+  asleep.sleep = { sleeping: true, startedAt: 1, wakeAt: 2 };
+  assert.deepEqual(canRequestTrip(asleep), { ok: false, reason: 'sleeping' });
+});
+// ── end V3/G38 ──────────────────────────────────────────────────────────────

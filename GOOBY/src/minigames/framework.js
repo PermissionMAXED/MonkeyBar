@@ -19,6 +19,11 @@ import { onMinigameEnd as weightOnMinigameEnd } from '../systems/weight.js';
 import { getAchievementsEngine } from '../systems/achievementsEngine.js';
 import { now } from '../core/clock.js';
 // ── end V2/G23 imports ──
+// V3/G38 (§C8.6): surf-travel mode helpers — the „Laufen" run launches
+// shoppingSurf with mode 'surfTravel' (alias 'travel') and rides the same
+// trip-results/payout path as cityDrive's shopTrip mode. Cycle-free: nothing
+// in shopTrip.js's import chain imports this module.
+import { isSurfTravel, clampSurfTravelCoins } from '../systems/shopTrip.js';
 import { hasGame, loadGame } from './registry.js';
 import { icon } from '../ui/icons.js';
 import { burstConfettiDom, flyCoinsDom } from '../gfx/particles.js'; // G14: results polish
@@ -98,7 +103,9 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
       // payout (§C4.3 pickups + bonuses), so Score/Best rows would repeat the
       // coins with arcade wording. Trip results show the earned coins only
       // (existing strings; the trip flavor line reuses 'trip.earned').
-      const isTrip = r.launchParams?.mode === 'shopTrip';
+      // V3/G38 (§C8.6): a surf-travel run gets the IDENTICAL coins-only trip
+      // layout + „Laden/Shop" continue button — same arrival handoff.
+      const isTrip = r.launchParams?.mode === 'shopTrip' || isSurfTravel(r.launchParams?.mode);
       const rows = isTrip
         ? `<div class="mg-results-row"><span>${t('mg.results.coins')}</span><span class="mg-value">${icon('coin', 20)} +${r.coins}${dailyBadge}</span></div>`
         : `<div class="mg-results-row"><span>${t('mg.results.score')}</span><span class="mg-value">${r.score}${bestBadge}</span></div>
@@ -217,7 +224,18 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
         if (holeInOnes > 0) engine.track('holeInOnes', holeInOnes);
         const deliveries = Math.floor(Number(gameMeta?.deliveries) || 0);
         if (deliveries > 0) engine.track('deliveries', deliveries);
-        if (gameMeta && Number(gameMeta.crashes) === 0 && launchParams?.mode !== 'shopTrip') {
+        // ── V3/G38 (§C8.5/§C8.6): shoppingSurf counters — BOTH modes bump
+        // surfRuns (sticker 'surfStar' rides it via the stickerBook counter
+        // watcher) + surfDistanceM from the §B3 meta. Single count site: the
+        // arrival flow in systems/shopTrip.js deliberately does NOT bump them.
+        if (gameId === 'shoppingSurf') {
+          engine.track('surfRuns');
+          const surfDist = Math.floor(Number(gameMeta?.distanceM) || 0);
+          if (surfDist > 0) engine.track('surfDistanceM', surfDist);
+        }
+        // ── end V3/G38 ────────────────────────────────────────────────────
+        if (gameMeta && Number(gameMeta.crashes) === 0 && launchParams?.mode !== 'shopTrip'
+          && gameId !== 'shoppingSurf') { // V3/G38: surf stumbles aren't drives — cleanDrive stays a car-game quest (§C8.6 pays its own clean bonus)
           quests.track('cleanDrive', 1);
         }
         const hour = new Date(now()).getHours();
@@ -421,9 +439,16 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
       running = false;
       const s = typeof finalScore === 'number' ? finalScore : score;
 
+      // V3/G38 (§C8.6): defensive travel-reward ceiling — a surf-travel run
+      // pays the game's collected-coins override, but never more than
+      // cap 30 + clean bonus 5 = 35 (== cityDrive's trip cap). Clamped
+      // BEFORE awardMinigame so the daily ×2 applies AFTER the clamp.
+      const coinsPaid = typeof coinsOverride === 'number' && isSurfTravel(launchParams?.mode)
+        ? clampSurfTravelCoins(coinsOverride)
+        : coinsOverride;
       // G11: economy.awardMinigame is the single payout path (§C6 coins incl.
       // daily ×2, +fun, XP + level-up coins, plays/best/lastPlayDay — §C1.5).
-      const reward = awardMinigame(store, meta.id, s, { coinsOverride });
+      const reward = awardMinigame(store, meta.id, s, { coinsOverride: coinsPaid });
 
       // ── V2/G23: §B3 meta forwarding + progression wiring ─────────────────
       forwardProgression(meta.id, reward.score, reward.coins, gameMeta, launchParams, !!meta.dev);
@@ -493,8 +518,13 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
           await countdown();
           if (exited) return;
           // Energy cost is charged when the round actually starts (§C6).
+          // V3/G38 (§C8.6): a surf TRAVEL run costs the car-game rate (6,
+          // like the drive it replaces) — the arcade tile keeps its 8.
+          const energyCost = isSurfTravel(launchParams.mode)
+            ? MINIGAME.DRIVE_ENERGY_COST
+            : meta.energyCost;
           store.update((state) => {
-            state.stats.energy = clampStat(state.stats.energy - meta.energyCost);
+            state.stats.energy = clampStat(state.stats.energy - energyCost);
           });
           running = true;
         })();
@@ -590,7 +620,10 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
       return false;
     }
     const level = store.get('level');
-    if (!params.dev && !meta.dev && !isMinigameUnlocked(id, level)) {
+    // V3/G38 (§C8.6): the surf-travel run („Laufen" to the shop) is available
+    // from L1 like the drive — only the shoppingSurf ARCADE tile is L5-locked.
+    const surfTravelLaunch = id === 'shoppingSurf' && isSurfTravel(params.mode);
+    if (!params.dev && !meta.dev && !surfTravelLaunch && !isMinigameUnlocked(id, level)) {
       ui.toast('mg.locked', { level: meta.minLevel });
       return false;
     }

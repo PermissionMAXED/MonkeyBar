@@ -30,6 +30,22 @@
 // G20's careSheet store event 'vetTripRequested' (straight to the vet
 // confirm). Landmark sticker + distance events from cityDrive land here too
 // (the drive plugin has no store access — see games/cityDrive.js).
+//
+// V3/G38 (PLAN3 §C8.6/§B8): the SECOND TRAVEL METHOD — the shop-trip request
+// gains a travel-method field ('drive' | 'surf'). The former drive-only
+// confirm sheet is now the two-option chooser „Fahren 🚗 / Laufen 🏃" (both
+// show the 6-energy cost). method 'surf' launches the shoppingSurf flagship
+// in travel mode (framework.launch('shoppingSurf', { mode: 'surfTravel',
+// onArrive, onExit }) — G37's module; 'travel' is accepted as a mode alias)
+// between 'start' and 'arrive' INSTEAD of the drive scene. The machine's
+// states are reused verbatim (§B8: start → driveOut → shop; tripTransition
+// untouched) and the arrival → shop handoff is identical to a drive arrival.
+// Rewards ride the framework's onEnd coins override exactly like cityDrive:
+// coins collected capped 30 + 5 „Sauberer Lauf" zero-crash bonus = max 35
+// (== cityDrive's trip cap), daily-first-play ×2 AFTER the clamp. The trips
+// counter bumps +1 on arrival for BOTH methods; surfRuns/surfDistanceM bump
+// on every finished shoppingSurf round (both modes — framework marked block).
+// The vet destination stays drive-only. Dev kick: ?travel=surf (§E9).
 
 import { DRIVE, COIN_TABLE, MINIGAME, VET } from '../data/constants.js'; // V2/G21: + VET (§C9.2)
 import { t } from '../data/strings.js';
@@ -124,13 +140,14 @@ export function driveRewards({ mode = 'shopTrip', pickups = 0, crashes = 0, towe
 }
 
 /**
- * Whether a drive result may hand off to the shop (§C4.7: arcade mode ends
- * on the normal results screen — no shop).
+ * Whether a trip result may hand off to the shop (§C4.7: arcade mode ends
+ * on the normal results screen — no shop). V3/G38: a surf-travel arrival
+ * (§C8.6 finish arch) hands off to the IDENTICAL shop flow.
  * @param {'shopTrip'|'vetTrip'|'arcade'|string} mode
  * @returns {boolean}
  */
 export function isShopHandoff(mode) {
-  return mode === 'shopTrip';
+  return mode === 'shopTrip' || isSurfTravel(mode);
 }
 
 // ── V2/G21: vetTrip mode helpers (§C9.2, pure) ──────────────────────────────
@@ -175,7 +192,8 @@ export function isVetDiscovered(state) {
  * V2/FIX-C P2-7: whether a trip confirm/destination sheet may OPEN at all.
  * Pure on the §B2 save state. A sleeping Gooby can't be taken on a trip —
  * the framework already refuses the drive cleanly, but the sheet shouldn't
- * even offer (toast 'toast.sleeping' instead).
+ * even offer (toast 'toast.sleeping' instead). V3/G38: method-agnostic by
+ * design — the sleeping gate covers BOTH travel methods (§C8.6).
  * @param {object} state §B2 save-state root (store.get())
  * @returns {{ok: boolean, reason?: 'sleeping'}}
  */
@@ -183,6 +201,108 @@ export function canRequestTrip(state) {
   if (state?.sleep?.sleeping) return { ok: false, reason: 'sleeping' };
   return { ok: true };
 }
+
+// ── V3/G38: surf travel „Laufen" (§C8.6/§B8, pure) ──────────────────────────
+// Engine-internal exact numbers live HERE as frozen consts (§E0.1-2 pattern —
+// constants.js is read-only). The run itself (700 m, forgiveness jog, finish
+// arch) is G37's shoppingSurf module; this side owns the machine wiring, the
+// launch contract and the payout clamp.
+
+/** §C8.6 binding numbers for the surf travel method (frozen). */
+export const SURF_TRAVEL = Object.freeze({
+  /** framework.launch game id (G37's flagship module). */
+  GAME_ID: 'shoppingSurf',
+  /** Canonical ctx.params.mode for a travel run (mirrors 'shopTrip'). */
+  MODE: 'surfTravel',
+  /** Accepted mode spellings — G37's §E block names plain 'travel'. */
+  MODE_ALIASES: Object.freeze(['surfTravel', 'travel']),
+  /** Fixed run distance in meters (enforced by the game, §C8.6). */
+  DISTANCE_M: 700,
+  /** Post-3rd-crash forgiveness jog speed in m/s (game-side, §C8.6). */
+  JOG_SPEED: 7,
+  /** Collected-coin reward cap (§C8.6). */
+  COIN_CAP: 30,
+  /** „Sauberer Lauf" zero-crash bonus (§C8.6). */
+  CLEAN_BONUS: 5,
+  /** Absolute payout ceiling pre-×2 = 30 + 5 — exactly cityDrive's trip cap. */
+  MAX_COINS: 35,
+  /** Energy cost: the car-game rate (§C8.6 — 6, like the drive), from L1. */
+  ENERGY: MINIGAME.DRIVE_ENERGY_COST,
+});
+
+/**
+ * Whether a launch/results mode is the §C8.6 surf-travel run. Accepts the
+ * canonical 'surfTravel' plus the 'travel' alias (G37 §E naming) so the
+ * team-SURF integration cannot fall through to arcade semantics.
+ * @param {string|undefined} mode ctx.params.mode / launchParams.mode
+ * @returns {boolean}
+ */
+export function isSurfTravel(mode) {
+  return SURF_TRAVEL.MODE_ALIASES.includes(mode);
+}
+
+/**
+ * §C8.6 trip-reward math for a surf-travel run (paid via the framework's
+ * onEnd coins override, mirroring driveRewards): coins collected during the
+ * run capped at 30, +5 „Sauberer Lauf" bonus for 0 crashes → max 35. The
+ * daily-first-play ×2 is NOT applied here — computeCoins applies it AFTER
+ * this clamp, per the shared rules (§C6).
+ * @param {{coins?: number, crashes?: number}} result finish-arch run result
+ * @returns {number} coins to pay (pre-×2)
+ */
+export function surfTravelRewards({ coins = 0, crashes = 0 } = {}) {
+  const collected = Math.max(0, Math.floor(Number(coins) || 0));
+  const capped = Math.min(collected, SURF_TRAVEL.COIN_CAP);
+  const clean = Number(crashes) === 0 ? SURF_TRAVEL.CLEAN_BONUS : 0;
+  return capped + clean;
+}
+
+/**
+ * Defensive payout ceiling for the framework's surf-travel coins override:
+ * whatever the game reports, a travel run can never pay more than
+ * cap 30 + bonus 5 = 35 pre-×2 (== cityDrive's trip cap, §C8.6).
+ * @param {number} coins the game's onEnd coins override
+ * @returns {number}
+ */
+export function clampSurfTravelCoins(coins) {
+  return Math.max(0, Math.min(Math.floor(Number(coins) || 0), SURF_TRAVEL.MAX_COINS));
+}
+
+/**
+ * Pure launch spec for a trip request (§C8.6/§B8): maps destination mode ×
+ * travel method onto the framework launch (game id + ctx.params.mode). The
+ * surf method exists for the SHOP destination only — the vet trip stays a
+ * drive (the §C9.2 sheet keeps its row unchanged), and unknown methods
+ * degrade to the drive so a stale caller can never strand the machine.
+ * @param {'shopTrip'|'vetTrip'} [mode] destination trip mode
+ * @param {'drive'|'surf'} [method] travel method picked on the door sheet
+ * @returns {{gameId: string, mode: string, method: 'drive'|'surf'}}
+ */
+export function tripLaunchSpec(mode = 'shopTrip', method = 'drive') {
+  if (mode === 'shopTrip' && method === 'surf') {
+    return { gameId: SURF_TRAVEL.GAME_ID, mode: SURF_TRAVEL.MODE, method: 'surf' };
+  }
+  return { gameId: 'cityDrive', mode, method: 'drive' };
+}
+
+/**
+ * Arrival counter bump (§C4/§C8.6/§C9.2, pure on the counters slice):
+ * EVERY guided trip counts as a trip — BOTH travel methods (drive25 /
+ * roadTripper ride this); vet arrivals additionally bump vetTrips. surfRuns
+ * is NOT bumped here — it counts finished shoppingSurf ROUNDS of both modes
+ * and rides the framework's onEnd forwarding instead (single count site).
+ * @param {object} counters achievements.counters slice (mutated + returned)
+ * @param {'shopTrip'|'vetTrip'} [mode] destination of the arriving trip
+ * @returns {object} counters
+ */
+export function bumpTripCounters(counters, mode = 'shopTrip') {
+  counters.trips = (counters.trips ?? 0) + 1;
+  if (mode === 'vetTrip') {
+    counters.vetTrips = (counters.vetTrips ?? 0) + 1;
+  }
+  return counters;
+}
+// ── end V3/G38 ──────────────────────────────────────────────────────────────
 
 // ---------------------------------------------------------------------------
 // Runtime wiring (DOM/scene work only happens inside the injected deps'
@@ -206,10 +326,12 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
   const machine = createTripMachine((state, event) => {
     if (isDev) console.info(`[shopTrip] ${event} → ${state}`);
   });
-  /** Last arrival result from cityDrive (for the shop panel / autopilot). */
+  /** Last arrival result from the trip game (for the shop panel / autopilot). */
   let lastArrival = null;
   /** V2/G21 (§C9.2): destination of the trip in flight ('shopTrip'|'vetTrip'). */
   let tripMode = 'shopTrip';
+  /** V3/G38 (§C8.6): travel method of the trip in flight ('drive'|'surf'). */
+  let tripMethod = 'drive';
 
   const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV;
   const urlFlag = (name) =>
@@ -218,24 +340,45 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
   const autopilot = urlFlag('autopilot');
 
   // ---------------------------------------------------------------- panels
-  // Confirm sheet (§C4.1: „Zum Laden fahren? / Drive to the shop?").
+  // V3/G38 (§C8.6): the former drive-only confirm sheet („Zum Laden fahren?")
+  // is now the TWO-OPTION travel chooser — „Fahren 🚗" (cityDrive trip) or
+  // „Laufen 🏃" (shoppingSurf travel run), BOTH showing the 6-energy cost.
+  // Panel id kept ('shopTripConfirm') so every entry point — front door, HUD
+  // button, destination picker's Laden row — reaches the chooser unchanged.
+  // Layout reuses the §C9.2 .dest-pick/.dest-option classes (styles.css).
   ui.registerPanel('shopTripConfirm', {
     /** @param {HTMLElement} el */
     mount(el) {
       el.innerHTML = `
-        <div style="text-align:center">
-          <h2 class="perm-title">${t('trip.confirm')}</h2>
-          <p class="perm-body">${t('trip.confirmBody', { energy: MINIGAME.DRIVE_ENERGY_COST })}</p>
-          <div class="mg-btn-row">
-            <button class="btn btn-teal trip-yes">${t('trip.go')}</button>
-            <button class="btn btn-ghost trip-no">${t('ui.later')}</button>
-          </div>
+        <div class="dest-pick">
+          <h2 class="perm-title">${t('travel.title')}</h2>
+          <button class="dest-option travel-opt-drive">
+            <span class="dest-emoji" aria-hidden="true">🚗</span>
+            <span class="dest-text">
+              <span class="dest-name">${t('travel.drive')}</span>
+              <span class="dest-sub">${t('travel.driveSub', { energy: MINIGAME.DRIVE_ENERGY_COST })}</span>
+            </span>
+          </button>
+          <button class="dest-option travel-opt-run">
+            <span class="dest-emoji" aria-hidden="true">🏃</span>
+            <span class="dest-text">
+              <span class="dest-name">${t('travel.run')}</span>
+              <span class="dest-sub">${t('travel.runSub', { energy: SURF_TRAVEL.ENERGY })}</span>
+            </span>
+          </button>
+          <button class="btn btn-ghost travel-later">${t('ui.later')}</button>
         </div>`;
-      el.querySelector('.trip-yes').addEventListener('click', () => {
+      el.querySelector('.travel-opt-drive').addEventListener('click', () => {
+        audio.play('ui.pick');
         ui.closePanel('shopTripConfirm');
-        startTrip();
+        startTrip('shopTrip', 'drive');
       });
-      el.querySelector('.trip-no').addEventListener('click', () => ui.closePanel('shopTripConfirm'));
+      el.querySelector('.travel-opt-run').addEventListener('click', () => {
+        audio.play('ui.pick');
+        ui.closePanel('shopTripConfirm');
+        startTrip('shopTrip', 'surf');
+      });
+      el.querySelector('.travel-later').addEventListener('click', () => ui.closePanel('shopTripConfirm'));
     },
     unmount() {},
   });
@@ -268,7 +411,8 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
 
   // Destination picker sheet („Laden / Tierarzt" with prices) — the front
   // door / HUD entry once the vet is discovered; each option opens its
-  // destination's confirm sheet. G28's deliveryRush reuses this flow.
+  // destination's confirm sheet (V3/G38: the Laden row now opens the travel
+  // CHOOSER above — same panel id). G28's deliveryRush reuses this flow.
   ui.registerPanel('cityDestinations', {
     /** @param {HTMLElement} el */
     mount(el) {
@@ -380,7 +524,11 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
     }, 600);
   }
 
-  /** cityDrive calls this at the parking trigger / after the tow (§C4.3/.5). */
+  /**
+   * The trip game calls this at the destination trigger — cityDrive's parking
+   * spot / tow drop-off (§C4.3/.5) or shoppingSurf's finish arch (§C8.6).
+   * Identical handoff for both travel methods.
+   */
   function onArrive(result) {
     lastArrival = result;
     machine.arrive();
@@ -388,12 +536,10 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
     // shop-trip counter for the firstDrive/drive25 achievements (§C8.3 — G12
     // reads achievements.counters.trips). V2/G21: EVERY guided trip counts as
     // a trip; vet arrivals additionally bump vetTrips (§C9.2 — discovery +
-    // the §C5.3 vet achievements).
+    // the §C5.3 vet achievements). V3/G38: pure helper — trips +1 for BOTH
+    // travel methods (§C8.6: a surf run to the shop IS a shop trip).
     store.update((state) => {
-      state.achievements.counters.trips = (state.achievements.counters.trips ?? 0) + 1;
-      if (tripMode === 'vetTrip') {
-        state.achievements.counters.vetTrips = (state.achievements.counters.vetTrips ?? 0) + 1;
-      }
+      bumpTripCounters(state.achievements.counters, tripMode);
     });
   }
 
@@ -410,16 +556,26 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
   }
 
   /**
-   * Launch the drive (§C4.2) — the framework re-checks sleep/energy.
+   * Launch the trip (§C4.2/§C8.6) — the framework re-checks sleep/energy/sick.
    * V2/G21: `mode` picks the destination ('shopTrip' default | 'vetTrip').
+   * V3/G38: `method` picks the travel method ('drive' default | 'surf' —
+   * shop destination only, per tripLaunchSpec). The surf path launches
+   * G37's shoppingSurf in travel mode between 'start' and 'arrive' instead
+   * of the drive scene — same machine states, same onArrive/onExit handoff.
+   * While the module isn't in the tree yet (§E0.1-11 degrade rule) the
+   * framework refuses with 'toast.minigameMissing' and the machine cancels
+   * cleanly back home.
    * @param {'shopTrip'|'vetTrip'} [mode]
+   * @param {'drive'|'surf'} [method]
    */
-  async function startTrip(mode = 'shopTrip') {
+  async function startTrip(mode = 'shopTrip', method = 'drive') {
     if (machine.state() !== TRIP_STATE.HOME) machine.cancel();
     tripMode = isTripMode(mode) ? mode : 'shopTrip'; // V2/G21
+    const spec = tripLaunchSpec(tripMode, method); // V3/G38 (§C8.6)
+    tripMethod = spec.method;
     machine.startTrip();
     audio.play('ui.open');
-    let ok = await framework.launch('cityDrive', { mode: tripMode, onArrive, onExit });
+    let ok = await framework.launch(spec.gameId, { mode: spec.mode, onArrive, onExit });
     // a scene fade in progress makes sceneManager ignore the switch — treat
     // that as "not launched" so callers (confirm sheet / dev kick) can retry
     if (ok && sceneManager.currentId?.() !== 'minigame') ok = false;
@@ -513,7 +669,14 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
   // right after boot (skips the confirm sheet) so the full §C4 loop is
   // demonstrable headlessly; combine with ?autopilot=1 for a hands-free trip.
   // V2/G21: ?vettrip=1 does the same for the vet trip (§C9.2 CDP proof).
-  const devTripMode = urlFlag('vettrip') ? 'vetTrip' : urlFlag('shoptrip') ? 'shopTrip' : null;
+  // V3/G38: ?travel=surf starts a SURF shop trip the same way (§C8.6 CDP
+  // proof; ?travel=drive is accepted as an explicit drive spelling).
+  const travelParam = isDev && typeof location !== 'undefined'
+    ? new URLSearchParams(location.search).get('travel')
+    : null;
+  const devTripMode = urlFlag('vettrip') ? 'vetTrip'
+    : (urlFlag('shoptrip') || travelParam != null) ? 'shopTrip' : null;
+  const devTripMethod = travelParam === 'surf' ? 'surf' : 'drive'; // V3/G38
   if (devTripMode) {
     let tries = 0;
     let starting = false;
@@ -524,11 +687,18 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
       // sceneManager ignore switches, so the first attempt can be a no-op)
       if (starting || sceneManager.currentId?.() !== 'home' || machine.state() !== TRIP_STATE.HOME) return;
       starting = true;
-      const ok = await startTrip(devTripMode).catch(() => false);
+      const ok = await startTrip(devTripMode, devTripMethod).catch(() => false);
       starting = false;
       if (ok) clearInterval(kick);
     }, 400);
   }
 
-  return { machine, requestShopTrip, requestVetTrip, startTrip };
+  return {
+    machine,
+    requestShopTrip,
+    requestVetTrip,
+    startTrip,
+    // V3/G38: read-only trip-request shape (eval/CDP surface — §C8.6)
+    tripInFlight: () => ({ mode: tripMode, method: tripMethod }),
+  };
 }

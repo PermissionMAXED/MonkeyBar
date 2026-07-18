@@ -15,6 +15,10 @@
 //                            sample log) — implemented in home/interactions.js
 //   ?uiscale=85|100|115|130  UI scale override  ?notch=1  fake notch (V3/G33)
 //   ?open=devPanel           hidden dev panel (registered unconditionally §B4)
+//   ?travel=surf|drive       V3/G38 (§C8.6): start a shop trip via the given
+//                            travel method right after boot (like ?shoptrip=1;
+//                            combine with ?autopilot=1) — implemented in
+//                            systems/shopTrip.js next to ?shoptrip/?vettrip
 //
 // `?scene=gooby` expects agent G3's `src/character/showcase.js` to provide:
 //
