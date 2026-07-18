@@ -254,6 +254,13 @@ export function isSatisfied(def, state) {
  * Detect + apply every not-yet-unlocked achievement whose condition holds:
  * marks it unlocked (timestamp) exactly once and pays the coin reward
  * (§C8.3). Pure — returns a new state; unchanged input → same reference back.
+ *
+ * V2/FIX-A2 (§C1.5 single-money-path): the payout also feeds
+ * profile.coinsEarned, mirroring economy.award's bookkeeping — a direct
+ * economy.award call is impossible here because this pure helper is applied
+ * INSIDE store.update by checkNow (a nested store call would split the
+ * atomic unlock+payout and double-pay on the listener re-check). Without it
+ * the stats screen's "Coins earned" silently missed every unlock reward.
  * @param {object} state save state (§E3)
  * @param {number} [nowMs] unlock timestamp (defaults to clock now())
  * @returns {{state: object, unlocked: import('../data/achievements.js').AchievementDef[]}}
@@ -262,9 +269,14 @@ export function applyUnlocks(state, nowMs = now()) {
   const already = state?.achievements?.unlocked ?? {};
   const newly = ACHIEVEMENTS.filter((def) => !already[def.id] && isSatisfied(def, state));
   if (newly.length === 0) return { state, unlocked: [] };
+  const reward = newly.reduce((sum, def) => sum + def.coins, 0);
   const next = {
     ...state,
-    coins: state.coins + newly.reduce((sum, def) => sum + def.coins, 0),
+    coins: state.coins + reward,
+    profile: {
+      ...state.profile,
+      coinsEarned: (Number(state.profile?.coinsEarned) || 0) + reward,
+    },
     achievements: {
       ...state.achievements,
       unlocked: {

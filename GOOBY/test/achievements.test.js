@@ -268,6 +268,34 @@ test('applyUnlocks: simultaneous unlocks sum their rewards', () => {
   assert.equal(r.state.coins, 1000 + 50 + 100 + 60);
 });
 
+// V2/FIX-A2 (§C1.5): unlock payouts used to add coins WITHOUT feeding
+// profile.coinsEarned — the one coin source outside the lifetime total, so
+// the stats screen under-reported "Coins earned" by every §C8.3 reward.
+test('V2/FIX-A2: unlock payout feeds profile.coinsEarned by the same amount', () => {
+  // pure layer: applyUnlocks mirrors economy.award's bookkeeping
+  const state = freshState();
+  state.coins = 1000; // coins1000 + (via counters) tickle100 → 50c + 60c
+  state.achievements.counters.tickles = 100;
+  const earned0 = state.profile.coinsEarned;
+  const r = applyUnlocks(state, 1);
+  assert.equal(r.state.coins, 1000 + 110, 'coins paid');
+  assert.equal(r.state.profile.coinsEarned, earned0 + 110, 'lifetime total moved by the SAME amount');
+  // nothing-new pass: same reference back, totals untouched
+  const again = applyUnlocks(r.state, 2);
+  assert.equal(again.state, r.state);
+
+  // live engine layer: a real unlock through the store wiring
+  resetAchievementsEngineForTests();
+  const store = createStore(freshState(), { autosave: false });
+  const engine = initAchievements({ store });
+  const coins0 = store.get('coins');
+  const lifetime0 = store.get('profile.coinsEarned');
+  engine.track('feeds'); // firstFeed → +10c (§C8.3)
+  assert.equal(store.get('coins'), coins0 + 10);
+  assert.equal(store.get('profile.coinsEarned'), lifetime0 + 10, 'engine unlock feeds coinsEarned');
+  resetAchievementsEngineForTests();
+});
+
 test('every one of the 16 achievements is unlockable through applyUnlocks', () => {
   const state = freshState();
   state.coins = 1000;
