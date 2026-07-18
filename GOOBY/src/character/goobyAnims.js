@@ -47,6 +47,59 @@ function every(period, rawT, dt) {
   return Math.floor(rawT / period) > Math.floor((rawT - dt) / period);
 }
 
+// ============================================================================
+// V3/G35 (§C12.1 wake-up fix): the lying pose is shared data so the sleep
+// clip's enter tween and the wakeUp clip's restore tween are exact mirrors.
+// Root cause of the reported glitch: 'sleep' (loop) holds lying offsets
+// (rotX −1.22 …) that vanished the frame sleepFlow stopped it and started
+// 'wake' — a clip authored from the STANDING base — so Gooby snapped from
+// lying to upright in one frame (CDP trace: ΔrotX 1.22 rad between frames).
+// ============================================================================
+
+/** Sleep lying-pose offsets (added onto rest while asleep). */
+export const SLEEP_POSE = Object.freeze({
+  rotX: -1.22, // lie on his back
+  posY: 0.16,
+  posZ: -0.1,
+  earL: 0.45,
+  earR: 0.5,
+  armL: -0.3,
+  armR: -0.3,
+});
+
+/** Sleep-enter settle: tween TO lying over 0.8 s (§C12.1 fix spec). */
+export const SLEEP_SETTLE_SEC = 0.8;
+/** Wake pose-restore: tween lying → rest over 0.4 s (§C12.1 fix spec). */
+export const WAKE_RESTORE_SEC = 0.4;
+
+/** Layer the lying pose onto `pose`, scaled by k (0 = rest … 1 = fully lying). */
+function applySleepPose(pose, k) {
+  pose.rotX += SLEEP_POSE.rotX * k;
+  pose.posY += SLEEP_POSE.posY * k;
+  pose.posZ += SLEEP_POSE.posZ * k;
+  pose.earL += SLEEP_POSE.earL * k;
+  pose.earR += SLEEP_POSE.earR * k;
+  pose.armL += SLEEP_POSE.armL * k;
+  pose.armR += SLEEP_POSE.armR * k;
+}
+
+/** The §D2.4 wake stretch/yawn keyframes (shared by 'wake' and 'wakeUp'). */
+function applyWakeStretch(pose, t) {
+  const k = Math.sin(Math.min(1, t / 1.05) * Math.PI); // up then down
+  pose.armL += k * 2.4; // stretch overhead
+  pose.armR += k * 2.4;
+  pose.armLRoll += k * 0.5;
+  pose.armRRoll += k * 0.5;
+  pose.scaleY *= 1 + k * 0.06;
+  pose.scaleX *= 1 - k * 0.02;
+  pose.earL -= k * 0.2; // perk
+  pose.earR -= k * 0.2;
+  pose.headPitch -= k * 0.18;
+  pose.mouthOpen = Math.max(pose.mouthOpen, k);
+  pose.lids = Math.max(pose.lids ?? 0, k * 0.5); // yawn squint
+}
+// ==================================================== end V3/G35 (§C12.1) ==
+
 /**
  * @typedef {Object} ClipDef
  * @property {number} duration seconds (one loop for looping clips)
@@ -146,20 +199,17 @@ export const CLIPS = {
     duration: 2.2,
     loop: true,
     apply(pose, t, io) {
-      const settle = ss(Math.min(1, io.rawT / 0.6)); // ease into the pose
-      pose.rotX -= settle * 1.22; // lie on his back
-      pose.posY += settle * 0.16;
-      pose.posZ -= settle * 0.1;
+      // V3/G35 (§C12.1): settle 0.6 → 0.8 s (sleep-enter tween TO lying) and
+      // the lying offsets come from the shared SLEEP_POSE so wakeUp restores
+      // exactly what sleep applied.
+      const settle = ss(Math.min(1, io.rawT / SLEEP_SETTLE_SEC));
+      applySleepPose(pose, settle);
       const breathe = Math.sin((t / 2.2) * TAU) * 0.5 + 0.5;
       pose.scaleY *= 1 + breathe * 0.04;
       pose.scaleX *= 1 + breathe * 0.012;
       pose.lids = 1.25; // eyes closed
       pose.mouth = 'flat';
       pose.mouthScale *= 0.7;
-      pose.earL += settle * 0.45;
-      pose.earR += settle * 0.5;
-      pose.armL -= settle * 0.3;
-      pose.armR -= settle * 0.3;
       pose.mouthOpen = Math.max(pose.mouthOpen, breathe * 0.12); // tiny snore lip
       if (every(2.5, io.rawT, io.dt)) io.event('zzz');
     },
@@ -170,18 +220,30 @@ export const CLIPS = {
     duration: 1.2,
     loop: false,
     apply(pose, t) {
-      const k = Math.sin(Math.min(1, t / 1.05) * Math.PI); // up then down
-      pose.armL += k * 2.4; // stretch overhead
-      pose.armR += k * 2.4;
-      pose.armLRoll += k * 0.5;
-      pose.armRRoll += k * 0.5;
-      pose.scaleY *= 1 + k * 0.06;
-      pose.scaleX *= 1 - k * 0.02;
-      pose.earL -= k * 0.2; // perk
-      pose.earR -= k * 0.2;
-      pose.headPitch -= k * 0.18;
-      pose.mouthOpen = Math.max(pose.mouthOpen, k);
-      pose.lids = Math.max(pose.lids ?? 0, k * 0.5); // yawn squint
+      applyWakeStretch(pose, t);
+    },
+  },
+
+  // V3/G35 (§C12.1 fix spec): composite sleep→awake transition — tween the
+  // LYING pose back to rest over 0.4 s FIRST, then run the 'wake' stretch
+  // from rest. One single clip means no frame between "sleep stopped" and
+  // "wake started" ever renders the raw rest pose (the reported snap), and
+  // the idle-variety scheduler stays suppressed for the whole sequence
+  // (gooby.js only schedules while 'idle' is the active main clip).
+  wakeUp: {
+    duration: WAKE_RESTORE_SEC + 1.2,
+    loop: false,
+    apply(pose, t) {
+      if (t < WAKE_RESTORE_SEC) {
+        // phase 1: lying → rest (pose-restore step); lids ease open with it
+        const k = 1 - ss(t / WAKE_RESTORE_SEC);
+        applySleepPose(pose, k);
+        pose.lids = Math.max(pose.lids ?? 0, k * 1.25);
+        pose.mouth = 'flat';
+      } else {
+        // phase 2: the §D2.4 stretch/yawn, authored from (and ending at) rest
+        applyWakeStretch(pose, t - WAKE_RESTORE_SEC);
+      }
     },
   },
 

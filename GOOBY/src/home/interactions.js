@@ -35,6 +35,8 @@ import { onEat as healthOnEat, tick as healthTick, HEALTH } from '../systems/hea
 import { onEat as weightOnEat, onBallFetch as weightOnBallFetch, tierOf } from '../systems/weight.js';
 import { award as collectionsAward } from '../systems/collections.js';
 import { useMedicine as economyUseMedicine, buyItem as economyBuyItem } from '../systems/economy.js';
+// V3/G35: Nougatschleuse pure logic (§B7/§C6.4 — cooldown/effects/refusals)
+import { canGlob as nougatCanGlob, applyGlob as nougatApplyGlob, NOUGAT } from '../systems/nougat.logic.js';
 
 // ===========================================================================
 // 1. PURE LOGIC (unit-tested — no three.js/DOM imports above this line either)
@@ -45,6 +47,32 @@ import { useMedicine as economyUseMedicine, buyItem as economyBuyItem } from '..
  * @typedef {{type: 'pet'}|{type: 'tickle'}} StrokeEvent
  */
 
+// ============================================================================
+// V3/G35 (§C12.2 belly-rub fix, §E0.1-14 gesture-consts ruling): the tickle
+// detector's thresholds are viewport-normalized module-local frozen consts —
+// they SUPERSEDE the legacy raw-px CARE_TUNING.TICKLE_MIN_DX_PX in
+// data/constants.js (left in place per the freeze; no longer read here).
+// Root causes fixed:
+//  1. per-sample |dx| >= 3 px gating dropped slow-device / small-screen rubs
+//     (a 2 px-per-sample rub never registered) → reversals now count on
+//     ACCUMULATED swing distance >= 3.5 % of the canvas width;
+//  2. x-axis-only sign flips missed circular strokes → reversals count on the
+//     DOMINANT axis (x or y) of the current swing, window unchanged;
+//  3. any raycast dropout (gaps between meshes, blob-shadow hits at weight-
+//     tier extremes) nulled the region and hard-reset the stroke → a short
+//     region grace keeps the last hit region alive across dropouts.
+// ============================================================================
+export const GESTURE_TUNING_V3 = Object.freeze({
+  /** Min accumulated swing along the dominant axis before a reversal counts,
+   * as a fraction of the canvas width (§C12.2: ~3.5 %). */
+  TICKLE_MIN_SWING_FRAC: 0.035,
+  /** Fallback viewport width when none is injected (tests / SSR safety). */
+  DEFAULT_VIEWPORT_W: 390,
+  /** Region dropout grace (ms): momentary raycast misses inside a stroke
+   * keep the last region instead of resetting pet/tickle state. */
+  REGION_GRACE_MS: 220,
+});
+
 /**
  * Gesture classifier for pet / tickle / poke on Gooby's regions (§C3).
  * Feed it the input drag stream (§E5) plus the raycast region per sample;
@@ -52,38 +80,69 @@ import { useMedicine as economyUseMedicine, buyItem as economyBuyItem } from '..
  *
  * - pet: slow drag over the body — velocity < 600 px/s sustained ≥ 400 ms
  *   → one {type:'pet'} per 400 ms window (+1 fun/stroke).
- * - tickle: fast belly rubs — ≥ 3 horizontal direction changes within 900 ms
- *   on the belly → {type:'tickle'} (+2 fun).
+ * - tickle: fast belly rubs — ≥ 3 dominant-axis direction changes within
+ *   900 ms on the belly, each swing ≥ 3.5 % of the canvas width
+ *   → {type:'tickle'} (+2 fun). (V3/G35 §C12.2 — was x-only + raw 3 px.)
  * - poke: tap on the body → 'poke'; 5 pokes within 3 s → 'dizzy' (§C3).
  *
+ * @param {{viewportW?: number|(() => number)}} [opts] canvas CSS width used to
+ *   normalize the tickle swing threshold (§C12.2); a getter keeps it live
+ *   across resizes. Defaults to innerWidth (browser) / 390 (tests).
  * @returns {{
  *   dragStart: (s: {t: number, x: number, y: number, region: Region}) => void,
  *   dragMove: (s: {t: number, x: number, y: number, region: Region}) => StrokeEvent[],
  *   dragEnd: () => void,
  *   tap: (s: {t: number, region: Region}) => ('poke'|'dizzy'|null),
+ *   debug: () => {region: Region, dx: number, speed: number, reversals: number,
+ *     swingX: number, swingY: number, petMs: number},
  * }}
  */
-export function createCareGestures() {
+export function createCareGestures(opts = {}) {
+  const viewportW = () => {
+    const v = typeof opts.viewportW === 'function' ? opts.viewportW() : opts.viewportW;
+    if (Number.isFinite(v) && v > 0) return v;
+    return typeof innerWidth !== 'undefined' && innerWidth > 0
+      ? innerWidth
+      : GESTURE_TUNING_V3.DEFAULT_VIEWPORT_W;
+  };
+
   /** @type {{t: number, x: number, y: number}|null} */
   let last = null;
   let petMs = 0;
-  /** @type {number[]} timestamps of belly direction changes */
+  /** @type {number[]} timestamps of belly dominant-axis reversals */
   let dirChanges = [];
-  let lastDxSign = 0;
+  /** accumulated swing since the last reversal (V3/G35 §C12.2) */
+  let swingX = 0;
+  let swingY = 0;
+  /** region grace memory (V3/G35 §C12.2) */
+  let lastRegion = /** @type {Region} */ (null);
+  let lastRegionT = -Infinity;
+  /** last on-belly sample time — bridges brief boundary clips (§C12.2) */
+  let lastBellyT = -Infinity;
   /** @type {number[]} poke timestamps */
   let pokes = [];
+  /** last-sample debug snapshot for the ?petdebug=1 overlay (§C12.2) */
+  let dbg = { region: null, dx: 0, speed: 0, reversals: 0, swingX: 0, swingY: 0, petMs: 0 };
 
   function resetStroke() {
     last = null;
     petMs = 0;
     dirChanges = [];
-    lastDxSign = 0;
+    swingX = 0;
+    swingY = 0;
+    lastRegion = null;
+    lastRegionT = -Infinity;
+    lastBellyT = -Infinity;
   }
 
   return {
     dragStart(s) {
       resetStroke();
       last = { t: s.t, x: s.x, y: s.y };
+      if (s.region != null) {
+        lastRegion = s.region;
+        lastRegionT = s.t;
+      }
     },
 
     dragMove(s) {
@@ -95,10 +154,20 @@ export function createCareGestures() {
       }
       const dt = Math.max(1, s.t - last.t);
       const dx = s.x - last.x;
-      const dist = Math.hypot(dx, s.y - last.y);
+      const dy = s.y - last.y;
+      const dist = Math.hypot(dx, dy);
       const speed = (dist / dt) * 1000; // px/s
 
-      if (s.region != null) {
+      // --- V3/G35 (§C12.2): region grace across momentary raycast dropouts ---
+      let region = s.region;
+      if (region != null) {
+        lastRegion = region;
+        lastRegionT = s.t;
+      } else if (lastRegion != null && s.t - lastRegionT <= GESTURE_TUNING_V3.REGION_GRACE_MS) {
+        region = lastRegion;
+      }
+
+      if (region != null) {
         // --- pet: continuous slow movement over the body (§C3) ---
         if (speed < INTERACT.PET_MAX_VELOCITY) {
           petMs += dt;
@@ -109,29 +178,48 @@ export function createCareGestures() {
         } else {
           petMs = 0; // a fast jerk breaks the stroke
         }
-        // --- tickle: fast belly rubs, ≥3 direction changes < 900 ms (§C3) ---
-        if (s.region === 'belly' && Math.abs(dx) >= CARE_TUNING.TICKLE_MIN_DX_PX) {
-          const sign = dx > 0 ? 1 : -1;
-          if (lastDxSign !== 0 && sign !== lastDxSign) {
+        // --- tickle: belly rubs, ≥3 DOMINANT-AXIS reversals < 900 ms, each
+        // swing ≥ 3.5 % of the canvas width (V3/G35 §C12.2 fix spec).
+        // Belly membership gets the SAME grace as raycast dropouts: wide
+        // swings clip the neighbouring region (body top edge = 'head') at
+        // their extremes for a sample or two — that must not reset the
+        // stroke, while rubs that LIVE on head/feet still never tickle
+        // (they have no belly sample inside the grace window). ---
+        if (region === 'belly') lastBellyT = s.t;
+        if (s.t - lastBellyT <= GESTURE_TUNING_V3.REGION_GRACE_MS) {
+          const minSwing = viewportW() * GESTURE_TUNING_V3.TICKLE_MIN_SWING_FRAC;
+          const axisIsX = Math.abs(swingX) >= Math.abs(swingY);
+          const swingA = axisIsX ? swingX : swingY;
+          const dA = axisIsX ? dx : dy;
+          if (Math.abs(swingA) >= minSwing && dA !== 0 && Math.sign(dA) !== Math.sign(swingA)) {
+            // direction reversed on the stroke's dominant axis → count it and
+            // start the next swing from this sample's delta
             dirChanges.push(s.t);
             dirChanges = dirChanges.filter((ts) => s.t - ts < INTERACT.TICKLE_WINDOW_MS);
+            swingX = dx;
+            swingY = dy;
             if (dirChanges.length >= INTERACT.TICKLE_DIR_CHANGES) {
               dirChanges = [];
               petMs = 0;
               events.push({ type: 'tickle' });
             }
+          } else {
+            swingX += dx;
+            swingY += dy;
           }
-          lastDxSign = sign;
-        } else if (s.region !== 'belly') {
+        } else {
           dirChanges = [];
-          lastDxSign = 0;
+          swingX = 0;
+          swingY = 0;
         }
       } else {
         petMs = 0;
         dirChanges = [];
-        lastDxSign = 0;
+        swingX = 0;
+        swingY = 0;
       }
 
+      dbg = { region, dx, speed: Math.round(speed), reversals: dirChanges.length, swingX, swingY, petMs };
       last = { t: s.t, x: s.x, y: s.y };
       return events;
     },
@@ -149,6 +237,11 @@ export function createCareGestures() {
         return 'dizzy';
       }
       return 'poke';
+    },
+
+    /** V3/G35 (§C12.2): last-sample debug data for the ?petdebug=1 overlay. */
+    debug() {
+      return dbg;
     },
   };
 }
@@ -418,6 +511,7 @@ const FOOD_EMOJI = {
   strawberry: '🍓', grapes: '🍇', croissant: '🥐', lollypop: '🍭',
   cookie: '🍪', chocolate: '🍫', 'candy-bar': '🍬', muffin: '🥮',
   fries: '🍟', 'corn-dog': '🍢', sundae: '🍨',
+  nutella: '🫙', // V3/G35 (§C6.1): jar glyph — SVG icon treatment in icons.js
 };
 
 /** V2/G20: junkScore band → belly icon fill (§C7 green/yellow/orange). */
@@ -572,7 +666,10 @@ export function initInteractions(bag = {}) {
     store, ui, audio, input, roomManager, gooby, scene, particles,
     camera: null,
     THREE: null,
-    gestures: createCareGestures(),
+    // V3/G35 (§C12.2): live canvas width normalizes the tickle swing threshold
+    gestures: createCareGestures({
+      viewportW: () => (typeof innerWidth !== 'undefined' ? innerWidth : 0),
+    }),
     subs: /** @type {Array<() => void>} */ ([]),
     timers: /** @type {Array<ReturnType<typeof setTimeout>>} */ ([]),
     raf: 0,
@@ -583,6 +680,10 @@ export function initInteractions(bag = {}) {
     feeding: null, // active food drag
     ball: null, // { mesh, spawn, pos, vel, resting, cooldownUntil, chasing }
     goobyBusy: false, // hop/chase movement lock
+    // V3/G35 (§C6.4): Nougatschleuse sequence lock + install sparkle + smears
+    nougatSeq: false,
+    nougatSparkle: false,
+    messyFace: null, // { meshes, base, smear, timer }
   };
   active = state;
 
@@ -657,6 +758,27 @@ export function initInteractions(bag = {}) {
     ui.showScreen('arcade');
   });
 
+  // ---- V3/G35 (§B7/§C6.4): Nougatschleuse tap → refusals or glob sequence --
+  subscribeRoom(state, 'tap:nougatschleuse', () => nougatTap(state));
+  // §C6.3: one-time install sparkle on the next kitchen look (buying happens
+  // on the shop screen — the machine mounts while the kitchen is offscreen)
+  if (typeof store.on === 'function') {
+    state.subs.push(
+      store.on('nougatChanged', (p) => {
+        if (p?.installed) state.nougatSparkle = true;
+      })
+    );
+  }
+  subscribeRoom(state, 'roomChanged', (p) => {
+    if (p?.roomId !== 'kitchen' || !state.nougatSparkle) return;
+    state.nougatSparkle = false;
+    laterTimer(state, () => {
+      const at = anchorPos(state, 'nougat');
+      if (state.particles && at) state.particles.emit('sparkles', at, { count: 14 });
+    }, 500); // let the room pan settle first
+  });
+  // ---- end V3/G35 block ----
+
   // --- pet / tickle / poke gestures on Gooby (input §E5 + regionAt §D2.3) ---
   if (input && gooby && state.camera) {
     wireGestures(state);
@@ -708,6 +830,7 @@ export function teardown() {
   }
   if (s.ownParticles) s.particles?.dispose?.();
   endWash(s, { silent: true });
+  clearMessyFace(s); // V3/G35: restore the cheek material swap
   s.feeding?.cancel?.();
   if (s.ball?.mesh) {
     s.ball.mesh.parent?.remove(s.ball.mesh);
@@ -776,9 +899,16 @@ function pickGooby(s, clientX, clientY) {
   s._ndc.set((clientX / w) * 2 - 1, -(clientY / h) * 2 + 1);
   s._ray.setFromCamera(s._ndc, s.camera);
   const hits = s._ray.intersectObject(s.gooby.group, true);
-  if (hits.length === 0) return null;
-  const region = s.gooby.regionAt(hits[0]);
-  return region ? { region, point: hits[0].point } : null;
+  // V3/G35 (§C12.2 region mapping): take the FIRST hit that maps to a touch
+  // region instead of hits[0] blindly — the blob shadow / outfit props are
+  // children of the same group with no region, and at weight-tier extremes
+  // (§C4.3 body X/Z morphs) they intercepted rays over the visually wider
+  // belly, nulling the region mid-stroke.
+  for (const hit of hits) {
+    const region = s.gooby.regionAt(hit);
+    if (region) return { region, point: hit.point };
+  }
+  return null;
 }
 
 /** Approximate mouth world position from the glasses anchor (§D2.3 anchors). */
@@ -862,6 +992,7 @@ function wireGestures(s) {
     const events = s.gestures.dragMove({
       t: performance.now(), x: p.x, y: p.y, region: hit?.region ?? null,
     });
+    petdebugSample(s, events); // V3/G35 (§C12.2): ?petdebug=1 feed (dev no-op otherwise)
     for (const ev of events) {
       if (ev.type === 'pet') {
         // §C3 pet: purr squeak, hearts, eyes closed happy
@@ -913,6 +1044,60 @@ function wireGestures(s) {
   s.subs.push(input.on('drag', onDrag));
   s.subs.push(input.on('dragend', onDragEnd));
   s.subs.push(input.on('tap', onTap));
+}
+
+// ---------------------------------------------------------------------------
+// V3/G35 (§C12.2 acceptance tooling): ?petdebug=1 overlay — dev builds only.
+// Live region / dx / velocity / reversal readout over the canvas, plus a
+// window.__petdebug sample log so CDP evals can dump whole runs.
+// ---------------------------------------------------------------------------
+
+function petdebugEnabled() {
+  return (
+    import.meta.env?.DEV &&
+    typeof location !== 'undefined' &&
+    new URLSearchParams(location.search).get('petdebug') === '1'
+  );
+}
+
+/** @param {object} s wiring state @param {StrokeEvent[]} events this sample's events */
+function petdebugSample(s, events) {
+  if (!petdebugEnabled() || typeof document === 'undefined') return;
+  const d = s.gestures.debug();
+  const sample = {
+    t: Math.round(performance.now()),
+    region: d.region,
+    dx: Math.round(d.dx * 10) / 10,
+    speed: d.speed,
+    reversals: d.reversals,
+    events: events.map((e) => e.type),
+  };
+  window.__petdebug = window.__petdebug ?? [];
+  window.__petdebug.push(sample);
+  if (window.__petdebug.length > 5000) window.__petdebug.shift();
+
+  if (!s.petdebugEl) {
+    const el = document.createElement('div');
+    el.className = 'g35-petdebug';
+    el.style.cssText =
+      'position:fixed;left:8px;top:calc(140px + var(--safe-top,0px));z-index:990;' +
+      'background:rgba(30,24,22,.82);color:#9fe8d9;font:11px/1.5 monospace;' +
+      'padding:6px 9px;border-radius:8px;pointer-events:none;white-space:pre;';
+    document.body.appendChild(el);
+    s.petdebugEl = el;
+    s.petdebugCounts = { pet: 0, tickle: 0 };
+    s.subs.push(() => {
+      el.remove();
+      s.petdebugEl = null;
+    });
+  }
+  for (const e of events) s.petdebugCounts[e.type] = (s.petdebugCounts[e.type] ?? 0) + 1;
+  s.petdebugEl.textContent =
+    `region    ${d.region ?? '—'}\n` +
+    `dx        ${sample.dx}px\n` +
+    `velocity  ${d.speed}px/s\n` +
+    `reversals ${d.reversals}\n` +
+    `pets ${s.petdebugCounts.pet}  tickles ${s.petdebugCounts.tickle}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1463,6 +1648,7 @@ function rinse(s) {
   // wet-ears look for 20 s (§C3)
   gooby.setWet(true);
   laterTimer(s, () => s.gooby?.setWet(false), CARE_TUNING.WASH_WET_SEC * 1000);
+  clearMessyFace(s); // V3/G35 (§C6.4): the rinse wipes the nougat cheek smears
   gooby.play('happyBounce').then(() => restoreEmotion(s));
 
   endWash(s, {});
@@ -1505,6 +1691,199 @@ function useToilet(s) {
   const at = s.THREE ? anchorPos(s, 'toilet') : null;
   if (s.particles && at) s.particles.emit('sparkles', at.setY(at.y + 0.5), { count: 6 });
   s.gooby?.play('happyBounce').then(() => restoreEmotion(s));
+}
+
+// ---------------------------------------------------------------------------
+// V3/G35 — Nougatschleuse use flow (§B7/§C6.4): tap → refusal checks (pure
+// nougat.logic) → waddle under the spout → crank 720° → glob slides → chomp.
+// The fixture mesh + its crank/glob animation live in home/nougatMesh.js and
+// mount via roomManager (only when nougat.installed); this wiring drives the
+// sequence through rm.getNougatFixture().userData and applies the effects
+// through the pure pipes composed in systems/nougat.logic.js.
+// ---------------------------------------------------------------------------
+
+/** §C6.1/§C6.2 chocolate — the messy-face smear tint (kept in sync with nougatMesh.js). */
+const NOUGAT_CHOCOLATE = '#5C3A21';
+
+function nougatTap(s) {
+  const { store, ui, audio, gooby } = s;
+  if (s.washing || s.feeding || s.goobyBusy || s.nougatSeq) return;
+  const fixture = s.roomManager?.getNougatFixture?.();
+  if (!fixture || fixture.userData.isBusy?.()) return;
+
+  const verdict = nougatCanGlob(
+    {
+      sleep: { sleeping: !!store.get('sleep.sleeping') },
+      health: { state: store.get('health.state') },
+      inventory: store.get('inventory') ?? {},
+      nougat: store.get('nougat') ?? {},
+    },
+    now()
+  );
+  if (!verdict.ok) {
+    switch (verdict.reason) {
+      case 'sleeping':
+        ui.toast('toast.sleeping');
+        break;
+      case 'sick': // the §C3.4-v2 sick refusal (same as junk food)
+        audio.play('gooby.refuse');
+        gooby?.play('refuse').then(() => restoreEmotion(s));
+        ui.toast('toast.junkRefusedSick');
+        break;
+      case 'noJar':
+        audio.play('ui.error');
+        ui.toast('nougat.noJar'); // „Keine Nutella! Ab in den Laden"
+        break;
+      case 'cooldown': // Gooby pats his belly + refusal squeak (§C6.4)
+        audio.play('gooby.refuse');
+        gooby?.play('refuse').then(() => restoreEmotion(s));
+        ui.toast('nougat.cooldown'); // „Gooby braucht eine Nougat-Pause"
+        break;
+      default:
+        break;
+    }
+    return;
+  }
+
+  // ---- sequence (≈ 2.8 s): waddle 0.8 s → crank 1.2 s → glob slide 0.6 s ----
+  s.nougatSeq = true;
+  const mount = s.THREE ? anchorPos(s, 'nougat') : null;
+  const crankAndGlob = () => {
+    if (s.disposed) {
+      s.nougatSeq = false;
+      return;
+    }
+    gooby?.stop?.('happyBounce');
+    const fix = s.roomManager?.getNougatFixture?.();
+    if (!fix?.userData.playSequence) {
+      // fixture vanished mid-waddle (room rebuild) — apply without the show
+      nougatChomp(s);
+      s.nougatSeq = false;
+      return;
+    }
+    audio.play('pipe.rotate'); // crank ratchet stand-in (dedicated id → G32)
+    const mouth = mouthWorld(s) ?? mount;
+    fix.userData.playSequence({
+      catchWorld: mouth ? { x: mouth.x, y: mouth.y, z: mouth.z } : undefined,
+      onGlob: () => {
+        if (!s.disposed) nougatChomp(s);
+      },
+      onDone: () => {
+        s.nougatSeq = false;
+      },
+    });
+    laterTimer(s, () => audio.play('delivery.drop'), 1200); // glob release plop
+  };
+  if (mount && gooby) {
+    // waddle under the spout (§C6.4) — bouncy walk like the ball fetch
+    const under = new s.THREE.Vector3(mount.x, 0, Math.max(mount.z + 0.75, -0.7));
+    gooby.play('happyBounce', { loop: true });
+    moveGooby(s, under, 0.8, null, crankAndGlob);
+  } else {
+    crankAndGlob();
+  }
+}
+
+/** The catch: apply §C6.4 effects (pure nougat.logic), chomp, smears, toasts. */
+function nougatChomp(s) {
+  const { store, ui, audio, gooby } = s;
+  const r = nougatApplyGlob(
+    {
+      stats: store.get('stats'),
+      inventory: store.get('inventory') ?? {},
+      health: store.get('health'),
+      weight: store.get('weight'),
+      xp: store.get('xp'),
+      level: store.get('level'),
+      nougat: store.get('nougat') ?? {},
+      achievements: { counters: { nougatGlobs: store.get('achievements.counters.nougatGlobs') } },
+    },
+    now()
+  );
+  if (!r.ok) {
+    // jar vanished mid-sequence (edge) — fail closed with the noJar toast
+    ui.toast('nougat.noJar');
+    return;
+  }
+
+  /** @type {string[]} */
+  let healthEvents = [];
+  store.update((st) => {
+    st.stats = r.stats;
+    st.inventory = r.inventory;
+    st.xp = r.xp;
+    st.level = r.level;
+    st.coins += r.coinsAwarded;
+    st.weight = r.weight;
+    st.nougat = r.nougat; // lastGlobAt = now (30-min cooldown starts)
+    st.achievements.counters.nougatGlobs = r.nougatGlobs; // → sticker nutellaGlob / nougatmeister
+    // zero-minute health tick (same rationale as performFeed): a junkScore
+    // threshold crossed by THIS glob reacts instantly
+    const lowStatCount = STATS.KEYS.filter((k) => st.stats[k] < HEALTH.NEGLECT_STAT_BELOW).length;
+    const hr = healthTick(r.health, 0, lowStatCount);
+    st.health = hr.h;
+    healthEvents = hr.events;
+  });
+  for (const ev of healthEvents) store.emit?.('healthEvent', ev);
+  store.emit?.('nougatChanged', { used: true }); // §B10 (install/use)
+
+  // juice: happy chomp + giggle (§C6.4), „−1 Nutella" toast, crumbs, float
+  audio.play('eat.chomp');
+  audio.play('gooby.giggle');
+  ui.toast('nougat.jarUsed');
+  const at = mouthWorld(s);
+  if (at && s.camera) {
+    const p = worldToScreen(s, at);
+    floatText(s, `+${NOUGAT.STAT_DELTAS.hunger}`, p.x, p.y - 40);
+  }
+  if (s.particles && at) s.particles.emit('crumbs', at, { count: 6 });
+  gooby?.play('eat').then(() => {
+    gooby.play('happyBounce');
+    restoreEmotion(s);
+    // hop back to the idle spot (he waddled under the spout — and standing
+    // there would shadow the machine's tap hitbox behind 'tap:gooby')
+    const home = anchorPos(s, 'goobyIdle');
+    if (home) laterTimer(s, () => moveGooby(s, home, 0.6, 'jump'), 400);
+  });
+
+  applyMessyFace(s); // §C6.4: brown cheek smears, 60 s or until washed
+}
+
+/**
+ * Messy face (§C6.4): swap Gooby's cheek meshes onto an owned clone of their
+ * material, color-lerped toward chocolate. A material SWAP (not a color write)
+ * because the rig re-writes its own cheek material's color every frame for
+ * the §C3.3 queasy lerp — the swap wins without touching character files.
+ */
+function applyMessyFace(s) {
+  if (!s.gooby?.group || !s.THREE) return;
+  clearMessyFace(s); // a fresh glob restarts the 60 s window
+  /** @type {import('three').Mesh[]} */
+  const meshes = [];
+  s.gooby.group.traverse((o) => {
+    if (o.name === 'cheekL' || o.name === 'cheekR') meshes.push(o);
+  });
+  if (meshes.length === 0 || !meshes[0].material) return;
+  const base = meshes[0].material;
+  const smear = base.clone();
+  smear.userData.shared = false;
+  smear.color.lerp(new s.THREE.Color(NOUGAT_CHOCOLATE), 0.8); // CHEEK lerp
+  for (const m of meshes) m.material = smear;
+  const timer = setTimeout(() => clearMessyFace(s), NOUGAT.MESSY_FACE_SEC * 1000);
+  s.timers.push(timer);
+  s.messyFace = { meshes, base, smear, timer };
+}
+
+/** Restore the cheeks (60 s elapsed, rinsed, or teardown). */
+function clearMessyFace(s) {
+  const mf = s.messyFace;
+  if (!mf) return;
+  s.messyFace = null;
+  clearTimeout(mf.timer);
+  for (const m of mf.meshes) {
+    if (m.material === mf.smear) m.material = mf.base;
+  }
+  mf.smear.dispose?.();
 }
 
 // ---------------------------------------------------------------------------

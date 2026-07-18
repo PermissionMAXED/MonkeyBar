@@ -31,7 +31,9 @@ import { FOODS } from '../data/foods.js';
 import { WALLPAPERS, FLOORS, furnitureFor, roomSlots } from '../data/furniture.js';
 import { CROPS } from '../data/crops.js'; // V2/G22: seed rows in the Care section (§C7)
 import { SKINS, DEFAULT_SKIN, getSkin } from '../data/skins.js'; // V2/G22: Skins tab (§C8.5)
+import musicDirector from '../audio/musicDirector.js'; // V3/G32: shop medley overlay (§B2.4)
 import { count as invCount } from '../systems/inventory.js';
+import { NOUGAT } from '../systems/nougat.logic.js'; // V3/G35: Nougatschleuse card (§C6.3)
 import {
   canAfford,
   buyFood,
@@ -51,7 +53,6 @@ import {
   appliedSurface,
 } from '../systems/furniturePlacement.js';
 import { icon } from './icons.js';
-import musicDirector from '../audio/musicDirector.js'; // V3/G32: shop medley overlay (§B2.4)
 
 /** Food id → emoji (iconography, not translated text — mirrors G5's tray). */
 const FOOD_EMOJI = {
@@ -64,6 +65,7 @@ const FOOD_EMOJI = {
   strawberry: '🍓', grapes: '🍇', croissant: '🥐', lollypop: '🍭',
   cookie: '🍪', chocolate: '🍫', 'candy-bar': '🍬', muffin: '🥮',
   fries: '🍟', 'corn-dog': '🍢', sundae: '🍨',
+  nutella: '🫙', // V3/G35 (§C6.1 — kept in sync with interactions.js)
 };
 
 /** Furniture id → emoji (falls back to the slot emoji). */
@@ -148,10 +150,12 @@ let skinRenderer = null;
 // P1-4: single-word tab labels (EN "Furniture") leaked into the neighbouring
 //   wrapped tab at 320px — shrink slightly, allow in-word wrapping and clip
 //   as a last resort; min-height keeps every tab ≥44px tall (§D5).
+// V3/G33 (§B3): mechanical px→rem sweep (÷16) of this injected CSS string —
+// exemptions (1px hairlines/999px pills/shadows/@media px) per PLAN3 §B3.
 const SHOP_FIX_CSS = `
 .swatch .swatch-name{max-width:100%;text-align:center;line-height:1.2;overflow-wrap:anywhere;}
 .swatch .swatch-price{max-width:100%;flex-wrap:wrap;justify-content:center;text-align:center;}
-.shop-tabs .shop-tab{min-width:0;min-height:46px;overflow:hidden;overflow-wrap:anywhere;font-size:clamp(11px,3.4vw,13px);line-height:1.2;padding:6px 3px;}
+.shop-tabs .shop-tab{min-width:0;min-height:max(44px, 2.875rem);overflow:hidden;overflow-wrap:anywhere;font-size:clamp(0.6875rem,3.4vw,0.8125rem);line-height:1.2;padding:0.375rem 0.1875rem;}
 `;
 
 /**
@@ -480,9 +484,60 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
           grid.appendChild(furnitureCard(entry, roomId, slotId));
         }
       }
+      // ---- V3/G35 (§C6.3): Nougatschleuse — kitchen fixture, 400 c / L5 ----
+      if (roomId === 'kitchen') grid.appendChild(nougatCard());
+      // ---- end V3/G35 ----
       bodyEl.appendChild(grid);
     }
   }
+
+  // ---- V3/G35 (§C6.3): Nougatschleuse shop card ----------------------------
+  // A FIXTURE, not decor: buying sets `nougat.installed = true` and it
+  // auto-mounts on the kitchen wall (roomManager follows 'nougatChanged') —
+  // NO decorate/placement step. 400 c, unlock L5 (numbers frozen in
+  // systems/nougat.logic.js per §E0.1-2).
+  function nougatCard() {
+    const installed = store.get('nougat.installed') === true;
+    const level = store.get('level') ?? 1;
+    const locked = level < NOUGAT.UNLOCK_LEVEL;
+    const card = document.createElement('button');
+    card.className = `shop-card${locked && !installed ? ' g22-locked' : ''}`;
+    const state = installed
+      ? `<span class="shop-state">✓ ${t('shop.owned')}</span>`
+      : locked
+        ? `<span class="shop-state">🔒 ${t('shop.lvl', { level: NOUGAT.UNLOCK_LEVEL })}</span>`
+        : priceTag(NOUGAT.PRICE);
+    card.innerHTML = `
+      <span class="shop-emoji">🍫</span>
+      <span class="shop-name">${t('nougat.shopName')}</span>
+      ${state}`;
+    card.addEventListener('click', () => {
+      audio.play('ui.tap');
+      if (installed) return;
+      if (locked) {
+        ui.toast('shop.qd.needLevel', { level: NOUGAT.UNLOCK_LEVEL });
+        return;
+      }
+      if (!atTrip()) {
+        ui.toast('shop.browseHint');
+        return;
+      }
+      if ((store.get('coins') ?? 0) < NOUGAT.PRICE) {
+        ui.toast('toast.notEnoughCoins');
+        return;
+      }
+      store.update((st) => {
+        st.coins -= NOUGAT.PRICE;
+        st.nougat = { ...(st.nougat ?? {}), installed: true };
+      });
+      audio.play('coin.spend');
+      store.emit?.('nougatChanged', { installed: true }); // §B10 — roomManager mounts it
+      ui.toast('nougat.installed'); // §C6.3 „Die Nougatschleuse ist installiert!"
+      renderBody();
+    });
+    return card;
+  }
+  // ---- end V3/G35 card ----
 
   /** @param {import('../data/furniture.js').FurnitureEntry} entry */
   function furnitureCard(entry, roomId, slotId) {

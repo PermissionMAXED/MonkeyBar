@@ -171,11 +171,13 @@ test('every asset key referenced in data/foods.js resolves to a file', async (t)
     return;
   }
   const mod = await import('../src/data/foods.js');
-  // §C5.1: each food id doubles as its food-kit GLB name.
+  // §C5.1: each food id doubles as its food-kit GLB name — except rows with
+  // an explicit modelKey override (V3/G35 §C6.1: 'nutella' re-tints the
+  // food-kit honey jar instead of shipping a new GLB).
   const foods = Object.values(mod).find(Array.isArray) ?? [];
   for (const food of foods) {
     if (food?.id) {
-      const file = path.join(KENNEY, 'food-kit', `${food.id}.glb`);
+      const file = assetKeyToFile(food.modelKey ?? `food-kit/${food.id}`);
       assert.ok(fs.existsSync(file), `food '${food.id}': missing ${file}`);
     }
   }

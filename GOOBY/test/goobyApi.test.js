@@ -107,9 +107,13 @@ const SPEC_CLIPS = [
 // V2/G29: the idle-variety micro-clips (§E wave 4) join the registry
 const V2_CLIPS = ['stretch', 'earScratch', 'lookAround', 'tailWiggle', 'shiver'];
 
+// V3/G35: 'wakeUp' composite (§C12.1 pose-restore + stretch — see
+// test/wakePose.test.js for its behavior assertions)
+const V3_CLIPS = ['wakeUp'];
+
 test('clip registry has the 14 §D2.4 clips + the V2/G29 idle set', () => {
-  assert.deepEqual([...CLIP_IDS].sort(), [...SPEC_CLIPS, ...V2_CLIPS].sort());
-  for (const id of [...SPEC_CLIPS, ...V2_CLIPS]) {
+  assert.deepEqual([...CLIP_IDS].sort(), [...SPEC_CLIPS, ...V2_CLIPS, ...V3_CLIPS].sort());
+  for (const id of [...SPEC_CLIPS, ...V2_CLIPS, ...V3_CLIPS]) {
     const def = CLIPS[id];
     assert.ok(def.duration > 0, `${id}.duration`);
     assert.equal(typeof def.apply, 'function', `${id}.apply`);

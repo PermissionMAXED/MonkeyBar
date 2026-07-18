@@ -48,6 +48,7 @@ import { weatherAt } from '../systems/weather.js';
 import { makeDome, windowTexture } from '../gfx/sky.js';
 import { windowRainTexture } from '../gfx/weatherFx.js'; // V2/G26 (§C11.2 animated panes)
 import musicDirector from '../audio/musicDirector.js'; // V3/G32: room-enter medley context hook (§B2.4)
+import { buildNougatschleuse } from './nougatMesh.js'; // V3/G35: kitchen fixture (§B7/§C6.2)
 import { CROPS } from '../data/crops.js'; // V2/G19: growth-stage GLB preloads
 import { ROOM as KITCHEN } from './rooms/kitchen.js';
 import { ROOM as LIVING } from './rooms/living.js';
@@ -793,6 +794,74 @@ export function createRoomManager({ scene, camera, assets, store }) {
     applyFloor(def.id, store?.get(`decor.floor.${def.id}`) ?? 'wood');
   }
 
+  // ---- V3/G35: Nougatschleuse kitchen fixture (§B7/§C6.2/§C6.3) ----------
+  // Rendered ONLY when `nougat.installed` (shop furniture tab sets the flag
+  // and emits the §B10 'nougatChanged' store event — this block follows it
+  // live, so the machine mounts/unmounts without a scene rebuild). The
+  // kitchen ROOM def itself stays pure data (it cannot express save-state
+  // conditionals). Registers per §B7: anchor `nougat`, tap `nougatschleuse`
+  // (hitSize [0.9, 1.2, 0.5]), and an update hook for the §C6.2 idle drip.
+  /** wall-mount point above the counter's right end (room-local, §C6.2) */
+  const NOUGAT_AT = Object.freeze([0.95, 1.24, -1.34]);
+  /** @type {THREE.Group|null} */
+  let nougatFixture = null;
+  /** @type {THREE.Mesh|null} */
+  let nougatHitbox = null;
+  /** @type {(() => void)|null} */
+  let nougatHookOff = null;
+
+  function syncNougatFixture() {
+    const installed = store?.get?.('nougat.installed') === true;
+    if (installed === !!nougatFixture) return;
+    const record = rooms.get(KITCHEN.id);
+    if (!record) return;
+    const cx = roomCenterX(KITCHEN.id);
+    if (installed) {
+      nougatFixture = buildNougatschleuse(track, assets);
+      nougatFixture.position.set(NOUGAT_AT[0], NOUGAT_AT[1], NOUGAT_AT[2]);
+      nougatFixture.traverse((obj) => {
+        if (obj.isMesh) obj.castShadow = true;
+      });
+      record.group.add(nougatFixture);
+      addAnchor(KITCHEN.id, 'nougat', new THREE.Vector3(cx + NOUGAT_AT[0], NOUGAT_AT[1], NOUGAT_AT[2]));
+      const size = [0.9, 1.2, 0.5]; // §B7 hitSize
+      nougatHitbox = new THREE.Mesh(
+        track.geo(new THREE.BoxGeometry(size[0], size[1], size[2])),
+        hitMat
+      );
+      nougatHitbox.name = 'hit-nougatschleuse';
+      nougatHitbox.visible = false;
+      // hitbox is CENTERED on the wall mount (the machine hangs, it doesn't
+      // stand — no +h/2 ground lift like floor furniture)
+      nougatHitbox.position.set(cx + NOUGAT_AT[0], NOUGAT_AT[1], NOUGAT_AT[2] + 0.1);
+      nougatHitbox.userData.interact = 'nougatschleuse';
+      nougatHitbox.userData.roomId = KITCHEN.id;
+      homeGroup.add(nougatHitbox);
+      hitboxes.push(nougatHitbox);
+      const hook = (dt) => nougatFixture?.userData.update?.(dt);
+      updateHooks.add(hook);
+      nougatHookOff = () => updateHooks.delete(hook);
+    } else {
+      if (nougatHookOff) nougatHookOff();
+      nougatHookOff = null;
+      if (nougatHitbox) {
+        homeGroup.remove(nougatHitbox);
+        const i = hitboxes.indexOf(nougatHitbox);
+        if (i >= 0) hitboxes.splice(i, 1);
+        nougatHitbox = null;
+      }
+      if (nougatFixture) {
+        record.group.remove(nougatFixture);
+        nougatFixture = null;
+      }
+      anchors.delete(`${KITCHEN.id}:nougat`);
+    }
+  }
+  syncNougatFixture();
+  const offNougatChanged =
+    typeof store?.on === 'function' ? store.on('nougatChanged', syncNougatFixture) : null;
+  // ---- end V3/G35 fixture block ----
+
   function applyWallpaper(roomId, id) {
     const record = rooms.get(roomId);
     if (!record || record.def.outdoor) return; // V2/G19: no-op for the garden
@@ -985,6 +1054,15 @@ export function createRoomManager({ scene, camera, assets, store }) {
       }
       if (prev !== roomId) emit('roomChanged', { roomId, prevRoomId: prev });
       if (prev !== roomId) musicDirector.setContext(roomId === GARDEN.id ? 'garden' : 'home'); // V3/G32: home/garden medley follows the room (§B2.4)
+      // ---- V3/G35 (§C5.4): garden-enter one-shot sticker hooks ----
+      // Fired at the source per G34's 'stickerHook' contract (§E0.1-7);
+      // feature-detected so the manager stays engine-agnostic.
+      if (prev !== roomId && roomId === GARDEN.id) {
+        const ms = now();
+        if (weatherAt(ms).state === 'rain') store?.emit?.('stickerHook', { id: 'rainCanopy' });
+        if (bandAt(ms).band === 'night') store?.emit?.('stickerHook', { id: 'nightStars' });
+      }
+      // ---- end V3/G35 hooks ----
     },
 
     /** @returns {boolean} true while the camera pan is easing */
@@ -1116,6 +1194,17 @@ export function createRoomManager({ scene, camera, assets, store }) {
     },
 
     /**
+     * V3/G35 (§B7): the mounted Nougatschleuse group (null while not
+     * installed). Its userData exposes update/playSequence/isBusy — the
+     * §C6.4 tap handler in home/interactions.js drives the crank+glob
+     * sequence through this handle.
+     * @returns {THREE.Group|null}
+     */
+    getNougatFixture() {
+      return nougatFixture;
+    },
+
+    /**
      * Raycast a tap (from input 'tap' ndc coords) against Gooby + the fixed
      * interactables; emits 'tap:<name>' with { name, roomId, point, hit }.
      * @param {{nx: number, ny: number}} ndc
@@ -1185,6 +1274,7 @@ export function createRoomManager({ scene, camera, assets, store }) {
 
     /** Free every geometry/material this manager created (shared mats stay). */
     dispose() {
+      offNougatChanged?.(); // V3/G35: stop following nougat.installed
       for (const geo of ownedGeos) geo.dispose();
       for (const mat of ownedMats) disposeIfOwned(mat);
       skyDome?.userData.dispose(); // V2/G19 (dome textures stay cached)

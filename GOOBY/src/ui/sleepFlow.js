@@ -118,8 +118,13 @@ export function initSleepFlow({ store, ui, roomManager, homeScene, gooby }) {
         g.setEmotion?.('sleepy');
         g.play?.('sleep', { loop: true });
       } else {
+        // V3/G35 (§C12.1): play the composite 'wakeUp' clip (lying→rest
+        // pose-restore 0.4 s, THEN the stretch/yawn) instead of stopping
+        // 'sleep' and jumping straight into 'wake' — the old hand-off dropped
+        // the lying offsets in a single frame (visible snap). Same path for
+        // BOTH natural and grumpy early wakes (this is the only wake caller).
         g.stop?.('sleep');
-        const wakePromise = g.play?.('wake');
+        const wakePromise = g.play?.('wakeUp') ?? g.play?.('wake');
         wakePromise?.then?.(() => g.play?.('idle', { loop: true }));
       }
     } catch (err) {
@@ -161,6 +166,9 @@ export function initSleepFlow({ store, ui, roomManager, homeScene, gooby }) {
     selfWake = true;
     store.update((state) => Object.assign(state, wakeUp(state, now(), { early: true }).state));
     ui.toast('toast.wokeEarly');
+    // V3/G35 (§C5.4): one-shot sticker hook — grumpy early-wake moment.
+    // Runtime-only event; G34's stickerBook engine subscribes (§E0.1-7).
+    store.emit?.('stickerHook', { id: 'grumpyWake' });
   }
 
   /** Every sleep transition funnels through the store event (§E2). */

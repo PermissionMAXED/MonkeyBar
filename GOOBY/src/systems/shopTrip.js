@@ -384,6 +384,7 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
   function onArrive(result) {
     lastArrival = result;
     machine.arrive();
+    if (result?.towed) store.emit?.('stickerHook', { id: 'towed' }); // V3/G35 (§C5.4): tow-cutscene sticker hook
     // shop-trip counter for the firstDrive/drive25 achievements (§C8.3 — G12
     // reads achievements.counters.trips). V2/G21: EVERY guided trip counts as
     // a trip; vet arrivals additionally bump vetTrips (§C9.2 — discovery +

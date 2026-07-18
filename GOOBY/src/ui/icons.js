@@ -42,6 +42,9 @@ const PATHS = {
   fish: '<path d="M3 12s3.5-5.5 9-5.5c4 0 7 2.8 9 5.5-2 2.7-5 5.5-9 5.5C6.5 17.5 3 12 3 12zm-1-4 3 4-3 4V8z"/><circle cx="16" cy="11" r="1.2" fill="#fff"/>',
   bubble: '<circle cx="10" cy="10" r="7"/><circle cx="18" cy="17" r="3.5"/><circle cx="8" cy="8" r="2" fill="#fff" opacity="0.5"/>',
   spring: '<path d="M5 21h14M6 18h12M7.5 15h9M6.5 12h11M8 9h8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/><circle cx="12" cy="4.5" r="2.5"/>',
+  // ── V3/G35 (§C6.1): nutella jar — glass jar glyph with a chocolate-brown
+  // fill bar + cream lid band (fixed fills; the jar outline stays currentColor)
+  nutellaJar: '<rect x="6" y="3" width="12" height="3.4" rx="1.4"/><rect x="7.2" y="6.4" width="9.6" height="1.6" rx="0.8" fill="#FFF6EC"/><path d="M6.5 8h11a1.5 1.5 0 0 1 1.5 1.5V19a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 5 19V9.5A1.5 1.5 0 0 1 6.5 8z"/><path d="M6.5 12.5h11V19a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 6.5 19v-6.5z" fill="#5C3A21"/>',
 };
 
 /**
