@@ -18,6 +18,19 @@
 // Health tick events are re-emitted as the runtime-only store event
 // 'healthEvent' (payload: 'becameQueasy'|'becameSick'|'recovered'|
 // 'tummyWarning') — home/interactions.js turns them into toasts/juice.
+//
+// V2/FIX-B (E15) — 'cropsReadyLive' CONTRACT: garden.tick 'ready' events are
+// consumed by whichever 1 Hz ticker runs first (this engine registers before
+// home/gardenInteractions.js, so it wins every time and the in-room chime/
+// sparkle path was dead). Every garden.tick call site in this engine now
+// re-emits crossings as the runtime-only store event
+//   store.emit('cropsReadyLive', events)
+// with payload = the garden.tick events array, i.e.
+//   [{ type: 'ready', plotIdx: number, cropId: string }, ...]  (length ≥ 1;
+// emitted at most once per tick, never with an empty array). Consumer:
+// home/gardenInteractions.js (V2/FIX-C) plays the chime/sparkle/toast from
+// it. Offline/welcome-back catch-up (systems/offline.js 'cropsReady') is a
+// separate path and stays unchanged.
 
 import { ENGINE, STATS } from '../data/constants.js';
 import { now } from './clock.js';
@@ -115,9 +128,13 @@ export function createTimeEngine(store) {
       // idle-detection cleverness.
       state.profile = profileStats.tickPlaytime(state.profile, advancedMin);
       // §C2.3 garden growth (idempotent bookkeeping via garden.lastTickAt;
-      // the in-room 1 s interval + offline sim coexist safely). Live 'ready'
-      // events surface via the 'gardenChanged' slice event (G19's sparkle).
-      state.garden = garden.tick(state.garden, endMs, CROPS_BY_ID).g;
+      // the in-room 1 s interval + offline sim coexist safely). V2/FIX-B
+      // (E15): readiness crossings are re-emitted as 'cropsReadyLive' (see
+      // module header contract) — this ticker used to swallow them, starving
+      // gardenInteractions' chime/sparkle path.
+      const grown = garden.tick(state.garden, endMs, CROPS_BY_ID);
+      state.garden = grown.g;
+      if (grown.events.length > 0) store.emit?.('cropsReadyLive', grown.events);
     }
     if (awakeMin > 0) {
       const wasQueasy = state.health?.state === 'queasy';
@@ -158,8 +175,12 @@ export function createTimeEngine(store) {
     }
     if (wx.state === 'rain') {
       store.update((state) => {
-        const current = garden.tick(state.garden, nowMs, CROPS_BY_ID).g;
-        state.garden = garden.applyRain(current, wx.start, wx.end, CROPS_BY_ID);
+        // V2/FIX-B (E15): this tick can also cross readiness (sub-second
+        // window between 1 s ticks) — re-emit per the module-header contract
+        // so no crossing is ever swallowed.
+        const current = garden.tick(state.garden, nowMs, CROPS_BY_ID);
+        state.garden = garden.applyRain(current.g, wx.start, wx.end, CROPS_BY_ID);
+        if (current.events.length > 0) store.emit?.('cropsReadyLive', current.events);
       });
     }
   }

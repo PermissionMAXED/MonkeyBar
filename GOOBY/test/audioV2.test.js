@@ -10,6 +10,10 @@
 //   • the idle-variety rotation (emotions.js) is well-formed: clips exist in
 //     goobyAnims, voice ids are mapped, the picker is deterministic, and the
 //     shiver only ever enters the rotation in the rain.
+//   • V2/FIX-B (E15): the music toggle is AIRTIGHT — audio.js is also
+//     imported live (its browser touchpoints are all guarded no-ops in node)
+//     against a minimal fake AudioContext, proving the sequencer creates
+//     ZERO nodes while settings.music is off and resumes on re-enable.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -20,6 +24,10 @@ import { SFX_MAP, getSfxDef } from '../src/audio/sfxMap.js';
 import { VOICE_RECIPES } from '../src/audio/goobyVoice.js';
 import { CLIPS, V2_IDLE_CLIP_IDS } from '../src/character/goobyAnims.js';
 import { IDLE_VARIETY, pickIdleVariant, idleVarietyDelaySec } from '../src/character/emotions.js';
+// V2/FIX-B (E15): live-module imports for the music-toggle seam
+import audio from '../src/audio/audio.js';
+import { createStore } from '../src/core/store.js';
+import { defaultState } from '../src/core/save.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -202,4 +210,163 @@ test('idleVarietyDelaySec: 11–21 s by day, drowsier 16–30 s at night (§C10.
     assert.ok(day >= 11 && day <= 21, `day delay ${day}`);
     assert.ok(night >= 16 && night <= 30, `night delay ${night}`);
   }
+});
+
+// ===================== V2/FIX-B (E15): the music toggle is airtight ==========
+// settings.music=false used to only zero the music bus gain while
+// startMusic()'s sequencer interval kept creating ~2.7 WebAudio nodes/s into
+// the muted bus forever. The fix tears the sequencer down while music is off
+// and restarts the wanted track on re-enable. These tests drive the REAL
+// module (singleton) against a minimal fake AudioContext installed before
+// init(); node-creation is observed through the module's own instrumented
+// getStats().nodesCreated counter — the same signal the E15 eval measured.
+
+class FakeParam {
+  constructor(v = 0) {
+    this.value = v;
+  }
+  setValueAtTime() {
+    return this;
+  }
+  exponentialRampToValueAtTime() {
+    return this;
+  }
+  setTargetAtTime() {
+    return this;
+  }
+}
+
+class FakeNode {
+  constructor() {
+    this.gain = new FakeParam(1);
+    this.frequency = new FakeParam(0);
+    this.Q = new FakeParam(1);
+    this.threshold = new FakeParam(0);
+    this.knee = new FakeParam(0);
+    this.ratio = new FakeParam(1);
+    this.attack = new FakeParam(0);
+    this.release = new FakeParam(0);
+    this.playbackRate = new FakeParam(1);
+    this.pan = new FakeParam(0);
+    this.type = 'sine';
+    this.buffer = null;
+    this.loop = false;
+    this.onended = null;
+  }
+  connect(next) {
+    return next;
+  }
+  disconnect() {}
+  start() {}
+  stop() {}
+}
+
+class FakeAudioContext {
+  constructor() {
+    FakeAudioContext.last = this;
+    this.currentTime = 0;
+    this.state = 'running';
+    this.sampleRate = 8000; // small → cheap noise-buffer fills
+    this.destination = new FakeNode();
+  }
+  resume() {
+    return Promise.resolve();
+  }
+  createOscillator() {
+    return new FakeNode();
+  }
+  createGain() {
+    return new FakeNode();
+  }
+  createBufferSource() {
+    return new FakeNode();
+  }
+  createBiquadFilter() {
+    return new FakeNode();
+  }
+  createDynamicsCompressor() {
+    return new FakeNode();
+  }
+  createStereoPanner() {
+    return new FakeNode();
+  }
+  createBuffer(channels, length) {
+    return { getChannelData: () => new Float32Array(length) };
+  }
+  decodeAudioData() {
+    return Promise.reject(new Error('no decode headlessly'));
+  }
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Shared across the sequential E15 tests (audio.js is a module singleton). */
+let e15Store = null;
+
+test('E15: settings.music=false creates ZERO music nodes; re-enable resumes', async () => {
+  e15Store = createStore(defaultState(), { autosave: false });
+  globalThis.AudioContext = FakeAudioContext;
+  try {
+    audio.init(); // follows the store settings live from here on
+    const fake = FakeAudioContext.last;
+    assert.equal(audio.getStats().ctxState, 'running');
+
+    audio.music('home');
+    assert.equal(audio.getStats().track, 'home');
+    assert.equal(typeof audio.getMusicTime(), 'number', 'time base live while playing');
+    const on0 = audio.getStats().nodesCreated;
+    fake.currentTime += 3; // sequencer look-ahead chases the clock
+    await sleep(200); // several TICK_MS(60) interval fires
+    assert.ok(audio.getStats().nodesCreated > on0, 'sequencer schedules while ON');
+
+    // toggle OFF through the save settings — the production path
+    // (hud toggle → store 'change' → applySettings)
+    e15Store.set('settings.music', false);
+    await sleep(100); // store event flush (setTimeout in node) + margin
+    assert.equal(audio.getStats().track, null, 'sequencer torn down');
+    assert.equal(audio.getMusicTime(), null, 'time base null (danceParty falls back to wall clock)');
+    const muted = audio.getStats();
+    for (let i = 0; i < 4; i += 1) {
+      fake.currentTime += 4;
+      await sleep(120);
+    }
+    assert.equal(
+      audio.getStats().nodesCreated,
+      muted.nodesCreated,
+      'ZERO node creation while music is off (E15: was ~2.7 nodes/s into the muted bus)'
+    );
+    assert.equal(audio.getStats().errors, muted.errors, 'no errors while muted');
+
+    // toggle back ON: the remembered track restarts cleanly (step 0, fresh
+    // getMusicTime() base — the documented §D6 resume behavior)
+    e15Store.set('settings.music', true);
+    await sleep(100);
+    assert.equal(audio.getStats().track, 'home', 'track resumes on re-enable');
+    const resumed = audio.getStats().nodesCreated;
+    fake.currentTime += 3;
+    await sleep(200);
+    assert.ok(audio.getStats().nodesCreated > resumed, 'sequencer schedules again');
+    const t = audio.getMusicTime();
+    assert.ok(typeof t === 'number' && t >= 0, `fresh music time base (got ${t})`);
+  } finally {
+    delete globalThis.AudioContext;
+    audio.music(null);
+  }
+});
+
+test('E15: music(id) requested while OFF stays silent and starts on re-enable', async () => {
+  const fake = FakeAudioContext.last;
+  e15Store.set('settings.music', false);
+  await sleep(100);
+  audio.music('dance'); // e.g. danceParty launched with music muted
+  assert.equal(audio.getStats().track, null, 'no sequencer while the toggle is off');
+  const muted = audio.getStats().nodesCreated;
+  fake.currentTime += 4;
+  await sleep(150);
+  assert.equal(audio.getStats().nodesCreated, muted, 'the request creates no nodes');
+  e15Store.set('settings.music', true);
+  await sleep(100);
+  assert.equal(audio.getStats().track, 'dance', 'remembered request starts on re-enable');
+  audio.music(null);
+  assert.equal(audio.getStats().track, null);
 });

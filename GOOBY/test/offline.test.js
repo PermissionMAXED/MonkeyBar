@@ -394,3 +394,37 @@ test('V2/G20 weight: drifts toward 50 at ×0.3, capped at 480 sim-minutes', () =
   const r2 = simulateOffline(state({}, { weight: { value: 60 } }), T0 + 24 * H);
   near(r2.state.weight.value, 60 - OFFLINE.AWAKE_CAP_MIN * 0.3 * WEIGHT.DRIFT_PER_MIN, 'capped drift');
 });
+
+// ============== V2/FIX-B (E15): live readiness re-emitted as 'cropsReadyLive'
+
+test("timeEngine: garden readiness crossings re-emit as 'cropsReadyLive' (V2/FIX-B/E15)", () => {
+  // Radish 30 s from ready; the engine tick 60 s later crosses readiness.
+  // The engine's garden.tick used to swallow the 'ready' events (it always
+  // wins the 1 Hz race against gardenInteractions' in-room ticker) — the
+  // contract now re-emits them as a runtime-only store event with payload =
+  // the garden.tick events array (see src/core/timeEngine.js header).
+  const s0 = state();
+  s0.garden = { ...s0.garden, lastTickAt: T0 };
+  s0.garden.plots[0] = {
+    crop: 'radish',
+    plantedAt: T0 - 9.5 * MIN,
+    progressMin: 9.5, // growthMin 10 → crosses during the next tick
+    wateredUntil: T0 + MIN,
+    waterings: 1,
+    fertilized: false,
+  };
+  clock.configure({ now: T0 + MIN });
+  const store = createStore(s0, { autosave: false });
+  const engine = createTimeEngine(store);
+  /** @type {any[][]} */
+  const emissions = [];
+  store.on('cropsReadyLive', (events) => emissions.push(events));
+  engine.tick();
+  assert.equal(emissions.length, 1, 'exactly one emission for the crossing');
+  assert.deepEqual(emissions[0], [{ type: 'ready', plotIdx: 0, cropId: 'radish' }]);
+  assert.ok(store.get('garden').plots[0].progressMin >= CROP_TABLE.radish.growthMin);
+  // idempotent: an already-ready plot never re-emits on later ticks
+  clock.configure({ now: T0 + 2 * MIN });
+  engine.tick();
+  assert.equal(emissions.length, 1, 'no re-emission after the crossing');
+});

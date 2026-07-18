@@ -79,6 +79,17 @@ function applySettings(settings) {
     enabled.haptics = settings.haptics !== false;
   }
   applyGains();
+  // V2/FIX-B (E15): the music toggle must be airtight — zeroing the bus gain
+  // is not enough, the sequencer interval kept creating nodes into the muted
+  // bus. Tear the sequencer down while music is off and restart the wanted
+  // track (fresh, from step 0) when it comes back on. Runs on every store
+  // 'change': both branches are no-ops when nothing changed (stopMusic with
+  // no seq / seq already playing wantTrack).
+  if (!enabled.music) {
+    stopMusic();
+  } else if (ctx && wantTrack != null && seq?.id !== wantTrack) {
+    startMusic(wantTrack);
+  }
   // F3: park running loops while sfx is off; bring them back on re-enable
   // (e.g. mute during a nap must not permanently silence the snore).
   if (!enabled.sfx) {
@@ -174,7 +185,10 @@ export function init() {
   if (pendingTrack !== undefined) {
     const track = pendingTrack;
     pendingTrack = undefined;
-    startMusic(track);
+    // V2/FIX-B: route through music() — respects the enabled.music gate (the
+    // applySettings above may already have started wantTrack) instead of
+    // unconditionally spinning up a sequencer.
+    music(track);
   }
   resumePendingLoops(); // F3: e.g. snore requested at boot while asleep (§D6)
   console.info(`[audio] WebAudio init — state=${ctx.state}, sampleRate=${ctx.sampleRate}, buses=sfx/music`);
@@ -847,6 +861,16 @@ function mulberry32(seed) {
 let seq = null;
 /** Track requested before init() — started right after the gesture unlock. */
 let pendingTrack;
+/**
+ * V2/FIX-B (E15): the track the game currently WANTS (last music(id) call),
+ * remembered across mute cycles. settings.music=false used to only zero the
+ * bus gain while the sequencer interval kept creating ~2.7 WebAudio nodes/s
+ * into the muted bus forever; now the sequencer is torn down while music is
+ * off (zero node creation) and this remembers what to restart — cleanly from
+ * step 0, a fresh getMusicTime() time base — when it is re-enabled.
+ * @type {string|null}
+ */
+let wantTrack = null;
 
 /** Home loop (§D6): pentatonic pluck sequencer ~72 BPM, lo-fi and quiet. */
 const HOME = {
@@ -902,6 +926,10 @@ function schedDanceStep(step, t) {
 function startMusic(id) {
   stopMusic();
   if (id == null) return;
+  // V2/FIX-B (E15): never run the sequencer while music is toggled off — it
+  // would schedule tone()/noise() nodes into a zero-gain bus forever. The
+  // request stays in wantTrack; applySettings restarts it on re-enable.
+  if (!enabled.music) return;
   const sched = id === 'dance' ? schedDanceStep : schedHomeStep;
   if (id !== 'dance' && id !== 'home' && DEV) console.warn(`[audio] unknown music track '${id}' — playing 'home'`);
   const rng = mulberry32(id === 'dance' ? DANCE.PATTERN_SEED : 72_2026);
@@ -931,11 +959,19 @@ function stopMusic() {
 /**
  * Start/stop background music (§D6). Tracks: 'home', 'dance', null = stop.
  * Safe pre-init: the request is remembered and starts after the unlock.
+ * V2/FIX-B (E15): also safe while settings.music is off — the request is
+ * remembered (wantTrack) and starts when the toggle comes back on; no
+ * sequencer (and no node creation) runs while music is off.
  * @param {string|null} id
  */
 export function music(id) {
+  wantTrack = id;
   if (!ctx) {
     pendingTrack = id;
+    return;
+  }
+  if (!enabled.music) {
+    stopMusic(); // defensive — the sequencer never runs while music is off
     return;
   }
   if (seq?.id === id) return;

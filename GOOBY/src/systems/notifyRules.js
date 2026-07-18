@@ -32,7 +32,7 @@
 
 import { NOTIFY, STATS, CROP_TABLE } from '../data/constants.js';
 import { isSleeping } from './sleep.js';
-import { readyAt } from './garden.js'; // V2/G20 (pure)
+import { readyAt, tick as gardenTick } from './garden.js'; // V2/G20 (pure); V2/FIX-B: + tick
 
 // V2/G20: engine-internal 2.0 rule numbers (§E0.1-2: not constants.js).
 /** §C2.4: harvest notification only when readyAt is ≥ 10 min in the future. */
@@ -128,7 +128,7 @@ function resolveConflicts(items) {
   const spacingMs = NOTIFY.MIN_SPACING_MIN * 60000;
   // Iterate until stable: shifting one item later can create new violations
   // (or push past other items), so re-sort + re-scan. Bounded: each pass moves
-  // one item strictly later and there are ≤ 5 items.
+  // one item strictly later and there are ≤ NOTIFY.MAX_SCHEDULED (7) items.
   for (let guard = 0; guard < 50; guard++) {
     list.sort((a, b) => a.at - b.at || a.id - b.id);
     let violation = false;
@@ -151,7 +151,7 @@ function resolveConflicts(items) {
  * Compute the full notification schedule (§C7). Pure & deterministic.
  * @param {object} state save-schema state (§E3)
  * @param {number} nowMs current game time (clock.now())
- * @returns {ScheduledNotification[]} sorted by time, max 5, one per id
+ * @returns {ScheduledNotification[]} sorted by time, ≤ NOTIFY.MAX_SCHEDULED (7), one per id
  */
 export function computeSchedule(state, nowMs) {
   /** @type {ScheduledNotification[]} */
@@ -210,22 +210,49 @@ export function computeSchedule(state, nowMs) {
 }
 
 /**
+ * V2/FIX-B (E14): float-noise forgiveness for readyAt's "don't lie" check.
+ * Every §C2.3 crop row has ZERO watering slack by design (waterings ×
+ * wateredWindowMin == growthMin), so for a minimally-watered plot the
+ * remaining growth and the remaining watered window are EXACTLY equal in
+ * real arithmetic — readyAt only schedules because its `<` rejects on
+ * equality. progressMin however accrues via hundreds of 1 s tick() float
+ * additions, so it can sit a few ULPs off exact; a hair of accumulated error
+ * would flip the comparison and silently drop the harvest notification.
+ * Pretending the watering lasts 1 ms longer (1.67e-5 min — imperceptible,
+ * ~9 orders above ULP noise) makes the check robust WITHOUT moving the
+ * predicted time (readyAt derives the returned time from progressMin only).
+ */
+export const READY_CHECK_SLACK_MS = 1;
+
+/**
  * V2/G20: earliest predicted plot readiness (§C2.4), or null when no planted
  * plot can reach readiness on its current watering. Crop defs come straight
  * from constants.CROP_TABLE (readyAt only needs growthMin).
+ *
+ * V2/FIX-B (E14): plot.progressMin is only current to garden.lastTickAt (the
+ * 1 s tickers' bookkeeping), while readyAt is asked about `nowMs` — that
+ * tick-lag made remainingMin look bigger than the watered window for every
+ * minimally-watered crop (zero slack by design, see READY_CHECK_SLACK_MS),
+ * so id 6 NEVER scheduled in real play. Bring the slice current first by
+ * running the pure garden.tick on a COPY (the store is never mutated —
+ * tick() returns a new slice and this module stays pure).
  * @param {object} state save-schema state
  * @param {number} nowMs
  * @returns {number|null}
  */
 export function earliestReadyAt(state, nowMs) {
-  const plots = state?.garden?.plots;
-  if (!Array.isArray(plots)) return null;
+  if (!Array.isArray(state?.garden?.plots)) return null;
+  const { plots } = gardenTick(state.garden, nowMs, CROP_TABLE).g; // pure copy
   let earliest = null;
   for (const plot of plots) {
     if (!plot || plot.crop == null) continue;
     const def = CROP_TABLE[plot.crop];
     if (!def) continue;
-    const at = readyAt(plot, def, nowMs);
+    const at = readyAt(
+      { ...plot, wateredUntil: plot.wateredUntil + READY_CHECK_SLACK_MS },
+      def,
+      nowMs
+    );
     // Already-ready plots (at <= nowMs) never notify — the player will see
     // them; only future readiness counts (§C2.4 lead handled by the caller).
     if (at == null || at <= nowMs) continue;

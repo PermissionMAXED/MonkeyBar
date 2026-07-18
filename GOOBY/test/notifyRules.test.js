@@ -18,8 +18,10 @@ import {
   sameLocalDay,
   HARVEST_MIN_LEAD_MIN,
   SICK_AFTER_H,
+  READY_CHECK_SLACK_MS, // V2/FIX-B (E14)
 } from '../src/systems/notifyRules.js';
-import { NOTIFY } from '../src/data/constants.js';
+import { NOTIFY, CROP_TABLE } from '../src/data/constants.js';
+import { readyAt as gardenReadyAt } from '../src/systems/garden.js'; // V2/FIX-B (E14)
 import { defaultState } from '../src/core/save.js';
 
 const MIN = 60000;
@@ -286,9 +288,20 @@ function plot(crop, now, { progress = 0, wateredMin = 0 } = {}) {
   };
 }
 
+/**
+ * V2/FIX-B (E14): pin the slice bookkeeping to `now` — these fixtures encode
+ * ALREADY-CURRENT progress (progressMin as of `now`), and earliestReadyAt now
+ * runs garden.tick to `now` on a copy first, so a stale default lastTickAt
+ * (0) would accrue the whole plantedAt→now stretch on top of the fixture.
+ */
+function gardenCurrent(s, now) {
+  s.garden.lastTickAt = now;
+  return s;
+}
+
 test('harvest: scheduled at the EARLIEST readyAt across planted plots (§C2.4)', () => {
   const now = at(10, 0);
-  const s = state();
+  const s = gardenCurrent(state(), now);
   // corn: 90 grow, 10 done, watered 90 min → ready now+80; radish: ready now+10
   s.garden.plots[0] = plot('corn', now, { progress: 10, wateredMin: 90 });
   s.garden.plots[1] = plot('radish', now, { progress: 0, wateredMin: 10 });
@@ -302,7 +315,7 @@ test('harvest: scheduled at the EARLIEST readyAt across planted plots (§C2.4)',
 
 test('harvest lead rule: readyAt < 10 min in the future is not scheduled', () => {
   const now = at(10, 0);
-  const s = state();
+  const s = gardenCurrent(state(), now);
   s.garden.plots[0] = plot('radish', now, { progress: 1, wateredMin: 9 }); // ready in 9 min
   assert.equal(byId(computeSchedule(s, now), NOTIFY.IDS.harvest), undefined);
   assert.equal(HARVEST_MIN_LEAD_MIN, 10);
@@ -310,7 +323,7 @@ test('harvest lead rule: readyAt < 10 min in the future is not scheduled', () =>
 
 test("harvest don't-lie rule: insufficient watering → no notification (§C2.4)", () => {
   const now = at(10, 0);
-  const s = state();
+  const s = gardenCurrent(state(), now);
   // corn needs 90 more min but is only watered for 45 → progress halts first
   s.garden.plots[0] = plot('corn', now, { progress: 0, wateredMin: 45 });
   assert.equal(earliestReadyAt(s, now), null);
@@ -319,7 +332,7 @@ test("harvest don't-lie rule: insufficient watering → no notification (§C2.4)
 
 test('harvest: already-ready plots never notify (the player will see them)', () => {
   const now = at(10, 0);
-  const s = state();
+  const s = gardenCurrent(state(), now);
   s.garden.plots[0] = plot('radish', now, { progress: 10, wateredMin: 0 }); // ready NOW
   assert.equal(earliestReadyAt(s, now), null);
   assert.equal(byId(computeSchedule(s, now), NOTIFY.IDS.harvest), undefined);
@@ -327,9 +340,59 @@ test('harvest: already-ready plots never notify (the player will see them)', () 
 
 test('harvest: quiet-hours shift applies (readyAt 23:00 → 08:05 next day)', () => {
   const now = at(21, 0);
-  const s = state();
+  const s = gardenCurrent(state(), now);
   s.garden.plots[0] = plot('corn', now, { progress: 0, wateredMin: 180 }); // ready 22:30
   assert.equal(byId(computeSchedule(s, now), NOTIFY.IDS.harvest).at, at(8, 5, 1));
+});
+
+// -------------------- V2/FIX-B (E14): stale bookkeeping + zero-slack noise
+
+test('harvest stale bookkeeping (E14): 1 s tick-lag no longer kills id 6', () => {
+  const now = at(10, 0);
+  const s = state();
+  // REAL-PLAY shape: carrot (growthMin 20 == one 20-min watering — zero
+  // slack by §C2.3 design) planted+watered 5 min ago; the 1 s ticker last
+  // ran 1 s before `now`, so progressMin lags the clock by that tick-lag.
+  const wateredAt = now - 5 * MIN;
+  const lastTick = now - 1000;
+  const staleProgress = (lastTick - wateredAt) / MIN; // current only to lastTick
+  s.garden.lastTickAt = lastTick;
+  s.garden.plots[0] = {
+    crop: 'carrot',
+    plantedAt: wateredAt,
+    progressMin: staleProgress,
+    wateredUntil: wateredAt + 20 * MIN, // minimal watering: ends exactly at readiness
+    waterings: 1,
+    fertilized: false,
+  };
+  // The RAW slice really is stale — asking garden.readyAt directly still
+  // trips the don't-lie check (this was the E14 bug: id 6 never scheduled).
+  assert.equal(gardenReadyAt(s.garden.plots[0], CROP_TABLE.carrot, now), null);
+  // earliestReadyAt brings a COPY current first → the correct readyAt
+  const expected = now + 15 * MIN;
+  const got = earliestReadyAt(s, now);
+  assert.ok(got != null, 'id 6 must schedule');
+  assert.ok(Math.abs(got - expected) <= 1, `earliestReadyAt ${got} ≈ ${expected}`);
+  const n = byId(computeSchedule(s, now), NOTIFY.IDS.harvest);
+  assert.ok(n, 'computeSchedule carries id 6');
+  assert.ok(Math.abs(n.at - expected) <= 1, `schedule at ${n.at} ≈ ${expected}`);
+  // …and the store slice was NOT mutated (pure tick on a copy)
+  assert.equal(s.garden.lastTickAt, lastTick);
+  assert.equal(s.garden.plots[0].progressMin, staleProgress);
+});
+
+test('harvest zero-slack float noise (E14): ULP-low progress still schedules', () => {
+  const now = at(10, 0);
+  const s = gardenCurrent(state(), now);
+  // Hundreds of 1 s tick() float additions can leave progressMin a hair
+  // under exact arithmetic; with zero watering slack that used to flip
+  // readyAt's wateredRemain < remaining check. READY_CHECK_SLACK_MS (1 ms of
+  // pretend watering) absorbs it without moving the predicted time.
+  assert.ok(READY_CHECK_SLACK_MS >= 1);
+  s.garden.plots[0] = plot('carrot', now, { progress: 5 - 1e-13, wateredMin: 15 });
+  const n = byId(computeSchedule(s, now), NOTIFY.IDS.harvest);
+  assert.ok(n, 'id 6 must survive ULP noise');
+  assert.equal(n.at, now + 15 * MIN, 'predicted time unbiased by the slack');
 });
 
 test('sick: 4 h after backgrounding while sick; queasy/healthy never schedule (§C3.5)', () => {
@@ -388,6 +451,7 @@ test('all 7 triggers live: MAX_SCHEDULED 7 holds, ids 6/7 included, sorted', () 
       health: { ...defaultState().health, state: 'sick' },
     }
   );
+  gardenCurrent(s, now);
   s.garden.plots[0] = plot('corn', now, { progress: 0, wateredMin: 90 });
   const items = computeSchedule(s, now);
   assert.equal(items.length, 7);
