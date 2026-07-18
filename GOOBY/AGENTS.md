@@ -2,8 +2,8 @@
 
 Working notes for AI/build agents (and humans) developing GOOBY. The binding
 architecture contract is `PLAN.md` (§E especially); `PLAN2.md` is the binding
-2.0 spec (§A acceptance criteria, §B architecture deltas, §C feature numbers)
-— this file is the quick map.
+2.0 spec and `PLAN3.md` the binding 3.0 spec (§A acceptance, §B deltas, §C
+feature numbers) — this file is the quick map.
 
 ## Layout
 
@@ -12,18 +12,17 @@ GOOBY/
 ├── index.html            #scene canvas + #ui overlay root
 ├── src/
 │   ├── main.js           boot: save → store → scenes/UI wiring (marked agent blocks)
-│   ├── core/             store (events §E2 + 2.0 events §B3), save (schema v2 +
-│   │                     migrations §E3/§B2), clock (pinnable), sceneManager
+│   ├── core/             store (events §E2 + 2.0/3.0 events), save (schema v3 +
+│   │                     lossless v1→v2→v3 migrations), clock (pinnable), sceneManager
 │   │                     (RAF+fade §E1, captureFrame for photo/profile), input
 │   │                     (§E5), assets (GLB cache + getAudioUrl), timeEngine
 │   │                     (1 s tick + 60 s ambience ticker), notifications
 │   │                     (guarded Capacitor adapter §E7, ids 1–7)
-│   ├── data/             constants.js = ALL design numbers (§C — READ-ONLY since
-│   │                     2.0 wave 1); strings.js EN+DE (v1 keys) + strings/v2-*.js
-│   │                     per-feature modules (§E0.1-1 — edit ONLY your module,
-│   │                     never strings.js); foods(32)/outfits(20)/furniture(58)/
-│   │                     achievements(33)/minigames(21)/crops/quests/collections/
-│   │                     skins catalogs
+│   ├── data/             constants.js frozen after V3/G34's one-time 3.0 rows;
+│   │                     strings.js EN+DE + strings/v2-* and v3-* per-feature
+│   │                     modules (edit ONLY your assigned module); foods(33)/
+│   │                     outfits(42)/furniture(58)/achievements(37)/
+│   │                     minigames(27)/stickers(28)/crops/quests/collections/skins
 │   ├── character/        procedural Gooby rig (gooby.js, goobyAnims.js CLIPS,
 │   │                     emotions), outfitAttach.js (applyEquippedOutfits),
 │   │                     skins.js (applySkin fur tints §C8.5)
@@ -34,24 +33,26 @@ GOOBY/
 │   ├── city/ + systems/shopTrip.js   drive minigame + shop/vet-trip state machine
 │   │                     (cityBuilder: vet clinic + 6 landmarks, vetClinic.js)
 │   ├── minigames/        framework.js (§E8 ctx contract + §B3 onEnd meta),
-│   │                     registry, games/*.js — 21 games, each with a PURE
+│   │                     registry, games/*.js — 27 games, each with a PURE
 │   │                     .logic.js sibling — that's what tests hit
 │   ├── systems/          stats/sleep/economy/leveling/achievements/dailyBonus/
 │   │                     notifyRules + 2.0 engines: garden/quests/collections/
-│   │                     profileStats/health/weight/dayNight/weather — pure
+│   │                     profileStats/health/weight/dayNight/weather + 3.0
+│   │                     stickerBook/nougat and surf-travel wiring — pure
 │   │                     logic, no DOM/three imports (exact engine numbers live
 │   │                     as frozen consts INSIDE each module, §E0.1-2)
-│   ├── audio/            audio.js (WebAudio manager §D6 + loop recipes),
-│   │                     sfxMap.js (id→ogg/synth), goobyVoice.js (synth noises)
+│   ├── audio/            audio.js (5-bus WebAudio manager), musicDirector.js
+│   │                     (5 file-jingle medley contexts), sfxMap.js
+│   │                     (id→sample/synth), goobyVoice.js (synth noises)
 │   ├── gfx/              tween.js, particles.js (pooled 3D + DOM confetti),
 │   │                     sky.js (garden dome + window skies), weatherFx.js
 │   │                     (instanced rain/clouds — 1 draw call)
 │   ├── ui/               ui.js (screens/panels/toasts §E6), hud (quest badge,
 │   │                     camera, profile, sick chip), screens (questBoard,
-│   │                     album, profile, photoMode, vetPanel, gardenPanel),
+│   │                     album+Stickerbuch, profile, photoMode, vetPanel,
+│   │                     gardenPanel, devPanel),
 │   │                     onboarding.js (§C8.1 tutorial + 2.0 teaser step),
-│   │                     whatsNew.js (one-time 2.0 panel for migrated v1
-│   │                     saves — §E0.1-6), styles.css
+│   │                     whatsNew.js (one-time 2.0/3.0 veteran panels), styles.css
 │   └── dev/harness.js    URL-param test surface (§E9)
 ├── public/assets/kenney/ CC0 GLBs + audio (interface-sounds, impact-sounds,
 │                         music-jingles — resolve via assets.getAudioUrl)
@@ -66,11 +67,12 @@ GOOBY/
   config (`npm run lint`) must stay clean.
 - Every design number lives in `src/data/constants.js`; every user-facing string
   goes through `t(key)` with entries in BOTH `EN` and `DE` dictionaries.
-- **2.0 strings ruling (§E0.1-1):** `src/data/strings.js` is frozen — 2.0 keys
-  live in per-feature `src/data/strings/v2-*.js` modules (ownership header in
-  each file). Add keys ONLY to your module, always EN + DE.
-- **2.0 constants ruling (§E0.1-2):** `src/data/constants.js` is READ-ONLY
-  since wave 1. Engine-internal exact numbers (health/weight thresholds,
+- **Versioned strings ruling (PLAN3 §E0.1-2):** `src/data/strings.js` is frozen.
+  2.0/3.0 keys live in assigned `strings/v2-*.js` / `strings/v3-*.js` modules
+  (ownership header in each file). Add keys ONLY to your module, always EN + DE.
+- **3.0 constants ruling (PLAN3 §E0.1-3):** `src/data/constants.js` is frozen
+  again after G34's one-time save/game-row additions. Engine-internal exact
+  numbers (health/weight thresholds,
   dayNight bands, weather percentages) are exported frozen consts INSIDE the
   owning engine module; per-game tuning lives in the game's `.logic.js`.
 - Tests are `node:test` (`npm test`) and import pure modules only — keep game
@@ -89,7 +91,7 @@ GOOBY/
   danceParty's chart). Ambience loops (`ambience.rain`, `ambience.birdsong`)
   start via `audio.play` and stop via `audio.stop`.
 
-## Key §E contracts (summary — full text in PLAN.md; 2.0 deltas in PLAN2 §B3)
+## Key §E contracts (summary — PLAN.md, PLAN2 §B3, PLAN3 §B)
 
 - **§E1 scenes:** `{ scene, camera, enter(params), update(dt), exit(), dispose() }`
   registered on the sceneManager; assets preload by key before enter.
@@ -102,9 +104,10 @@ GOOBY/
   ambience ticker in timeEngine).
 - **§E3 save:** versioned schema + migrations in `core/save.js` (localStorage,
   Capacitor-Preferences mirror on native). Never write localStorage directly.
-  2.0: `SAVE.VERSION = 2`; `migrations[1]` migrates v1 losslessly (§B2) and
-  sets `onboarding.whatsNew2Seen = false` so ONLY migrated v1 veterans see the
-  one-time What's-new panel (fresh saves default it to `true`).
+  `migrations[1]` migrates v1→v2 losslessly and sets
+  `onboarding.whatsNew2Seen = false` so ONLY migrated v1 veterans see the
+  2.0 panel. 3.0: `SAVE.VERSION = 3`; `migrations[2]` migrates v2 losslessly
+  and sets `whatsNew3Seen = false`; fresh saves default both flags `true`.
 - **§E5 input:** normalized tap/drag/swipe events from the canvas; UI overlays
   block canvas input while open.
 - **§E6 UI:** screens/panels are `{ mount(el, params), unmount() }` modules
@@ -127,19 +130,40 @@ GOOBY/
   painter); `roomManager.setAmbience({band, weather})` lerps lights/skies.
   Locked garden (level < 3) shows a padlocked 5th nav dot + teaser.
 
+### 3.0 contract deltas
+
+- **Assets:** asset keys stay `'<slug>/<file-no-ext>'`. `PACK_FORMATS` in
+  `core/assets.js` routes KayKit `.glb`/`.gltf` packs; unlisted packs remain
+  Kenney `.glb`. Rigged characters MUST use `assets.getSkinnedModel(key)` plus
+  shared `assets.getAnimations(key)`, never `getModel(key).clone()`.
+- **Audio:** `audio.js` owns master/sfx/music/voice/ambience buses and maps
+  slider values with `(v/100)^2`. `musicDirector` contexts are `home`, `garden`,
+  `arcade`, `city`, `shop`; scenes call `setContext`, overlay screens use
+  balanced `pushContext`/`popContext`. Music mute must create zero source nodes.
+- **UI:** `settings.uiScale` is exactly 85/100/115/130 and applies live via root
+  rem scaling. Safe-area chrome reads the root `--safe-*` variables. The dev
+  panel is registered in all builds but hidden unless `settings.devUnlocked`
+  (5 taps on language “Auto”); `?open=devPanel` bypasses only the UI entry.
+- **Content:** 27 minigames auto-discover through `registry.js`; 42 outfits use
+  hat/glasses/neck/back slots; 28 new Stickerbuch entries use
+  `stickers.unlocked/seen`. The shop-trip machine offers drive or Shopping Surf
+  for the shop, but vet trips remain drive-only.
+
 ## Dev harness cheatsheet (§E9, dev builds only)
 
-`?reset=1` wipe save · `?scene=home|gooby` · `?room=kitchen|living|bathroom|bedroom|garden`
-· `?minigame=<id>` (bypasses level locks) · `?open=shop|wardrobe|achievements|arcade|settings|questBoard|album|profile`
+`?reset=1` wipe save · `?scene=home|gooby|roadtest` · `?room=kitchen|living|bathroom|bedroom|garden`
+· `?minigame=<id>` (bypasses level locks) · `?open=shop|wardrobe|achievements|arcade|settings|questBoard|album|profile|devPanel`
 · `?coins=N ?level=N ?energy=N ?hunger=N ?hygiene=N ?fun=N` · `?fast=N` clock
 multiplier · `?now=<epochMs>` pin clock (also pins the day/night band + weather
 block — the ambience engines are pure functions of the clock) · `?lang=de|en`
 · `?sleep=1` start nap · `?autoplay=1` bot-plays the launched minigame
 · `?onboarding=0` suppress the first-run tutorial (harness routes suppress it
-automatically). Feature demos: `?skin=<id>` own+equip a fur skin ·
+automatically) · `?uiscale=85|100|115|130` · `?notch=1` fake safe areas
+· `?travel=surf|drive` direct shop trip · `?petdebug=1` gesture telemetry.
+Feature demos: `?skin=<id>` own+equip a fur skin ·
 `?outfits=<id,id>` own+equip outfits · `?dailydemo=N` daily popup as streak
-day N · `?achdemo=1` seeded achievements screen · `?whatsnew=1` force the
-What's-new panel · `?autopilot=1` bot-drives the shop trip ·
+day N · `?achdemo=1` seeded achievements screen · `?whatsnew=1` force 3.0
+What's-new (`?whatsnew=2` regresses 2.0) · `?autopilot=1` bot-drives the trip ·
 `?care=tray|wash|feed:<foodId>` care demos (+`?suds=`, `?feedAt=`, `?feedN=`)
 · `?scene=gooby&emotion=<id>&clip=<id>` showcase deep links.
 `window.__gooby = { store, ui, sceneManager, framework, clock, save }` for console poking.
@@ -166,3 +190,15 @@ What's-new panel · `?autopilot=1` bot-drives the shop trip ·
   practice for anything that needs the RAF loop running.
 - The care/pet gesture needs several back-and-forth drag reversals over Gooby's
   body within ~1 s (see `gestures.js`); a single straight drag won't register.
+
+## Cursor Cloud specific instructions
+
+- GOOBY has one required development service: the Vite web app. Standard
+  install/lint/test/build/run commands are in `README.md` and `package.json`;
+  no database, API server or container is required.
+- Leave the coordinator's long-lived port 5174/tmux service alone. Concurrent
+  agents use their PLAN3 §E0.3 Vite/CDP slot ports and stop only PIDs they
+  started. Use the established VM/CDP recipe in the preceding section.
+- `npx cap sync ios` is a valid Linux packaging check; Xcode/CocoaPods native
+  compilation remains macOS CI-only. Audio checks use `audio.getStats()` because
+  the cloud VM has no audio device.

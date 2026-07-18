@@ -17,7 +17,12 @@ import {
   snapshotProgress,
   stepSatisfied,
 } from '../src/ui/onboarding.js';
-import { shouldShowWhatsNew, WHATSNEW_BULLETS } from '../src/ui/whatsNew.js'; // V2/G30
+import {
+  shouldShowWhatsNew,
+  shouldShowWhatsNew3,
+  WHATSNEW_BULLETS,
+  WHATSNEW3_BULLETS,
+} from '../src/ui/whatsNew.js'; // V2/G30 + V3/G48
 import { ONBOARDING } from '../src/data/constants.js';
 import { SFX_MAP, getSfxDef, allSfxIds, allSampleKeys } from '../src/audio/sfxMap.js';
 import { VOICE_RECIPES } from '../src/audio/goobyVoice.js';
@@ -218,6 +223,65 @@ test('whatsNew: 6 bullets tour the §A pillars with EN+DE copy', () => {
     assert.equal(typeof EN[key], 'string', `EN missing '${key}'`);
     assert.equal(typeof DE[key], 'string', `DE missing '${key}'`);
   }
+});
+
+// -------------------------------------- V3/G48: "What's new in 3.0" logic
+
+test('whatsNew3: fresh saves never qualify (flag defaults true — §E0.1-8)', () => {
+  const fresh = defaultState();
+  assert.equal(fresh.onboarding.whatsNew3Seen, true);
+  fresh.onboarding.done = true;
+  assert.equal(shouldShowWhatsNew3(fresh), false);
+  assert.equal(shouldShowWhatsNew3({}), false);
+  assert.equal(shouldShowWhatsNew3(null), false);
+});
+
+test('whatsNew3: migrated v2 veterans qualify exactly once', () => {
+  const raw = fs.readFileSync(path.join(ROOT, 'test', 'fixtures', 'v2-midgame.json'), 'utf8');
+  const migrated = migrations[2](JSON.parse(raw));
+  assert.equal(migrated.v, 3);
+  assert.equal(migrated.onboarding.whatsNew2Seen, true);
+  assert.equal(migrated.onboarding.whatsNew3Seen, false);
+  assert.equal(shouldShowWhatsNew(migrated), false);
+  assert.equal(shouldShowWhatsNew3(migrated), true);
+  migrated.onboarding.whatsNew3Seen = true; // panel mount persists before display
+  assert.equal(shouldShowWhatsNew3(migrated), false);
+});
+
+test('whatsNew3: direct v1→v3 migration preserves both one-time tours', () => {
+  const raw = fs.readFileSync(path.join(ROOT, 'test', 'fixtures', 'v1-midgame.json'), 'utf8');
+  const v2 = migrations[1](JSON.parse(raw));
+  const v3 = migrations[2](v2);
+  assert.equal(shouldShowWhatsNew(v3), true);
+  assert.equal(shouldShowWhatsNew3(v3), true);
+  v3.onboarding.whatsNew2Seen = true;
+  assert.equal(shouldShowWhatsNew(v3), false);
+  assert.equal(shouldShowWhatsNew3(v3), true);
+});
+
+test('whatsNew3: waits for an unfinished veteran tutorial', () => {
+  const state = migrations[2]({
+    v: 2,
+    onboarding: { done: false, step: 4, whatsNew2Seen: true },
+  });
+  assert.equal(state.onboarding.whatsNew3Seen, false);
+  assert.equal(shouldShowWhatsNew3(state), false);
+  state.onboarding.done = true;
+  assert.equal(shouldShowWhatsNew3(state), true);
+});
+
+test('whatsNew3: seven 3.0 highlights have EN+DE copy', () => {
+  assert.equal(WHATSNEW3_BULLETS.length, 7);
+  for (const bullet of WHATSNEW3_BULLETS) {
+    assert.equal(typeof bullet.icon, 'string');
+    assert.equal(typeof EN[bullet.key], 'string', `EN missing '${bullet.key}'`);
+    assert.equal(typeof DE[bullet.key], 'string', `DE missing '${bullet.key}'`);
+  }
+  for (const key of ['whatsnew3.title', 'whatsnew3.sub', 'whatsnew3.cta', 'new.ribbon']) {
+    assert.equal(typeof EN[key], 'string', `EN missing '${key}'`);
+    assert.equal(typeof DE[key], 'string', `DE missing '${key}'`);
+  }
+  assert.equal(DE['new.ribbon'], 'NEU');
 });
 
 // ------------------------------------------------- §D6 sfx coverage contract

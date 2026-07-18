@@ -11,6 +11,68 @@ import { icon } from './icons.js';
 import { isMinigameUnlocked } from '../systems/leveling.js';
 import { hasGame } from '../minigames/registry.js';
 import musicDirector from '../audio/musicDirector.js'; // V3/G32: arcade medley overlay (§B2.4)
+import { localDay, now } from '../core/clock.js'; // V3/G48: §C10.3 local-day ribbons
+
+// ---- V3/G48: GOOBY 3.0 arcade ribbons (PLAN3 §C10.3) ----------------------
+
+/** All six 3.0 games carry a NEU ribbon until their first completed play. */
+export const V3_GAME_IDS = Object.freeze([
+  'shoppingSurf', 'purblePlace', 'toyRacer', 'ghostHunt', 'rocketRescue', 'harborHopper',
+]);
+/** The two flagships additionally get the wide treatment for three local days. */
+export const V3_FLAGSHIP_IDS = Object.freeze(['shoppingSurf', 'purblePlace']);
+const V3_GAME_SET = new Set(V3_GAME_IDS);
+const V3_FLAGSHIP_SET = new Set(V3_FLAGSHIP_IDS);
+const FLAGSHIP_NEW_DAYS = 3;
+
+/** @param {string} day local YYYY-MM-DD @returns {number} UTC day ordinal */
+function dayOrdinal(day) {
+  const [y, m, d] = String(day).split('-').map(Number);
+  if (![y, m, d].every(Number.isFinite)) return Number.NaN;
+  return Math.floor(Date.UTC(y, m - 1, d) / 86400000);
+}
+
+/**
+ * Pure ribbon rule. All six stop being new after first play; the flagship
+ * window also expires after 3 local calendar days (§C10.3).
+ * @param {object} state save state
+ * @param {string} id minigame id
+ * @param {number} [nowMs] game-clock timestamp
+ */
+export function shouldShowV3GameRibbon(state, id, nowMs = now()) {
+  if (!V3_GAME_SET.has(id) || Number(state?.minigames?.plays?.[id] ?? 0) > 0) return false;
+  if (!V3_FLAGSHIP_SET.has(id)) return true;
+  const unlockedDay = state?.minigames?.newUnlockDay?.[id];
+  if (typeof unlockedDay !== 'string') return true;
+  const age = dayOrdinal(localDay(nowMs)) - dayOrdinal(unlockedDay);
+  return Number.isFinite(age) && age >= 0 && age < FLAGSHIP_NEW_DAYS;
+}
+
+/**
+ * Record the first local day each unlocked flagship is presented in the
+ * arcade. This tiny UI-owned metadata makes the 3-day window stable across
+ * reloads without changing game/system logic.
+ * @param {object} store
+ * @param {number} level
+ */
+function rememberFlagshipUnlockDays(store, level) {
+  const existing = store.get('minigames.newUnlockDay') ?? {};
+  const next = { ...existing };
+  const today = localDay();
+  let changed = false;
+  for (const id of V3_FLAGSHIP_IDS) {
+    if (isMinigameUnlocked(id, level) && typeof next[id] !== 'string') {
+      next[id] = today;
+      changed = true;
+    }
+  }
+  if (changed) {
+    store.set('minigames.newUnlockDay', next);
+    store.flush?.();
+  }
+}
+
+// ---- end V3/G48 arcade ribbons --------------------------------------------
 
 // V3/G33 (§B3): mechanical px→rem sweep (÷16) of this injected CSS string —
 // exemptions (1px hairlines/999px pills/shadows/@media px) per PLAN3 §B3.
@@ -38,6 +100,11 @@ const ARCADE_CSS = `
 .g5-tile.g5-locked .g5-tile-name,.g5-tile.g5-locked .g5-tile-best{visibility:hidden;}
 .g5-tile.g5-soon .g5-tile-icon{opacity:.4;}
 .g5-tile.g5-soon .g5-tile-name{opacity:.5;}
+/* V3/G48 (§C10.3): component-injected styles; styles.css belongs to G47. */
+.g5-tile.g48-flagship{grid-column:span 2;aspect-ratio:2.05/1;flex-direction:row;padding-inline:0.875rem;background:linear-gradient(135deg,var(--white),rgba(255,123,169,.14));}
+.g5-tile.g48-flagship .g5-tile-icon{width:3.125rem;height:3.125rem;}
+.g5-tile.g48-flagship .g5-tile-name{font-size:0.8125rem;max-height:2rem;}
+.g48-new-ribbon{position:absolute;z-index:3;right:-0.3125rem;top:0.375rem;min-width:2.75rem;padding:0.1875rem 0.4375rem;border-radius:999px;background:var(--pink);color:#fff;font-size:0.625rem;font-weight:900;line-height:1.2;letter-spacing:.04em;box-shadow:0 0.125rem 0 rgba(74,59,54,.16);transform:rotate(7deg);pointer-events:none;}
 `;
 
 /** Pastel tile accent per game (visual variety on the grid). */
@@ -64,6 +131,7 @@ export function createArcadeScreen({ store, ui, framework }) {
 
       const level = store.get('level') ?? 1;
       const best = store.get('minigames.best') ?? {};
+      rememberFlagshipUnlockDays(store, level); // V3/G48: persist first-presented local day
 
       const head = document.createElement('div');
       head.className = 'g5-arcade-head';
@@ -87,11 +155,23 @@ export function createArcadeScreen({ store, ui, framework }) {
         const implemented = hasGame(meta.id);
         const tile = document.createElement('button');
         tile.className = 'g5-tile';
+        tile.dataset.gameId = meta.id;
+        const showNew = shouldShowV3GameRibbon(store.get(), meta.id);
+        if (showNew) {
+          tile.classList.add('g48-new');
+          if (V3_FLAGSHIP_SET.has(meta.id)) tile.classList.add('g48-flagship');
+        }
         const bestScore = best[meta.id];
         tile.innerHTML = `
           <span class="g5-tile-icon" style="background:${TILE_COLORS[i % TILE_COLORS.length]}">${icon(meta.icon, 26)}</span>
           <span class="g5-tile-name">${t(meta.titleKey)}</span>
           <span class="g5-tile-best">${bestScore != null ? t('arcade.best', { score: bestScore }) : '&nbsp;'}</span>`;
+        if (showNew) {
+          const ribbon = document.createElement('span');
+          ribbon.className = 'g48-new-ribbon';
+          ribbon.textContent = t('new.ribbon');
+          tile.appendChild(ribbon);
+        }
 
         if (!unlocked) {
           tile.classList.add('g5-locked');

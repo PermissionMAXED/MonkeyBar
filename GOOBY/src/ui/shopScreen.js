@@ -163,6 +163,9 @@ const SHOP_FIX_CSS = `
 .g40-shop-outfit-lock-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .g40-shop-outfit-level{flex:none;display:inline-flex;align-items:center;gap:0.125rem;padding:0.125rem 0.3125rem;border-radius:999px;background:var(--brown);color:#fff;font-size:0.5625rem;}
 .g40-shop-outfit-level svg{color:var(--yellow);}
+/* V3/G48: Nutella + Nougatschleuse NEU ribbons; styles.css belongs to G47. */
+.shop-card.g48-new-content{position:relative;overflow:visible;}
+.g48-shop-ribbon{position:absolute;z-index:3;right:-0.3125rem;top:0.3125rem;min-width:2.75rem;padding:0.1875rem 0.4375rem;border-radius:999px;background:var(--pink);color:#fff;font-size:0.625rem;font-weight:900;line-height:1.2;letter-spacing:.04em;box-shadow:0 0.125rem 0 rgba(74,59,54,.16);transform:rotate(7deg);pointer-events:none;}
 `;
 
 /**
@@ -268,10 +271,14 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
     const inv = store.get('inventory') ?? {};
     const matches = FOOD_FILTERS.find(([id]) => id === foodFilter)?.[2] ?? (() => true);
     for (const food of FOODS.filter(matches)) {
+      const isNewContent = food.id === 'nutella'
+        && store.get('onboarding.v3ContentSeen.nutella') !== true;
       const card = document.createElement('button');
-      card.className = `shop-card${selFood === food.id ? ' shop-card-sel' : ''}`;
       const owned = invCount(inv, food.id);
+      card.className = `shop-card${selFood === food.id ? ' shop-card-sel' : ''}${isNewContent ? ' g48-new-content' : ''}`;
+      card.dataset.contentId = food.id;
       card.innerHTML = `
+        ${isNewContent ? `<span class="g48-shop-ribbon">${t('new.ribbon')}</span>` : ''}
         ${owned > 0 ? `<span class="shop-count">×${owned}</span>` : ''}
         ${food.junk ? '<span class="g22-junk" aria-hidden="true">🍬</span>' : ''}
         <span class="shop-emoji">${FOOD_EMOJI[food.id] ?? '🍽️'}</span>
@@ -279,6 +286,13 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
         ${priceTag(foodUnit(food))}`;
       card.addEventListener('click', () => {
         audio.play('ui.tap');
+        // V3/G48: clicking the featured content acknowledges its NEU ribbon.
+        if (isNewContent) {
+          store.set('onboarding.v3ContentSeen.nutella', true);
+          store.flush?.();
+          card.classList.remove('g48-new-content');
+          card.querySelector('.g48-shop-ribbon')?.remove();
+        }
         if (!foodBuyable()) {
           ui.toast('shop.browseHint');
           return;
@@ -505,21 +519,31 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
   // systems/nougat.logic.js per §E0.1-2).
   function nougatCard() {
     const installed = store.get('nougat.installed') === true;
+    const isNewContent = store.get('onboarding.v3ContentSeen.nougatschleuse') !== true;
     const level = store.get('level') ?? 1;
     const locked = level < NOUGAT.UNLOCK_LEVEL;
     const card = document.createElement('button');
-    card.className = `shop-card${locked && !installed ? ' g22-locked' : ''}`;
+    card.className = `shop-card${locked && !installed ? ' g22-locked' : ''}${isNewContent ? ' g48-new-content' : ''}`;
+    card.dataset.contentId = 'nougatschleuse';
     const state = installed
       ? `<span class="shop-state">✓ ${t('shop.owned')}</span>`
       : locked
         ? `<span class="shop-state">🔒 ${t('shop.lvl', { level: NOUGAT.UNLOCK_LEVEL })}</span>`
         : priceTag(NOUGAT.PRICE);
     card.innerHTML = `
+      ${isNewContent ? `<span class="g48-shop-ribbon">${t('new.ribbon')}</span>` : ''}
       <span class="shop-emoji">🍫</span>
       <span class="shop-name">${t('nougat.shopName')}</span>
       ${state}`;
     card.addEventListener('click', () => {
       audio.play('ui.tap');
+      // V3/G48: a first card interaction permanently acknowledges the item.
+      if (isNewContent) {
+        store.set('onboarding.v3ContentSeen.nougatschleuse', true);
+        store.flush?.();
+        card.classList.remove('g48-new-content');
+        card.querySelector('.g48-shop-ribbon')?.remove();
+      }
       if (installed) return;
       if (locked) {
         ui.toast('shop.qd.needLevel', { level: NOUGAT.UNLOCK_LEVEL });

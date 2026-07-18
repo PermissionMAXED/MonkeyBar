@@ -1,12 +1,11 @@
-// "What's new in 2.0" panel (PLAN2 §A3 checklist 12 / §E0.1-6, agent V2/G30).
-// One-time bottom sheet for MIGRATED v1 saves only: migrations[1] in
-// core/save.js sets `onboarding.whatsNew2Seen = false` for v1 veterans while
-// defaultState() ships `true` for fresh saves (their onboarding covers the
-// news) — so the pure predicate below is all the gating there is.
+// One-time What's-new panels: 2.0 (V2/G30) + 3.0 (V3/G48).
+// migrations[1] marks the 2.0 panel unseen for migrated v1 saves;
+// migrations[2] marks the 3.0 panel unseen for migrated v1/v2 saves. Fresh
+// saves default both flags true because their onboarding covers the basics.
 //
 // Two layers, mirroring ui/onboarding.js:
-//  1. PURE exports up top (shouldShowWhatsNew + the 6-bullet §A pillar tour
-//     data) — no DOM/three imports, covered by test/onboarding.test.js.
+//  1. PURE exports up top (predicates + bilingual bullet-tour data) — no
+//     DOM/three imports, covered by test/onboarding.test.js.
 //  2. Browser driver initWhatsNew() — registers the 'whatsNew' panel and
 //     polls for a quiet home scene (dailyBonusPopup.js pattern) before
 //     showing ONCE. The seen flag persists on mount (not on dismiss), so the
@@ -33,6 +32,17 @@ export const WHATSNEW_BULLETS = Object.freeze([
   Object.freeze({ icon: '🌙', key: 'whatsnew.b6' }), // ⑦ day/night + weather, ⑧ stats + photo
 ]);
 
+/** V3/G48: the 7-bullet GOOBY 3.0 tour (PLAN3 §E6/G48). */
+export const WHATSNEW3_BULLETS = Object.freeze([
+  Object.freeze({ icon: '🕹️', key: 'whatsnew3.b1' }), // 27 games + both flagships
+  Object.freeze({ icon: '🏃', key: 'whatsnew3.b2' }), // surf travel + polished driving
+  Object.freeze({ icon: '📕', key: 'whatsnew3.b3' }), // 28-picture Stickerbuch
+  Object.freeze({ icon: '🍫', key: 'whatsnew3.b4' }), // Nutella + Nougatschleuse
+  Object.freeze({ icon: '⚙️', key: 'whatsnew3.b5' }), // UI scale + five volume buses
+  Object.freeze({ icon: '🎒', key: 'whatsnew3.b6' }), // 42 outfits + back slot
+  Object.freeze({ icon: '🎵', key: 'whatsnew3.b7' }), // sampled audio + medleys
+]);
+
 /**
  * Should the one-time panel show for this save state? True only for migrated
  * v1 saves (flag explicitly false — §E0.1-6) that are not mid-tutorial.
@@ -43,6 +53,17 @@ export const WHATSNEW_BULLETS = Object.freeze([
 export function shouldShowWhatsNew(state) {
   const ob = state?.onboarding;
   return ob?.whatsNew2Seen === false && ob?.done === true;
+}
+
+/**
+ * V3/G48: true only for migrated v1/v2 veterans whose tutorial is complete.
+ * Fresh saves default whatsNew3Seen true and never qualify (§E0.1-8).
+ * @param {object} state save-schema state (§E3)
+ * @returns {boolean}
+ */
+export function shouldShowWhatsNew3(state) {
+  const ob = state?.onboarding;
+  return ob?.whatsNew3Seen === false && ob?.done === true;
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +85,16 @@ const WN_CSS = `
 .g30-wn-item{display:flex;align-items:flex-start;gap:0.625rem;background:rgba(74,59,54,.05);border-radius:0.875rem;padding:0.5625rem 0.75rem;}
 .g30-wn-ico{flex:none;font-size:1.125rem;line-height:1.3;}
 .g30-wn-txt{flex:1;min-width:0;font-size:0.8125rem;font-weight:700;color:var(--brown);line-height:1.35;overflow-wrap:break-word;}
+/* V3/G48: slightly denser seven-row tour at 320px/130 %, still ≥44px CTA. */
+.g30-wn[data-version="3"] .g30-wn-list{gap:0.375rem;max-height:min(54vh,27rem);}
+.g30-wn[data-version="3"] .g30-wn-item{padding:0.4375rem 0.625rem;}
+.g30-wn[data-version="3"] .g30-wn-txt{font-size:0.7813rem;}
+@media (max-width:359px) and (max-height:600px){
+  .panel-backdrop-whatsNew .panel{padding:0.75rem 0.875rem max(0.75rem,calc(var(--safe-bottom) + 0.25rem));}
+  .g30-wn[data-version="3"] .g30-wn-title{font-size:1.25rem;}
+  .g30-wn[data-version="3"] .g30-wn-sub{margin-bottom:0.5rem;font-size:0.75rem;}
+  .g30-wn[data-version="3"] .g30-wn-list{max-height:44vh;margin-bottom:0.625rem;}
+}
 `;
 
 /**
@@ -80,35 +111,46 @@ export function initWhatsNew({ store, ui, audio, sceneManager }) {
     document.head.appendChild(style);
   }
 
-  // Dev harness extension (§E9 spirit, dev only): ?whatsnew=1 flips the seen
-  // flag back off so the panel demos on any save (layout-matrix surface).
+  // V3/G48 dev demo: ?whatsnew=1 forces ONLY the 3.0 panel. ?whatsnew=2
+  // preserves the old 2.0 demo for regression/layout checks.
   const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV;
   if (isDev && typeof location !== 'undefined') {
-    if (new URLSearchParams(location.search).get('whatsnew') === '1') {
+    const demo = new URLSearchParams(location.search).get('whatsnew');
+    if (demo === '1' || demo === '3') {
+      store.set('onboarding.whatsNew2Seen', true);
+      store.set('onboarding.whatsNew3Seen', false);
+      store.set('onboarding.done', true);
+    } else if (demo === '2') {
       store.set('onboarding.whatsNew2Seen', false);
+      store.set('onboarding.whatsNew3Seen', true);
       store.set('onboarding.done', true);
     }
   }
 
   ui.registerPanel('whatsNew', {
-    /** @param {HTMLElement} el */
-    mount(el) {
+    /**
+     * @param {HTMLElement} el
+     * @param {{version?: 2|3}} params
+     */
+    mount(el, params = {}) {
+      const version = params.version === 3 ? 3 : 2;
+      const isV3 = version === 3;
       // Persist SEEN on show (not on dismiss): once-only survives backdrop
       // taps and app kills mid-view. flush() beats the autosave debounce so
       // an immediate reload can't resurrect the panel.
-      store.set('onboarding.whatsNew2Seen', true);
+      store.set(`onboarding.whatsNew${version}Seen`, true);
       store.flush?.();
 
       el.innerHTML = `
-        <div class="g30-wn">
-          <h2 class="g30-wn-title">${t('whatsnew.title')}</h2>
-          <p class="g30-wn-sub">${t('whatsnew.sub')}</p>
+        <div class="g30-wn" data-version="${version}">
+          <h2 class="g30-wn-title">${t(isV3 ? 'whatsnew3.title' : 'whatsnew.title')}</h2>
+          <p class="g30-wn-sub">${t(isV3 ? 'whatsnew3.sub' : 'whatsnew.sub')}</p>
           <div class="g30-wn-list"></div>
           <div class="mg-btn-row"></div>
         </div>`;
 
       const list = el.querySelector('.g30-wn-list');
-      for (const bullet of WHATSNEW_BULLETS) {
+      for (const bullet of isV3 ? WHATSNEW3_BULLETS : WHATSNEW_BULLETS) {
         const item = document.createElement('div');
         item.className = 'g30-wn-item';
         item.innerHTML = `<span class="g30-wn-ico">${bullet.icon}</span><span class="g30-wn-txt"></span>`;
@@ -118,7 +160,7 @@ export function initWhatsNew({ store, ui, audio, sceneManager }) {
 
       const cta = document.createElement('button');
       cta.className = 'btn btn-teal';
-      cta.textContent = t('whatsnew.cta');
+      cta.textContent = t(isV3 ? 'whatsnew3.cta' : 'whatsnew.cta');
       cta.addEventListener('click', () => {
         audio.play('ui.go');
         ui.closePanel('whatsNew');
@@ -130,22 +172,24 @@ export function initWhatsNew({ store, ui, audio, sceneManager }) {
 
   // ---- show-once boot poll (dailyBonusPopup.js pattern) ----
   // Wait for the home scene with no screen/panel up: never fights onboarding
-  // (shouldShowWhatsNew requires done), harness ?open= routing, a running
-  // minigame, or the daily-bonus sheet.
+  // (both predicates require done), harness ?open= routing, a running
+  // minigame, or the daily-bonus sheet. A direct v1→v3 migration legitimately
+  // has BOTH flags false; preserve the v2 contract by showing 2.0 first, then
+  // 3.0 after it closes.
   const poll = setInterval(() => {
-    // The flag only ever goes false → true, so once it is not-false this
-    // session can never show the panel — stop polling (fresh saves clear on
-    // the first tick; unseen veterans keep waiting for a quiet home).
-    if (store.get('onboarding.whatsNew2Seen') !== false) {
+    const state = store.get();
+    const version = shouldShowWhatsNew(state) ? 2 : shouldShowWhatsNew3(state) ? 3 : null;
+    const anyPending = state?.onboarding?.whatsNew2Seen === false
+      || state?.onboarding?.whatsNew3Seen === false;
+    if (!anyPending) {
       clearInterval(poll);
       return;
     }
-    if (!shouldShowWhatsNew(store.get())) return; // mid-tutorial veteran — wait
+    if (version == null) return; // mid-tutorial veteran — wait
     if (sceneManager?.currentId?.() !== 'home') return;
     if (ui.activeScreenId?.()) return;
     if (document.querySelector('.panel-backdrop')) return; // another sheet is up
-    clearInterval(poll);
     audio.play('ui.open');
-    ui.openPanel('whatsNew');
+    ui.openPanel('whatsNew', { version });
   }, POLL_MS);
 }
