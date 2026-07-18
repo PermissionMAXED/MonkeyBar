@@ -338,6 +338,28 @@ export const SFX_MAP = Object.freeze({
   'cake.candle': sample([`${UI}/tick_001`, `${UI}/tick_002`, `${UI}/tick_004`], { volume: 0.55 }), // candle dropper tick
   'cake.order': sample(seq(`${UI}/question`, 4), { volume: 0.5 }), // new customer order chime
   // --- end V3/G36 ---
+
+  // --- V3/G42: rocketRescue + harborHopper (PLAN3 §C10.1 #3/#4 — §E0.1-4
+  // append: committed ui/impact sample keys + existing synth/loop recipes
+  // only; 12 of 16 non-loop ids sample-backed per the §C3.1 arithmetic) ---
+  'rocket.thrust': synth('rainLoop', { loop: true, volume: 0.45 }), // brown-noise rumble reads as engine thrust (existing loop recipe; sfx bus — not ambience.*)
+  'rocket.land.soft': sample(seq(`${UI}/drop`, 4), { volume: 0.55, haptic: 'light' }), // skids touch down
+  'rocket.land.hard': sample(seq(`${IMP}/impactMetal_heavy`, 5, 0), { volume: 0.5, haptic: 'medium' }), // hull clang + bounce
+  'rocket.pickup': synth('bunnyCheer', { volume: 0.8, haptic: 'light' }), // bunny squeak aboard (existing recipe)
+  'rocket.rescue': sample(seq(`${UI}/confirmation`, 4), { volume: 0.65, haptic: 'light' }), // pad delivery chime
+  'rocket.fuel': sample(seq(`${UI}/glass`, 6), { volume: 0.55 }), // canister clink
+  'rocket.fuelLow': sample(seq(`${UI}/error`, 4), { volume: 0.4 }), // ≤20 fuel warning
+  'rocket.tow': sample(seq(`${UI}/minimize`, 3), { volume: 0.4 }), // fuel-out power-down → tow
+  'rocket.wind': synth('whoosh', { volume: 0.6 }), // gust telegraph (§C3.1 whitelist: whoosh family)
+  'harbor.crate': sample(seq(`${IMP}/impactPlank_medium`, 5, 0), { volume: 0.55, haptic: 'light' }), // wooden crate on deck
+  'harbor.ring': sample(seq(`${UI}/select`, 8), { volume: 0.5 }), // net ring chime
+  'harbor.bump': sample(seq(`${IMP}/impactMetal_light`, 5, 0), { volume: 0.6, haptic: 'medium' }), // buoy/pier clonk
+  'harbor.boost': synth('diveWhoosh', { volume: 0.65 }), // crest surf-boost whoosh (whitelist family)
+  'harbor.horn': synth('doorbell', { pitch: 0.3, volume: 0.9, haptic: 'medium' }), // Fischkutter-Horn: low two-tone blast (pitched existing recipe)
+  'harbor.hornEmpty': sample(seq(`${UI}/back`, 4), { volume: 0.4 }), // out of charges
+  'harbor.gullWarn': sample(seq(`${UI}/question`, 4), { volume: 0.6 }), // honk warning chirp
+  'harbor.gullSteal': sample(seq(`${UI}/scratch`, 5), { volume: 0.5 }), // crate snatched
+  // --- end V3/G42 ---
 });
 
 /**
