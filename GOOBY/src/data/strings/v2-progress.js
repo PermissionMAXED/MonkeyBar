@@ -12,8 +12,8 @@ export const EN = {
   'hud.profile': 'Profile',
   'hud.sickChip': 'Gooby is not feeling well — tap for care',
 
-  // --- framework sick refusal gate (§C3.4/§B5, mirrors toast.tooSleepy) ---
-  'toast.tooSick': 'Gooby is too sick to play… 🤒',
+  // --- framework sick refusal gate (§C3.4/§B5 — exact §C3.4 wording) ---
+  'toast.tooSick': 'Gooby is sick! 🤒',
 
   // --- daily quest board (§C5.1) ---
   'quests.title': 'Daily Quests',
@@ -119,8 +119,8 @@ export const DE = {
   'hud.profile': 'Profil',
   'hud.sickChip': 'Gooby geht es nicht gut — tippe für Pflege',
 
-  // --- framework sick refusal gate (§C3.4/§B5) ---
-  'toast.tooSick': 'Gooby ist zu krank zum Spielen… 🤒',
+  // --- framework sick refusal gate (§C3.4/§B5 — exact §C3.4 wording) ---
+  'toast.tooSick': 'Gooby ist krank! 🤒',
 
   // --- daily quest board (§C5.1) ---
   'quests.title': 'Tagesquests',

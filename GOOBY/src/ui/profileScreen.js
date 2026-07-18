@@ -8,7 +8,7 @@
 // collection-set progress bars. Every number renders `tabular-nums`.
 // Mounting fires the 'statsScreen' quest event (§C5.1 q.medicineCabinet).
 
-import { XP } from '../data/constants.js';
+import { LEVELING } from '../data/constants.js';
 import { MINIGAMES } from '../data/minigames.js';
 import { COLLECTION_SETS } from '../data/collections.js';
 import { setProgress } from '../systems/collections.js';
@@ -122,7 +122,9 @@ export function registerProfileScreen({ store, ui, audio, sceneManager }) {
       const profile = state.profile ?? {};
       const level = Number(state.level) || 1;
       const xp = Number(state.xp) || 0;
-      const frac = level >= XP.MAX_LEVEL ? 1 : Math.min(1, xp / xpToNext(level));
+      // V2 fix: ring caps at LEVELING.MAX_LEVEL (40), not the frozen v1
+      // XP.MAX_LEVEL (30) — kept the ring pinned full for L30-39 (§B3).
+      const frac = level >= LEVELING.MAX_LEVEL ? 1 : Math.min(1, xp / xpToNext(level));
 
       // ① header card
       const joined = new Date(Number(state.createdAt) || now());

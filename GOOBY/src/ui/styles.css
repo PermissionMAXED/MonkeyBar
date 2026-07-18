@@ -1414,15 +1414,33 @@
   overscroll-behavior: contain;
   padding: 2px;
 }
+/* V2 fix (E16): a row is a COLUMN — info line on top, action buttons on
+   their own full-width line below — and `flex: none` so the scrollable
+   .g19-rows flex column can NEVER shrink a row to its 56px min-height
+   (that compression is what let buttons overflow the row box and get
+   painted over by the next row's opaque background — unreachable via
+   elementFromPoint at 320–390 DE). */
 .g19-row {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap; /* 320px DE: long button labels drop to a 2nd line (§F3) */
+  flex-direction: column;
+  align-items: stretch;
+  flex: none;
   gap: 8px;
   background: var(--bg-cream);
   border-radius: 14px;
   padding: 8px 10px;
   min-height: 56px;
+}
+.g19-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 40px;
+}
+.g19-actions {
+  display: flex;
+  gap: 8px;
 }
 .g19-row.g19-locked {
   opacity: 0.55;
@@ -1462,15 +1480,17 @@
   font-variant-numeric: tabular-nums;
   color: rgba(74, 59, 54, 0.7);
 }
-/* compact in-row buttons — still ≥44px targets (§D5/F3) */
+/* compact in-row buttons — ≥44px targets (§D5/F3). V2 fix (E16): they share
+   the .g19-actions line equally and can never wrap under the next row. */
 .btn.g19-btn {
   min-height: 44px;
-  min-width: 44px;
-  padding: 6px 12px;
+  min-width: 0;
+  padding: 6px 10px;
   font-size: 14px;
   border-radius: 13px;
   border-bottom-width: 3px;
-  flex: 0 0 auto;
+  flex: 1 1 0;
+  white-space: nowrap;
 }
 .g19-btnrow {
   display: flex;
@@ -1518,5 +1538,7 @@
 }
 .g19-forecast-row {
   margin: 6px 0;
+  flex-direction: row; /* V2 fix (E16): .g19-row went column — this row stays inline */
+  align-items: center;
 }
 /* ---------- end V2/G19 ---------- */

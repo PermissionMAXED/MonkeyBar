@@ -11,6 +11,14 @@ export const EN = {
   'ob.teaser.quests': 'From level {level}: daily quests! The clipboard button brings 3 fresh tasks every day.',
   'ob.teaser.garden': 'From level {level}: Gooby’s garden! Behind the 5th room dot, real crops grow — plant, water, harvest.',
 
+  // --- V2/G29 micro-idle clip labels (dev showcase — matches the v1
+  // gooby.clip.* naming in strings.js §D2.4) ---
+  'gooby.clip.stretch': 'Stretch',
+  'gooby.clip.earScratch': 'Ear Scratch',
+  'gooby.clip.lookAround': 'Look Around',
+  'gooby.clip.tailWiggle': 'Tail Wiggle',
+  'gooby.clip.shiver': 'Shiver',
+
   // --- one-time "What's new in 2.0" panel (§A3 checklist 12) ---
   'whatsnew.title': 'What’s new in 2.0',
   'whatsnew.sub': 'Welcome back! Your home is just as you left it — and Gooby has been busy:',
@@ -29,6 +37,14 @@ export const DE = {
   'ob.teaser.title': 'Es gibt noch mehr!',
   'ob.teaser.quests': 'Ab Level {level}: tägliche Quests! Der Klemmbrett-Button bringt jeden Tag 3 neue Aufgaben.',
   'ob.teaser.garden': 'Ab Level {level}: Goobys Garten! Hinter dem 5. Raumpunkt wächst echtes Gemüse — säen, gießen, ernten.',
+
+  // --- V2/G29 micro-idle clip labels (dev showcase — matches the v1
+  // gooby.clip.* naming in strings.js §D2.4) ---
+  'gooby.clip.stretch': 'Strecken',
+  'gooby.clip.earScratch': 'Ohrenkratzen',
+  'gooby.clip.lookAround': 'Umschauen',
+  'gooby.clip.tailWiggle': 'Schwanzwedeln',
+  'gooby.clip.shiver': 'Bibbern',
 
   // --- one-time "What's new in 2.0" panel (§A3 checklist 12) ---
   'whatsnew.title': 'Neu in 2.0',

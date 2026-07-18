@@ -30,7 +30,7 @@ const ALBUM_CSS = `
 .g23-al-title{flex:1;min-width:0;margin:0;font-size:clamp(17px,6vw,30px);font-weight:800;color:var(--brown);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .g23-al-count{flex:none;background:var(--white);border-radius:999px;padding:8px 12px;font-size:15px;font-weight:800;color:var(--teal-dark);box-shadow:var(--shadow-soft);font-variant-numeric:tabular-nums;}
 .g23-al-tabs{width:100%;max-width:440px;display:flex;gap:6px;flex:none;margin-bottom:8px;}
-.g23-al-tab{flex:1;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:5px;border:none;border-radius:14px;padding:9px 4px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;background:rgba(255,255,255,.6);color:var(--brown);box-shadow:var(--shadow-soft);-webkit-tap-highlight-color:transparent;}
+.g23-al-tab{flex:1;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:5px;border:none;border-radius:14px;min-height:44px;padding:9px 4px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;background:rgba(255,255,255,.6);color:var(--brown);box-shadow:var(--shadow-soft);-webkit-tap-highlight-color:transparent;} /* V2 fix (E16): >=44px hit target */
 .g23-al-tab span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .g23-al-tab.g23-active{background:var(--teal);color:#fff;}
 .g23-al-page{width:100%;max-width:440px;background:var(--white);border-radius:18px;box-shadow:var(--shadow-soft);padding:14px;flex:none;margin-bottom:18px;}
@@ -47,7 +47,7 @@ const ALBUM_CSS = `
 .g23-al-bar{flex:1;height:9px;border-radius:999px;background:rgba(74,59,54,.1);overflow:hidden;}
 .g23-al-fill{display:block;height:100%;border-radius:999px;background:var(--teal);transition:width 300ms ease;}
 .g23-al-progress{flex:none;font-size:12px;font-weight:800;opacity:.6;font-variant-numeric:tabular-nums;}
-.g23-al-claim{flex:none;display:inline-flex;align-items:center;gap:5px;border:none;border-radius:999px;padding:8px 14px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;background:rgba(74,59,54,.08);color:rgba(74,59,54,.45);-webkit-tap-highlight-color:transparent;}
+.g23-al-claim{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:5px;border:none;border-radius:999px;min-height:44px;min-width:44px;padding:8px 14px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;background:rgba(74,59,54,.08);color:rgba(74,59,54,.45);-webkit-tap-highlight-color:transparent;} /* V2 fix (E16): >=44px hit target */
 .g23-al-claim.g23-ready{background:var(--yellow);color:#fff;box-shadow:var(--shadow-soft);}
 .g23-al-claim.g23-claimed-btn{color:var(--teal-dark);}
 `;

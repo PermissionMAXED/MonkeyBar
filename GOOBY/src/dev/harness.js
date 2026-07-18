@@ -3,7 +3,7 @@
 //
 // URL params:
 //   ?scene=home|gooby        scene routing ('gooby' = G3 character showcase)
-//   ?room=kitchen|living|bathroom|bedroom   forwarded to home enter(params)
+//   ?room=kitchen|living|bathroom|bedroom|garden   forwarded to home enter(params)
 //   ?minigame=<id>           direct minigame launch (bypasses level locks)
 //   ?open=shop|wardrobe|achievements|arcade|settings   open a UI screen
 //   ?coins=N ?level=N        state overrides
@@ -22,7 +22,7 @@
 import * as clock from '../core/clock.js';
 import * as save from '../core/save.js';
 import { setLang } from '../data/strings.js';
-import { STATS } from '../data/constants.js';
+import { STATS, LEVELING } from '../data/constants.js';
 
 // Resolved at build/transform time; empty map while G3's file doesn't exist,
 // so boot keeps working (coordination note — do not convert to a static import).
@@ -86,7 +86,9 @@ export async function postBoot({ store, ui, sceneManager, framework }) {
   if (coins != null) store.set('coins', Math.max(0, Math.floor(coins)));
   const level = numParam(q, 'level');
   if (level != null) {
-    store.set('level', Math.min(30, Math.max(1, Math.floor(level))));
+    // V2 fix: clamp at LEVELING.MAX_LEVEL (40) — the old literal 30 was the
+    // frozen v1 cap and made ?level=31..40 untestable.
+    store.set('level', Math.min(LEVELING.MAX_LEVEL, Math.max(1, Math.floor(level))));
     store.set('xp', 0);
   }
   for (const stat of STATS.KEYS) {

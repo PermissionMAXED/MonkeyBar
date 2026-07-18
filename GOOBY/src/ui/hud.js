@@ -4,7 +4,7 @@
 // persistent DOM layer on the #ui overlay and only shows itself while the
 // home scene is active. All numbers from data/constants.js; all text via t().
 
-import { STATS, XP, UI_COLORS } from '../data/constants.js';
+import { STATS, LEVELING, UI_COLORS } from '../data/constants.js';
 import { t, getLang } from '../data/strings.js';
 import { icon } from './icons.js';
 import { xpToNext } from '../systems/leveling.js';
@@ -188,7 +188,10 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
 .g5-hud-btn{position:relative;}
 .g23-badge{position:absolute;top:-5px;right:-5px;min-width:19px;height:19px;padding:0 5px;border-radius:999px;background:var(--pink);color:#fff;font-size:11px;font-weight:800;display:none;align-items:center;justify-content:center;font-variant-numeric:tabular-nums;box-shadow:var(--shadow-soft);}
 .g23-badge.g23-show{display:inline-flex;}
-.g23-sick-chip{position:absolute;top:calc(118px + var(--safe-top));left:50%;transform:translateX(-50%);display:none;align-items:center;gap:7px;max-width:86vw;pointer-events:auto;border:none;border-radius:999px;padding:9px 14px;background:var(--white);color:var(--brown);font-family:inherit;font-size:12px;font-weight:800;box-shadow:var(--shadow-soft);cursor:pointer;-webkit-tap-highlight-color:transparent;animation:g23chip 1.6s ease-in-out infinite;}
+/* V2 fix (E16): >=44px hit target; top 172px clears the HUD top block (~98px)
+   AND the sleep chip (top 104px, up to ~62px tall with big emoji glyphs —
+   sick Gooby can still nap, §C3.4, so both chips may show together). */
+.g23-sick-chip{position:absolute;top:calc(172px + var(--safe-top));left:50%;transform:translateX(-50%);display:none;align-items:center;justify-content:center;gap:7px;max-width:86vw;min-height:44px;pointer-events:auto;border:none;border-radius:999px;padding:9px 14px;background:var(--white);color:var(--brown);font-family:inherit;font-size:12px;font-weight:800;box-shadow:var(--shadow-soft);cursor:pointer;-webkit-tap-highlight-color:transparent;animation:g23chip 1.6s ease-in-out infinite;}
 .g23-sick-chip.g23-show{display:inline-flex;}
 .g23-sick-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 @keyframes g23chip{0%,100%{transform:translateX(-50%) scale(1);}50%{transform:translateX(-50%) scale(1.035);}}`;
@@ -278,7 +281,9 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
     const level = store.get('level') ?? 1;
     const xp = store.get('xp') ?? 0;
     ringLvl.textContent = String(level);
-    const frac = level >= XP.MAX_LEVEL ? 1 : Math.min(1, xp / xpToNext(level));
+    // V2 fix: ring caps at LEVELING.MAX_LEVEL (40) — XP.MAX_LEVEL is the
+    // frozen v1 cap (30) and pinned the ring full for L30-39 (§B3).
+    const frac = level >= LEVELING.MAX_LEVEL ? 1 : Math.min(1, xp / xpToNext(level));
     ringFg.style.strokeDashoffset = String(RING_C * (1 - frac));
     syncMute();
   }

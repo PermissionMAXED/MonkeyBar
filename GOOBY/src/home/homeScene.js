@@ -27,7 +27,7 @@ import { createGooby } from '../character/gooby.js';
 import { createEmotionMachine } from '../character/emotions.js';
 import { createParticles } from '../gfx/particles.js';
 import { createHomeLights } from '../gfx/lights.js';
-import { createRoomManager } from './roomManager.js';
+import { createRoomManager, NAV_ORDER } from './roomManager.js';
 import { createRoomNav } from '../ui/roomNav.js';
 // V2/G26 (§C10/§C11): band/weather ambience — engines + animated weather FX
 import { bandAt } from '../systems/dayNight.js';
@@ -314,8 +314,12 @@ export function createHomeScene(ctx) {
       scene.add(gooby.group);
       rm.setGoobyTarget(gooby.group);
 
-      const startRoom = ROOMS.ORDER.includes(params.room) ? params.room : ROOMS.DEFAULT;
-      rm.goTo(startRoom, { instant: true });
+      // V2 fix: validate params.room against the 5-room NAV_ORDER (incl. the
+      // garden) — the frozen v1 ROOMS.ORDER silently dropped ?room=garden.
+      // goTo refuses a padlocked garden (§B6), so re-read the room it landed on.
+      const wantRoom = NAV_ORDER.includes(params.room) ? params.room : ROOMS.DEFAULT;
+      rm.goTo(wantRoom, { instant: true });
+      const startRoom = rm.activeRoom();
       placeGooby(startRoom);
       lights.setFocus(rm.roomCenterX(startRoom));
       const lampAt = rm.getAnchor('lamp', 'bedroom');

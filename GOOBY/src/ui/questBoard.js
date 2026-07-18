@@ -33,12 +33,12 @@ const QB_CSS = `
 .g23-qb-fill{display:block;height:100%;border-radius:999px;background:var(--teal);transition:width 300ms ease;}
 .g23-qb-card.g23-done .g23-qb-fill{background:var(--yellow);}
 .g23-qb-progress{flex:none;font-size:12px;font-weight:800;opacity:.6;font-variant-numeric:tabular-nums;}
-.g23-qb-claim{flex:none;border:none;border-radius:999px;padding:8px 18px;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;background:rgba(74,59,54,.08);color:rgba(74,59,54,.45);-webkit-tap-highlight-color:transparent;}
+.g23-qb-claim{flex:none;border:none;border-radius:999px;min-height:44px;min-width:44px;padding:8px 18px;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;background:rgba(74,59,54,.08);color:rgba(74,59,54,.45);-webkit-tap-highlight-color:transparent;} /* V2 fix (E16): >=44px hit target */
 .g23-qb-card.g23-done .g23-qb-claim{background:var(--yellow);color:#fff;box-shadow:var(--shadow-soft);}
 .g23-qb-card.g23-claimed .g23-qb-claim{background:rgba(74,59,54,.08);color:var(--teal-dark);}
 .g23-qb-foot{width:100%;max-width:440px;display:flex;align-items:center;gap:10px;margin:12px 0 18px;flex:none;flex-wrap:wrap;}
 .g23-qb-midnight{flex:1;min-width:150px;font-size:12px;font-weight:700;color:var(--brown);opacity:.55;}
-.g23-qb-reroll{flex:none;display:inline-flex;align-items:center;gap:6px;border:none;border-radius:999px;padding:9px 16px;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;background:var(--white);color:var(--teal-dark);box-shadow:var(--shadow-soft);-webkit-tap-highlight-color:transparent;}
+.g23-qb-reroll{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;border:none;border-radius:999px;min-height:44px;min-width:44px;padding:9px 16px;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;background:var(--white);color:var(--teal-dark);box-shadow:var(--shadow-soft);-webkit-tap-highlight-color:transparent;} /* V2 fix (E16): >=44px hit target */
 .g23-qb-reroll[disabled]{color:rgba(74,59,54,.35);cursor:default;}
 .g23-qb-locked{width:100%;max-width:440px;display:flex;flex-direction:column;align-items:center;gap:10px;background:var(--white);border-radius:18px;box-shadow:var(--shadow-soft);padding:28px 18px;text-align:center;flex:none;}
 .g23-qb-locked svg{color:rgba(74,59,54,.3);}

@@ -60,13 +60,44 @@ const hourOf = (ms) => new Date(ms).getHours();
 /** end-hour label: block ends land on 0/6/12/18 — show 24 instead of 0. */
 const endHourOf = (ms) => hourOf(ms) === 0 ? 24 : hourOf(ms);
 
+/**
+ * V2 fix (E20): garden sheets must not survive the room panning away —
+ * subscribe to roomManager's 'roomChanged' for the panel's lifetime and
+ * close it on any room switch. Dynamic import (photoMode pattern) keeps
+ * three.js/homeScene out of this module's static graph; the manager is
+ * guaranteed live while a garden sheet is open (they only open from garden
+ * taps inside the home scene).
+ * @param {{closePanel: (id: string) => void}} ui
+ * @param {string} panelId
+ * @returns {() => void} unsubscribe (call from unmount)
+ */
+function closeOnRoomChange(ui, panelId) {
+  let off = null;
+  let dead = false;
+  import('../home/homeScene.js')
+    .then((mod) => {
+      if (dead) return;
+      const rm = mod.getRoomManager?.();
+      if (rm) off = rm.on('roomChanged', () => ui.closePanel(panelId));
+    })
+    .catch(() => { /* headless/test boot without the home scene — fine */ });
+  return () => {
+    dead = true;
+    off?.();
+    off = null;
+  };
+}
+
 // ---------------------------------------------------------------------------
 // seed picker (§C2.2)
 // ---------------------------------------------------------------------------
 
 function createSeedPanel({ store, ui }) {
+  /** @type {(() => void)|null} V2 fix (E20): room-change close unsubscribe */
+  let offRoom = null;
   return {
     mount(el, params = {}) {
+      offRoom = closeOnRoomChange(ui, 'gardenSeeds');
       const plotIdx = params.plotIdx ?? 0;
       const level = store.get('level') ?? 1;
       el.innerHTML = `
@@ -82,16 +113,23 @@ function createSeedPanel({ store, ui }) {
           const owned = store.get(`items.${economy.seedKey(crop.id)}`) ?? 0;
           const row = document.createElement('div');
           row.className = `g19-row${locked ? ' g19-locked' : ''}`;
+          // V2 fix (E16): info line and action buttons live on SEPARATE flex
+          // lines — buttons used to wrap under the neighbouring row's opaque
+          // background at narrow widths (unreachable via elementFromPoint).
           row.innerHTML = `
-            <span class="g19-emoji">${CROP_EMOJI[crop.id] ?? '🌱'}</span>
-            <span class="g19-info">
-              <span class="g19-name">${t(crop.nameKey)}</span>
-              <span class="g19-sub">${locked
-                ? t('garden.seeds.locked', { level: crop.unlock })
-                : `${t('garden.seeds.growTime', { min: crop.growthMin })} · 💧×${crop.waterings}`}</span>
-            </span>
-            <span class="g19-count">${t('garden.seeds.owned', { n: owned })}</span>`;
+            <div class="g19-row-main">
+              <span class="g19-emoji">${CROP_EMOJI[crop.id] ?? '🌱'}</span>
+              <span class="g19-info">
+                <span class="g19-name">${t(crop.nameKey)}</span>
+                <span class="g19-sub">${locked
+                  ? t('garden.seeds.locked', { level: crop.unlock })
+                  : `${t('garden.seeds.growTime', { min: crop.growthMin })} · 💧×${crop.waterings}`}</span>
+              </span>
+              <span class="g19-count">${t('garden.seeds.owned', { n: owned })}</span>
+            </div>`;
           if (!locked) {
+            const actions = document.createElement('div');
+            actions.className = 'g19-actions';
             const plantBtn = document.createElement('button');
             plantBtn.className = 'btn g19-btn';
             plantBtn.textContent = t('garden.seeds.plant');
@@ -101,7 +139,8 @@ function createSeedPanel({ store, ui }) {
             buyBtn.className = 'btn btn-ghost g19-btn';
             buyBtn.textContent = t('garden.seeds.buy', { price: crop.seedPrice });
             buyBtn.addEventListener('click', () => buy(crop));
-            row.append(plantBtn, buyBtn);
+            actions.append(plantBtn, buyBtn);
+            row.appendChild(actions);
           }
           rows.appendChild(row);
         }
@@ -141,7 +180,10 @@ function createSeedPanel({ store, ui }) {
 
       render();
     },
-    unmount() {},
+    unmount() {
+      offRoom?.(); // V2 fix (E20)
+      offRoom = null;
+    },
   };
 }
 
@@ -150,8 +192,11 @@ function createSeedPanel({ store, ui }) {
 // ---------------------------------------------------------------------------
 
 function createSellPanel({ store, ui }) {
+  /** @type {(() => void)|null} V2 fix (E20): room-change close unsubscribe */
+  let offRoom = null;
   return {
     mount(el) {
+      offRoom = closeOnRoomChange(ui, 'gardenSell');
       el.innerHTML = `
         <h2 class="g19-title">${t('garden.sell.title')}</h2>
         <div class="g19-rows"></div>`;
@@ -169,13 +214,18 @@ function createSellPanel({ store, ui }) {
           const n = invCount(inv, crop.foodId);
           const row = document.createElement('div');
           row.className = 'g19-row';
+          // V2 fix (E16): buttons on their own flex line — see seed panel note.
           row.innerHTML = `
-            <span class="g19-emoji">${CROP_EMOJI[crop.id] ?? '🌱'}</span>
-            <span class="g19-info">
-              <span class="g19-name">${t(crop.nameKey)}</span>
-              <span class="g19-sub">${t('garden.sell.price', { price: crop.sellPrice })}</span>
-            </span>
-            <span class="g19-count">×${n}</span>`;
+            <div class="g19-row-main">
+              <span class="g19-emoji">${CROP_EMOJI[crop.id] ?? '🌱'}</span>
+              <span class="g19-info">
+                <span class="g19-name">${t(crop.nameKey)}</span>
+                <span class="g19-sub">${t('garden.sell.price', { price: crop.sellPrice })}</span>
+              </span>
+              <span class="g19-count">×${n}</span>
+            </div>`;
+          const actions = document.createElement('div');
+          actions.className = 'g19-actions';
           const one = document.createElement('button');
           one.className = 'btn btn-ghost g19-btn';
           one.textContent = t('garden.sell.one');
@@ -184,7 +234,8 @@ function createSellPanel({ store, ui }) {
           all.className = 'btn g19-btn';
           all.textContent = t('garden.sell.all');
           all.addEventListener('click', () => sell(crop, invCount(store.get('inventory'), crop.foodId)));
-          row.append(one, all);
+          actions.append(one, all);
+          row.appendChild(actions);
           rows.appendChild(row);
         }
       };
@@ -202,7 +253,10 @@ function createSellPanel({ store, ui }) {
 
       render();
     },
-    unmount() {},
+    unmount() {
+      offRoom?.(); // V2 fix (E20)
+      offRoom = null;
+    },
   };
 }
 
@@ -211,8 +265,11 @@ function createSellPanel({ store, ui }) {
 // ---------------------------------------------------------------------------
 
 function createBuyPlotPanel({ store, ui }) {
+  /** @type {(() => void)|null} V2 fix (E20): room-change close unsubscribe */
+  let offRoom = null;
   return {
     mount(el, params = {}) {
+      offRoom = closeOnRoomChange(ui, 'gardenBuyPlot');
       const index = params.index ?? store.get('garden.plotsOwned') ?? 4;
       const level = store.get('level') ?? 1;
       const gate = garden.canBuyPlot(store.get('garden'), index, level);
@@ -242,7 +299,10 @@ function createBuyPlotPanel({ store, ui }) {
       });
       btnRow.appendChild(buyBtn);
     },
-    unmount() {},
+    unmount() {
+      offRoom?.(); // V2 fix (E20)
+      offRoom = null;
+    },
   };
 }
 
@@ -251,8 +311,11 @@ function createBuyPlotPanel({ store, ui }) {
 // ---------------------------------------------------------------------------
 
 function createFertilizerPanel({ store, ui }) {
+  /** @type {(() => void)|null} V2 fix (E20): room-change close unsubscribe */
+  let offRoom = null;
   return {
     mount(el) {
+      offRoom = closeOnRoomChange(ui, 'gardenFertilizer');
       const render = () => {
         const owned = store.get('items.fertilizer') ?? 0;
         el.innerHTML = `
@@ -278,7 +341,10 @@ function createFertilizerPanel({ store, ui }) {
       };
       render();
     },
-    unmount() {},
+    unmount() {
+      offRoom?.(); // V2 fix (E20)
+      offRoom = null;
+    },
   };
 }
 
@@ -327,9 +393,12 @@ export function hideForecastChip() {
   chipEl = null;
 }
 
-function createForecastPanel() {
+function createForecastPanel({ ui }) {
+  /** @type {(() => void)|null} V2 fix (E20): room-change close unsubscribe */
+  let offRoom = null;
   return {
     mount(el) {
+      offRoom = closeOnRoomChange(ui, 'gardenForecast');
       const [cur, next] = forecast(now());
       const line = (label, info) => `
         <div class="g19-row g19-forecast-row">
@@ -350,7 +419,10 @@ function createForecastPanel() {
         ${cur.state === 'rain' || next.state === 'rain'
           ? `<p class="g19-hint">☔ ${t('garden.forecast.rainTip')}</p>` : ''}`;
     },
-    unmount() {},
+    unmount() {
+      offRoom?.(); // V2 fix (E20)
+      offRoom = null;
+    },
   };
 }
 
@@ -368,5 +440,5 @@ export function registerGardenUi({ store, ui }) {
   ui.registerPanel('gardenSell', createSellPanel({ store, ui }));
   ui.registerPanel('gardenBuyPlot', createBuyPlotPanel({ store, ui }));
   ui.registerPanel('gardenFertilizer', createFertilizerPanel({ store, ui }));
-  ui.registerPanel('gardenForecast', createForecastPanel());
+  ui.registerPanel('gardenForecast', createForecastPanel({ ui }));
 }
