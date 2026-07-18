@@ -100,6 +100,13 @@ export const EN = {
   'outfit.bandana': 'Bandana',
   'outfit.bellCollar': 'Bell Collar',
   'outfit.cape': 'Hero Cape',
+
+  // --- V2/FIX-C: §C6 collection-reward decor slots (decorate-panel titles;
+  //     the furn.* names live in v2-core.js) ---
+  'slot.fishBowl': 'Fishbowl Spot',
+  'slot.gardenTrophy': 'Garden Trophy',
+  'slot.toyCorner': 'Toy Corner',
+  'slot.candyShelf': 'Candy Shelf',
 };
 
 /** @type {Record<string, string>} */
@@ -192,4 +199,11 @@ export const DE = {
   'outfit.bandana': 'Halstuch',
   'outfit.bellCollar': 'Glöckchenhalsband',
   'outfit.cape': 'Heldenumhang',
+
+  // --- V2/FIX-C: §C6 collection-reward decor slots (decorate-panel titles;
+  //     the furn.* names live in v2-core.js) ---
+  'slot.fishBowl': 'Fischglas-Platz',
+  'slot.gardenTrophy': 'Gartentrophäe',
+  'slot.toyCorner': 'Spielzeugecke',
+  'slot.candyShelf': 'Bonbonregal',
 };

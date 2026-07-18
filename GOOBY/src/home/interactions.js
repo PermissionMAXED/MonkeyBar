@@ -24,6 +24,7 @@ import { INTERACT, XP, CARE_TUNING, COLLECTIONS, LEVELING, ITEM_PRICES, STATS } 
 import { getFood } from '../data/foods.js';
 import { applyDeltas, clampStat } from '../systems/stats.js';
 import { currentMood } from '../systems/sleep.js';
+import { bandAt } from '../systems/dayNight.js';
 import { remove as invRemove, list as invList } from '../systems/inventory.js';
 import { applyXp } from '../systems/leveling.js';
 import { deriveEmotion } from '../character/emotions.js';
@@ -379,6 +380,29 @@ export function stepBall(ball, dt) {
   return { bounced, resting };
 }
 
+/**
+ * V2/FIX-C P1-2: Gooby's ambient face from the FULL emotion-machine input set
+ * (mood + stats + health + night), matching homeScene's machine inputs.
+ * restoreEmotion() previously derived from {mood, stats} only, so any care
+ * interaction (pet/tickle/feed/wash) durably bypassed the §C3.4 sick mood
+ * cap 39 — one pet made sick Gooby ecstatic. Pure: state + time in,
+ * emotion id out.
+ * @param {object} state full store snapshot
+ * @param {number} atMs epoch ms (callers pass clock.now())
+ * @returns {string} emotion id (EMOTION_IDS)
+ */
+export function careEmotionFor(state, atMs) {
+  return deriveEmotion({
+    // currentMood applies the §C1.4 early-wake grumpy debuff + clamping
+    mood: currentMood(state, atMs),
+    stats: state.stats,
+    health: state.health?.state ?? null,
+    // §C10.3 night bias counts only while actually awake (mirrors
+    // homeScene.isNightAwake: night band + not in sleep mode)
+    night: bandAt(atMs).band === 'night' && !state.sleep?.sleeping,
+  });
+}
+
 // ===========================================================================
 // 2. WIRING (browser only — three.js via dynamic import, DOM inside functions)
 // ===========================================================================
@@ -432,7 +456,12 @@ const CARE_CSS = `
 .tray-care-item{display:flex;flex-direction:column;align-items:center;gap:4px;background:var(--bg-cream,#FFF6EC);border-radius:16px;padding:10px 4px 8px;border:2px dashed rgba(74,59,54,.18);font-family:inherit;user-select:none;-webkit-user-select:none;touch-action:none;position:relative;}
 .tray-care-item.g20-drag{cursor:grab;}
 .tray-care-item:active{transform:scale(.97);}
-.tray-care-buy{font-size:11px;font-weight:800;border:none;border-radius:999px;padding:3px 10px;background:var(--teal,#59C9B9);color:#fff;font-family:inherit;cursor:pointer;}
+.tray-care-buy{font-size:11px;font-weight:800;border:none;border-radius:999px;padding:3px 10px;background:var(--teal,#59C9B9);color:#fff;font-family:inherit;cursor:pointer;position:relative;}
+/* V2/FIX-C P2-6: invisible ::before halo gives the compact chip a >=44px
+   effective hit area (the only purchase affordance in the tray). Pointer
+   events on the halo target the button itself; the medicine-drag handler
+   already ignores events from .tray-care-buy. */
+.tray-care-buy::before{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:max(100%,64px);height:44px;border-radius:999px;}
 .tray-care-buy:disabled{opacity:.45;}
 .tray-care-hint{font-size:10px;font-weight:700;opacity:.55;}
 `;
@@ -762,13 +791,11 @@ function mouthWorld(s) {
   return v;
 }
 
-/** Restore Gooby's default emotion from mood + stats (§D2.5). */
+/** Restore Gooby's default emotion from the full input set (§D2.5, §C3.4). */
 function restoreEmotion(s) {
   if (!s.gooby || s.disposed) return;
-  const state = s.store.get();
-  // currentMood (systems/sleep.js) applies the §C1.4 early-wake grumpy debuff
-  // (−15 while grumpyUntil is active) and clamps to the valid range.
-  s.gooby.setEmotion(deriveEmotion({ mood: currentMood(state, now()), stats: state.stats }));
+  // V2/FIX-C P1-2: careEmotionFor includes health (sick cap 39) + night bias.
+  s.gooby.setEmotion(careEmotionFor(s.store.get(), now()));
 }
 
 function laterTimer(s, fn, ms) {

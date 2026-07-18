@@ -20,8 +20,9 @@ import {
   canUseToilet,
   flickToVelocity,
   stepBall,
+  careEmotionFor, // V2/FIX-C (P1-2)
 } from '../src/home/interactions.js';
-import { INTERACT, XP, CARE_TUNING } from '../src/data/constants.js';
+import { INTERACT, XP, CARE_TUNING, STATS } from '../src/data/constants.js';
 import { FOODS_BY_ID } from '../src/data/foods.js';
 import { HEALTH } from '../src/systems/health.js'; // V2/G20 (§B5 thresholds)
 
@@ -400,6 +401,54 @@ test('ball stays inside the room bounds on hard sideways throws', () => {
   for (let i = 0; i < 2000; i += 1) stepBall(ball, 1 / 120);
   assert.ok(Math.abs(ball.pos.x) <= B.BOUND_X + 1e-9);
   assert.ok(ball.pos.z >= B.BOUND_Z_MIN - 1e-9 && ball.pos.z <= B.BOUND_Z_MAX + 1e-9);
+});
+
+// ---------------------------------------------------------------------------
+// V2/FIX-C (P1-2): careEmotionFor — the emotion restored after every care
+// interaction must include the FULL derivation input set (health sick cap 39
+// → grumpy band, night sleepy bias), not just {mood, stats}. Regression: a
+// single pet used to make sick Gooby ecstatic forever.
+// ---------------------------------------------------------------------------
+
+// noon local — never in the night band (§B4: night is 21:00–06:00)
+const NOON = new Date(2026, 6, 16, 12, 0, 0).getTime();
+// 02:00 local — inside the night band
+const NIGHT_2AM = new Date(2026, 6, 16, 2, 0, 0).getTime();
+
+const careState = (over = {}) => ({
+  stats: { hunger: 90, energy: 90, hygiene: 90, fun: 90 },
+  health: { state: 'healthy' },
+  sleep: { sleeping: false },
+  grumpyUntil: 0,
+  ...over,
+});
+
+test('V2/FIX-C careEmotionFor: sick Gooby stays grumpy-capped despite perfect stats', () => {
+  const sick = careState({ health: { state: 'sick' } });
+  // mood would be 90 (ecstatic band) but sick caps it at 39 → grumpy band
+  assert.equal(careEmotionFor(sick, NOON), 'grumpy');
+  assert.ok(STATS.EXHAUSTED_MOOD_CAP < 40, 'cap 39 sits inside the grumpy band');
+});
+
+test('V2/FIX-C careEmotionFor: recovery restores the normal mood-band face', () => {
+  assert.equal(careEmotionFor(careState(), NOON), 'ecstatic');
+  assert.equal(careEmotionFor(careState({ health: { state: 'queasy' } }), NOON), 'ecstatic');
+  // pre-2.0 saves without a health slice never break the derivation
+  assert.equal(careEmotionFor(careState({ health: undefined }), NOON), 'ecstatic');
+});
+
+test('V2/FIX-C careEmotionFor: early-wake grumpy debuff still applies (currentMood)', () => {
+  const debuffed = careState({ grumpyUntil: NOON + 60_000 });
+  // mood 90 − 15 debuff = 75 → happy band, not ecstatic
+  assert.equal(careEmotionFor(debuffed, NOON), 'happy');
+});
+
+test('V2/FIX-C careEmotionFor: night band while awake feeds the sleepy tie-bias', () => {
+  const tired = careState({ stats: { hunger: 5, energy: 10, hygiene: 90, fun: 90 } });
+  // exhausted + starving at 02:00 awake → §C10.3 guarantees sleepy wins the tie
+  // (the night flag makes the guarantee independent of statOverride ordering)
+  assert.equal(careEmotionFor(tired, NIGHT_2AM), 'sleepy');
+  assert.equal(careEmotionFor(tired, NOON), 'sleepy'); // exhausted override by day too
 });
 
 // ---------------------------------------------------------------------------

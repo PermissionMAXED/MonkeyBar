@@ -158,6 +158,21 @@ test('decor slot ids match the §C5.2/§C8.3 furniture catalogs', () => {
   }
 });
 
+test('V2/FIX-C: reward-only slots never collide with the frozen room-def slots', async () => {
+  // the §C6 set-reward decos live in CATALOG-ONLY slots (decor.js positions
+  // them via REWARD_SLOT_SPOTS) — a room def gaining a same-named slot would
+  // silently shadow the reward placement, so guard the namespace here
+  const { rewardSlots } = await import('../src/data/furniture.js');
+  for (const def of DEFS) {
+    for (const slotId of rewardSlots(def.id)) {
+      assert.ok(
+        !(slotId in def.slots),
+        `${def.id}.${slotId}: reward slot id collides with a room-def slot`
+      );
+    }
+  }
+});
+
 test('every slot default is a member of its variant list', () => {
   for (const def of DEFS) {
     for (const [slotId, slot] of Object.entries(def.slots)) {

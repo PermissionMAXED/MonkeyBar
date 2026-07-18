@@ -27,6 +27,12 @@
  *                                 — layouts live in the room defs' piecesByItem
  * @property {boolean} [default]   free default of its slot (pre-placed by G4)
  * @property {boolean} [procedural] built in code by home/decor.js (no GLB)
+ * @property {boolean} [reward]    V2/FIX-C (§C6): collection-set completion
+ *                                 reward — price 0 but NOT a free default and
+ *                                 NEVER shop-buyable (roomSlots skips
+ *                                 reward-only slots so the shop never lists
+ *                                 them as 0c purchases); ownership lands via
+ *                                 claimSet → furniture.owned
  * @property {'ceiling'} [mount]   V2/G22: hang from the slot anchor instead of
  *                                 grounding on it (ceiling fan — PLAN2 §C8.1)
  * @property {readonly {glb: string, at: readonly number[], rotY?: number,
@@ -188,6 +194,19 @@ export const FURNITURE = F([
   // tinted tree_oak with a pink canopy (§C8.3 blossom tree)
   furn({ id: 'treeBlossom', slot: 'gardenTree', rooms: ['garden'], price: 260, glb: 'nature-kit/tree_oak', tint: '#FFB7D5', tintTarget: 'foliage' }),
   // ==================================================== end V2/G22 ====
+
+  // ======================= V2/FIX-C (§C6 set rewards) =======================
+  // The 4 collection-set completion rewards (constants.COLLECTIONS.SETS →
+  // claimSet lands these exact ids in furniture.owned). Each gets its OWN
+  // reward-only slot so the decorate picker can place it without competing
+  // with the buyable slot families; roomSlots() hides these slots from the
+  // shop grid (never a 0c purchase). Placement anchors for the 3D side live
+  // in home/decor.js REWARD_SLOT_SPOTS; builders in decor.js buildProcedural.
+  furn({ id: 'proc:goldfishBowl', slot: 'fishBowl', rooms: ['living'], price: 0, reward: true, procedural: true }),
+  furn({ id: 'proc:goldenWateringCan', slot: 'gardenTrophy', rooms: ['garden'], price: 0, reward: true, procedural: true }),
+  furn({ id: 'proc:toyCity', slot: 'toyCorner', rooms: ['bedroom'], price: 0, reward: true, procedural: true }),
+  furn({ id: 'proc:candyJar', slot: 'candyShelf', rooms: ['kitchen'], price: 0, reward: true, procedural: true }),
+  // ==================================================== end V2/FIX-C ====
 ]);
 
 /**
@@ -265,14 +284,33 @@ export function furnitureFor(roomId, slotId) {
 }
 
 /**
- * Decor slot ids of a room, in catalog order.
+ * Decor slot ids of a room, in catalog order. V2/FIX-C: reward-only slots
+ * (§C6 set-completion decos) are excluded — the shop grid iterates these
+ * slots and must never offer rewards as 0c purchases. The decorate picker
+ * unions in rewardSlots() separately (home/decor.js).
  * @param {string} roomId
  * @returns {string[]}
  */
 export function roomSlots(roomId) {
   const out = [];
   for (const e of FURNITURE) {
+    if (e.reward) continue; // V2/FIX-C: reward slots are not shoppable
     if (e.rooms.includes(roomId) && !out.includes(e.slot)) out.push(e.slot);
+  }
+  return out;
+}
+
+/**
+ * V2/FIX-C: reward-only decor slot ids of a room (§C6 set-completion decos —
+ * one dedicated slot per reward). The decorate picker/3D apply union these
+ * with roomSlots(); the shop grid never sees them.
+ * @param {string} roomId
+ * @returns {string[]}
+ */
+export function rewardSlots(roomId) {
+  const out = [];
+  for (const e of FURNITURE) {
+    if (e.reward && e.rooms.includes(roomId) && !out.includes(e.slot)) out.push(e.slot);
   }
   return out;
 }

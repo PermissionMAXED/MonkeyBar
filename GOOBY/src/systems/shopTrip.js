@@ -171,6 +171,19 @@ export function isVetDiscovered(state) {
 }
 // ── end V2/G21 ──────────────────────────────────────────────────────────────
 
+/**
+ * V2/FIX-C P2-7: whether a trip confirm/destination sheet may OPEN at all.
+ * Pure on the §B2 save state. A sleeping Gooby can't be taken on a trip —
+ * the framework already refuses the drive cleanly, but the sheet shouldn't
+ * even offer (toast 'toast.sleeping' instead).
+ * @param {object} state §B2 save-state root (store.get())
+ * @returns {{ok: boolean, reason?: 'sleeping'}}
+ */
+export function canRequestTrip(state) {
+  if (state?.sleep?.sleeping) return { ok: false, reason: 'sleeping' };
+  return { ok: true };
+}
+
 // ---------------------------------------------------------------------------
 // Runtime wiring (DOM/scene work only happens inside the injected deps'
 // callbacks — this module still imports no DOM/three).
@@ -422,6 +435,7 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
   function requestShopTrip() {
     if (machine.state() !== TRIP_STATE.HOME) return; // already out
     if (sceneManager.currentId?.() === 'minigame') return;
+    if (!canRequestTrip(store.get()).ok) return ui.toast('toast.sleeping'); // V2/FIX-C P2-7
     if (isVetDiscovered(store.get())) ui.openPanel('cityDestinations'); // V2/G21
     else ui.openPanel('shopTripConfirm');
   }
@@ -431,6 +445,7 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
   function requestVetTrip() {
     if (machine.state() !== TRIP_STATE.HOME) return; // already out
     if (sceneManager.currentId?.() === 'minigame') return;
+    if (!canRequestTrip(store.get()).ok) return ui.toast('toast.sleeping'); // V2/FIX-C P2-7
     ui.openPanel('vetTripConfirm');
   }
 

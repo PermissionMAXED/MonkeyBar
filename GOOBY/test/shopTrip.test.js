@@ -13,6 +13,7 @@ import {
   isVetHandoff, // V2/G21 (§C9.2)
   isTripMode, // V2/G21 (§C9.2)
   isVetDiscovered, // V2/G21 (§C9.2)
+  canRequestTrip, // V2/FIX-C (P2-7)
 } from '../src/systems/shopTrip.js';
 import { DRIVE, MINIGAME, COIN_TABLE, VET } from '../src/data/constants.js'; // V2/G21: + VET
 import { MINIGAMES } from '../src/data/minigames.js';
@@ -222,3 +223,17 @@ test('V2 §C9.2: checkup path — 30c anytime, resets neglect, insufficient coin
   assert.equal(store.get('coins'), 0); // nothing charged on refusal
 });
 // ── end V2/G21 ──────────────────────────────────────────────────────────────
+
+// ── V2/FIX-C (P2-7): sleep gate on the trip confirm/destination sheets ──────
+
+test('V2/FIX-C canRequestTrip: sleeping Gooby blocks the sheet with a reason', () => {
+  const asleep = defaultState();
+  asleep.sleep = { sleeping: true, startedAt: 1, wakeAt: 2 };
+  assert.deepEqual(canRequestTrip(asleep), { ok: false, reason: 'sleeping' });
+});
+
+test('V2/FIX-C canRequestTrip: awake (or legacy saves without a sleep slice) may open', () => {
+  assert.deepEqual(canRequestTrip(defaultState()), { ok: true });
+  assert.deepEqual(canRequestTrip({}), { ok: true }); // defensive: no slice
+  assert.deepEqual(canRequestTrip(undefined), { ok: true });
+});

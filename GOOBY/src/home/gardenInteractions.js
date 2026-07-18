@@ -32,6 +32,10 @@ import { t } from '../data/strings.js';
 import { CROPS_BY_ID } from '../data/crops.js';
 import * as garden from '../systems/garden.js';
 import * as collections from '../systems/collections.js';
+// V2/FIX-C (FA integration): harvest provenance — economy.recordHarvest
+// credits items['harvested:<foodId>'] at the harvest site (anti-arbitrage
+// compost gate). Namespace import + optional call = feature-detected.
+import * as economy from '../systems/economy.js';
 import { add as invAdd } from '../systems/inventory.js';
 import { now } from '../core/clock.js';
 import { weatherAt } from '../systems/weather.js';
@@ -78,6 +82,14 @@ const s = {
   goobyDragBlocked: false,
   lastPersistAt: 0,
   time: 0,
+  /**
+   * V2/FIX-C (E15): ready-juice dedupe — 'plotIdx:cropId' → epoch ms of the
+   * last chime/sparkle/toast. The local 1 s tick AND timeEngine's
+   * 'cropsReadyLive' re-emit can observe the same crossing within one second;
+   * whoever presents first wins, the other is suppressed.
+   * @type {Map<string, number>}
+   */
+  readyShownAt: new Map(),
 };
 
 const track = {
@@ -276,8 +288,38 @@ export function snapReady(g, events = []) {
   return changed ? { ...g, plots } : g;
 }
 
+/**
+ * V2/FIX-C (E15): dedupe window for the ready chime/sparkle/toast (ms). The
+ * local 1 s tick and timeEngine's 'cropsReadyLive' re-emit can both observe
+ * the same readiness crossing — one presentation per plot per window.
+ */
+const READY_DEDUPE_MS = 5000;
+
+/**
+ * The §C2.2 "crop became ready" juice: harvestReady chime + sparkle at the
+ * plot + toast. Shared by the local tick fallback and the 'cropsReadyLive'
+ * store event (V2/FIX-B timeEngine contract); deduped via s.readyShownAt.
+ * @param {{type?: string, plotIdx: number, cropId: string}[]} events
+ */
+function presentReadyEvents(events) {
+  if (!Array.isArray(events) || events.length === 0) return;
+  const { ui, audio } = s.deps;
+  const atMs = Date.now();
+  for (const ev of events) {
+    if (!ev || (ev.type && ev.type !== 'ready')) continue;
+    const key = `${ev.plotIdx}:${ev.cropId}`;
+    if (atMs - (s.readyShownAt.get(key) ?? 0) < READY_DEDUPE_MS) continue;
+    s.readyShownAt.set(key, atMs);
+    audio.play('garden.harvestReady');
+    const crop = CROPS_BY_ID[ev.cropId];
+    const at = s.rm?.getAnchor(`plot${ev.plotIdx}`, 'garden');
+    if (at) s.particles?.emit('sparkles', { x: at.x, y: at.y + 0.35, z: at.z });
+    if (crop) ui.toast('garden.ready', { name: t(crop.nameKey) });
+  }
+}
+
 function gardenTick() {
-  const { store, ui, audio } = s.deps;
+  const { store } = s.deps;
   const nowMs = now();
   const before = store.get('garden');
   if (!before) return;
@@ -296,15 +338,11 @@ function gardenTick() {
     s.lastPersistAt = nowMs;
     store.update((state) => { state.garden = g; });
   }
-  for (const ev of events) {
-    if (ev.type === 'ready') {
-      audio.play('garden.harvestReady');
-      const crop = CROPS_BY_ID[ev.cropId];
-      const at = s.rm?.getAnchor(`plot${ev.plotIdx}`, 'garden');
-      if (at) s.particles?.emit('sparkles', { x: at.x, y: at.y + 0.35, z: at.z });
-      if (crop) ui.toast('garden.ready', { name: t(crop.nameKey) });
-    }
-  }
+  // V2/FIX-C (E15): local-tick fallback path — timeEngine's global 1 Hz
+  // ticker usually consumes the crossing first (its 'cropsReadyLive' re-emit
+  // lands via the store subscription in wireScene), but when it doesn't run
+  // (or this tick wins the race) the juice still presents from here.
+  presentReadyEvents(events);
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +385,11 @@ function onPlotTap(idx) {
     state.collections = award.c;
     firstSticker = award.first;
   });
+  // V2/FIX-C (FA integration): harvest provenance for the anti-arbitrage
+  // compost gate — items['harvested:<foodId>'] += qty, ONCE per harvest,
+  // right where the yield lands in the inventory. Feature-detected (?.):
+  // recordHarvest is V2/FIX-A's economy API; the final tree has both.
+  economy.recordHarvest?.(store, res.foodId, res.qty);
   audio.play('garden.harvest');
   ui.toast('garden.harvested', {
     qty: res.qty,
@@ -656,6 +699,22 @@ function wireScene(rm) {
   } else {
     // still bring growth bookkeeping current on scene (re)entry (§C2.2)
     gardenTick();
+  }
+
+  // V2/FIX-C (E15): live readiness crossings — timeEngine's global 1 Hz
+  // ticker consumes garden.tick's 'ready' events before the in-room tick can
+  // see them and re-emits them as the runtime-only store event
+  // 'cropsReadyLive' (payload = [{type:'ready', plotIdx, cropId}, …] —
+  // V2/FIX-B contract in core/timeEngine.js). Present the chime/sparkle/
+  // toast while the garden is the active room; presentReadyEvents dedupes
+  // against the local-tick fallback above. Feature-detected: with an older
+  // engine the event never fires and the local tick still covers it.
+  if (typeof store.on === 'function') {
+    s.subs.push(store.on('cropsReadyLive', (events) => {
+      if (s.rm?.activeRoom() !== 'garden') return;
+      presentReadyEvents(events);
+      renderPlots(); // stage swap + ready bounce without waiting for the tick
+    }));
   }
 
   // visuals follow the save slice

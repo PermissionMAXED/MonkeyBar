@@ -138,6 +138,120 @@ test('applyEquippedOutfits is a safe no-op before initOutfitSync', async () => {
   assert.equal(applyEquippedOutfits(await fakeGooby()), false);
 });
 
+// ---------------------------------------------------------------------------
+// V2/FIX-C (P1-1): neck items must stay visible at every weight tier.
+// gooby.js setWeightTier scales the body lathe X/Z by the tier scale AND now
+// scales anchors.neck (children included) the same way, so items grow with
+// the belly. These tests replicate the §D2.2 pear profile + the §D2.3 neck
+// anchor placement headlessly and assert the geometry contract: with the
+// anchor tier-scaled, part of every neck item protrudes past the body
+// surface at all four §C4.3 tiers.
+// ---------------------------------------------------------------------------
+
+/** §D2.2 pear profile control points (binding recipe table, x = radius). */
+const PEAR_PROFILE = [
+  [0, 0], [0.3, 0.02], [0.43, 0.2], [0.46, 0.4],
+  [0.4, 0.58], [0.3, 0.7], [0.18, 0.76], [0, 0.78],
+];
+
+/** Max §D2.2 body radius near height y (same CatmullRom smoothing as gooby.js). */
+async function bodyRadiusAt(y) {
+  const { CatmullRomCurve3, Vector3 } = await import('three');
+  const curve = new CatmullRomCurve3(PEAR_PROFILE.map(([x, py]) => new Vector3(x, py, 0)));
+  let best = 0;
+  for (let i = 0; i <= 2000; i += 1) {
+    const p = curve.getPoint(i / 2000);
+    if (Math.abs(p.y - y) < 0.005) best = Math.max(best, p.x);
+  }
+  return best;
+}
+
+/**
+ * Largest protrusion (world radial XZ distance minus the tier-scaled body
+ * radius at that height) over all mesh vertices of a neck item mounted on a
+ * replica of the §D2.3 neck anchor with the P1-1 tier scaling applied.
+ */
+async function neckProtrusion(itemId, tierScale) {
+  const THREE = await import('three');
+  const root = new THREE.Group(); // body space: lathe axis at x=z=0
+  const anchor = new THREE.Object3D();
+  anchor.position.set(0, 0.62, 0.06 * tierScale); // gooby.js anchor re-fit
+  anchor.scale.set(tierScale, 1, tierScale); // V2/FIX-C P1-1 anchor scaling
+  root.add(anchor);
+  const item = buildOutfitItem(itemId);
+  anchor.add(item);
+  root.updateMatrixWorld(true);
+
+  let maxProtrusion = -Infinity;
+  const v = new THREE.Vector3();
+  const jobs = [];
+  item.traverse((obj) => {
+    if (!obj.isMesh) return;
+    const pos = obj.geometry.getAttribute('position');
+    jobs.push(async () => {
+      for (let i = 0; i < pos.count; i += 1) {
+        v.fromBufferAttribute(pos, i).applyMatrix4(obj.matrixWorld);
+        const bodyR = (await bodyRadiusAt(v.y)) * tierScale; // body scales X/Z only
+        maxProtrusion = Math.max(maxProtrusion, Math.hypot(v.x, v.z) - bodyR);
+      }
+    });
+  });
+  for (const job of jobs) await job();
+  return maxProtrusion;
+}
+
+test('V2/FIX-C P1-1: every neck item protrudes past the body at all 4 weight tiers', async () => {
+  const { WEIGHT } = await import('../src/systems/weight.js');
+  const tiers = WEIGHT.TIERS.map((t) => WEIGHT.TIER_SCALE[t]);
+  assert.deepEqual(tiers, [0.93, 1, 1.07, 1.14], '§C4.3 tier scales verbatim');
+  for (const item of outfitsForSlot('neck')) {
+    for (const scale of tiers) {
+      const p = await neckProtrusion(item.id, scale);
+      assert.ok(
+        p > 0.01,
+        `${item.id} must stick out ≥1 cm past the body at tier scale ${scale} (got ${p.toFixed(4)})`
+      );
+    }
+  }
+});
+
+test('V2/FIX-C P1-1: cape clasp band + gold buttons clear the body at default tier', async () => {
+  const THREE = await import('three');
+  const cape = buildOutfitItem('cape');
+  const anchor = new THREE.Object3D();
+  anchor.position.set(0, 0.62, 0.06);
+  anchor.add(cape);
+  anchor.updateMatrixWorld(true);
+
+  // regression: pre-fix the clasp band (r 0.325) + buttons sat INSIDE the
+  // chest even at scale 1.00. Band sides must clear the lathe surface…
+  const band = cape.children.find(
+    (c) => c.isMesh && c.geometry.type === 'TorusGeometry' && c.geometry.parameters.radius > 0.3
+  );
+  assert.ok(band, 'cape has a clasp band torus');
+  const bandBox = new THREE.Box3().setFromObject(band);
+  const bandY = (bandBox.min.y + bandBox.max.y) / 2;
+  const bodyAtBand = await bodyRadiusAt(bandY);
+  assert.ok(
+    bandBox.max.x > bodyAtBand + 0.01,
+    `band side extent ${bandBox.max.x.toFixed(3)} must clear body radius ${bodyAtBand.toFixed(3)}`
+  );
+
+  // …and both gold buttons must sit proud of the surface at the front.
+  const buttons = cape.children.filter(
+    (c) => c.isMesh && c.geometry.type === 'SphereGeometry' && c.geometry.parameters.radius < 0.03
+  );
+  assert.equal(buttons.length, 2, 'two clasp buttons');
+  for (const b of buttons) {
+    const w = b.getWorldPosition(new THREE.Vector3());
+    const bodyR = await bodyRadiusAt(w.y);
+    assert.ok(
+      Math.hypot(w.x, w.z) > bodyR,
+      `button center radial ${Math.hypot(w.x, w.z).toFixed(3)} must exceed body radius ${bodyR.toFixed(3)} at y ${w.y.toFixed(2)}`
+    );
+  }
+});
+
 // ------------------------------------------------------ persistence roundtrip
 
 test('equip persistence roundtrip: owned + equipped survive save/load (§E3)', () => {

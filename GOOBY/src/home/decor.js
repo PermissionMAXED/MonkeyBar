@@ -31,7 +31,8 @@
 import * as THREE from 'three';
 import { ENGINE, ROOMS } from '../data/constants.js';
 import { t } from '../data/strings.js';
-import { getEntry, roomSlots } from '../data/furniture.js'; // V2/G22: + roomSlots (garden fallback)
+// V2/G22: + roomSlots (garden fallback); V2/FIX-C: + rewardSlots (§C6 decos)
+import { getEntry, roomSlots, rewardSlots } from '../data/furniture.js';
 import {
   place,
   placedItem,
@@ -84,12 +85,23 @@ export function initDecor({ store, ui, audio }) {
     built.delete(key);
   }
 
+  /**
+   * V2/FIX-C: all decor slot ids of a room — the RoomDef slot table PLUS the
+   * catalog-only reward slots (§C6 set decos have no room-def entry; their
+   * anchors live in REWARD_SLOT_SPOTS below).
+   * @param {{id: string, slots: object}} def @returns {string[]}
+   */
+  const allSlotIds = (def) => {
+    const base = Object.keys(def.slots);
+    return [...base, ...rewardSlots(def.id).filter((s) => !base.includes(s))];
+  };
+
   function resetForInstance(nextRm) {
     for (const key of [...built.keys()]) disposeBuilt(key); // old scene is gone
     createdHolders = new Map(); // holders belonged to the old scene graph
     applied = new Map();
     for (const def of ROOM_DEFS) {
-      for (const slotId of Object.keys(def.slots)) {
+      for (const slotId of allSlotIds(def)) {
         // a fresh roomManager always builds the free defaults (§C5.2)
         applied.set(`${def.id}:${slotId}`, slotDefault(def.id, slotId));
       }
@@ -107,7 +119,7 @@ export function initDecor({ store, ui, audio }) {
         rm.setWallpaper(def.id, store.get(`decor.wallpaper.${def.id}`) ?? 'cream');
         rm.setFloor(def.id, store.get(`decor.floor.${def.id}`) ?? 'wood');
       }
-      for (const slotId of Object.keys(def.slots)) {
+      for (const slotId of allSlotIds(def)) {
         await applySlot(def, slotId).catch((err) =>
           console.warn(`[decor] slot ${def.id}:${slotId} apply failed:`, err)
         );
@@ -203,9 +215,12 @@ export function initDecor({ store, ui, audio }) {
   /**
    * The wallArt slot starts empty, so the roomManager never made a holder for
    * it — create one at the room-def position inside the live room group.
+   * V2/FIX-C: reward slots (§C6 decos) have no room-def entry at all — their
+   * anchors come from the REWARD_SLOT_SPOTS table instead.
    */
   function createSlotHolder(roomId, slotId, defEntry) {
-    if (!defEntry) return null;
+    const spot = defEntry ?? REWARD_SLOT_SPOTS[`${roomId}:${slotId}`]; // V2/FIX-C
+    if (!spot) return null;
     const def = ROOM_DEFS.find((d) => d.id === roomId);
     const sibling = Object.keys(def.slots)
       .map((s) => rm.getSlotHolder(roomId, s))
@@ -214,8 +229,8 @@ export function initDecor({ store, ui, audio }) {
     if (!roomGroup) return null;
     const holder = new THREE.Group();
     holder.name = `slot-${slotId}`;
-    holder.position.set(defEntry.at[0], defEntry.at[1], defEntry.at[2]);
-    holder.rotation.y = ((defEntry.rotY ?? 0) * Math.PI) / 180;
+    holder.position.set(spot.at[0], spot.at[1], spot.at[2]);
+    holder.rotation.y = ((spot.rotY ?? 0) * Math.PI) / 180;
     roomGroup.add(holder);
     return holder;
   }
@@ -353,8 +368,16 @@ function createDecoratePanel({ store, ui, audio }) {
       }
 
       function renderSlots(grid) {
-        // V2/G22: room-def slot order when available, catalog order otherwise
-        for (const s of def ? Object.keys(def.slots) : roomSlots(roomId)) {
+        // V2/G22: room-def slot order when available, catalog order otherwise.
+        // V2/FIX-C: union in the reward-only slots (§C6 set decos live in
+        // catalog-only slots the shop grid hides — the picker must offer
+        // them). A reward slot only shows once its deco is actually owned
+        // (claimed) — before that it would just be a locked 0c curiosity.
+        const base = def ? Object.keys(def.slots) : roomSlots(roomId);
+        const rewards = rewardSlots(roomId).filter(
+          (s) => !base.includes(s) && slotOptions(store, roomId, s).some((o) => o.owned)
+        );
+        for (const s of [...base, ...rewards]) {
           const current = placedItem(store, roomId, s);
           const card = document.createElement('button');
           card.className = 'shop-card';
@@ -442,6 +465,15 @@ function buildProcedural(itemId, track) {
       return buildBirdbath(track);
     case 'proc:pathDirt':
       return buildDirtPath(track);
+    // ---- V2/FIX-C (§C6): the 4 collection-set completion rewards ----
+    case 'proc:goldfishBowl':
+      return buildGoldfishBowl(track);
+    case 'proc:goldenWateringCan':
+      return buildGoldenWateringCan(track);
+    case 'proc:toyCity':
+      return buildToyCity(track);
+    case 'proc:candyJar':
+      return buildCandyJar(track);
     default: {
       // unknown procedural id: a friendly placeholder cube (never throws)
       const grp = new THREE.Group();
@@ -740,6 +772,223 @@ function buildBirdbath(track) {
   );
   water.position.y = 0.485;
   grp.add(base, column, basin, water);
+  return grp;
+}
+
+// ---------------------------------------------------------------------------
+// V2/FIX-C (§C6): collection-set reward decos — placement anchors + builders
+// ---------------------------------------------------------------------------
+
+/**
+ * Placement anchors for the reward-only slots (§C6 decos). These slots have
+ * no room-def entry (rooms/*.js are frozen wave-1 files), so createSlotHolder
+ * reads this table instead. Spots were picked clear of the fixed
+ * interactables and existing decor slots of each room.
+ * @type {Record<string, {at: readonly number[], rotY?: number}>}
+ */
+const REWARD_SLOT_SPOTS = Object.freeze({
+  // fish set: goldfish bowl on the living-room coffee table (top ≈ y 0.37),
+  // right of the set-dressing book stack at x −0.9
+  'living:fishBowl': Object.freeze({ at: Object.freeze([-0.5, 0.37, 0.28]), rotY: -15 }),
+  // veggies set: golden watering can displayed by the tool stump (x 1.35) —
+  // a trophy next to the everyday tin can
+  'garden:gardenTrophy': Object.freeze({ at: Object.freeze([1.95, 0, 0.7]), rotY: -30 }),
+  // landmarks set: toy city on the bedroom floor between bed foot and rug
+  'bedroom:toyCorner': Object.freeze({ at: Object.freeze([-0.55, 0, 1.05]), rotY: 15 }),
+  // treats set: candy jar on the kitchen counter top (y 0.71) between the
+  // drawer unit and the sink, clear of the appliance slot at x −0.62
+  'kitchen:candyShelf': Object.freeze({ at: Object.freeze([-0.35, 0.71, -1.02]), rotY: 0 }),
+});
+
+/**
+ * Goldfish bowl (fish-set reward): glass sphere + water fill + sand base +
+ * a chunky orange goldfish mid-swim (§C6 „cute, small, distinct").
+ * @param {Track} track
+ */
+function buildGoldfishBowl(track) {
+  const grp = new THREE.Group();
+  grp.name = 'goldfishBowl';
+  const glass = new THREE.Mesh(
+    track.geo(new THREE.SphereGeometry(0.115, 18, 14, 0, Math.PI * 2, Math.PI * 0.14)),
+    track.mat(new THREE.MeshStandardMaterial({
+      color: '#DFF2FB', roughness: 0.08, transparent: true, opacity: 0.3, side: THREE.DoubleSide,
+    }))
+  );
+  glass.position.y = 0.115;
+  const water = new THREE.Mesh(
+    track.geo(new THREE.SphereGeometry(0.104, 16, 12, 0, Math.PI * 2, Math.PI * 0.3)),
+    track.mat(new THREE.MeshStandardMaterial({
+      color: '#A9DCF2', roughness: 0.15, transparent: true, opacity: 0.55,
+    }))
+  );
+  water.position.y = 0.115;
+  const sand = new THREE.Mesh(
+    track.geo(new THREE.SphereGeometry(0.095, 14, 6, 0, Math.PI * 2, Math.PI * 0.72)),
+    standardMat('#EAD9A8', { roughness: 0.95 })
+  );
+  sand.position.y = 0.115;
+  // the resident: body + tail fin + eye dots
+  const orange = standardMat('#FF9F5A', { roughness: 0.6 });
+  const body = new THREE.Mesh(track.geo(new THREE.SphereGeometry(0.034, 12, 10)), orange);
+  body.scale.set(1.35, 1, 0.8);
+  body.position.set(0.012, 0.125, 0);
+  body.rotation.y = 0.6;
+  const tail = new THREE.Mesh(track.geo(new THREE.ConeGeometry(0.02, 0.036, 8)), orange);
+  tail.position.set(-0.038, 0.125, -0.025);
+  tail.rotation.z = Math.PI / 2;
+  tail.rotation.y = 0.6;
+  const eyeMat = standardMat('#4A3B36', { roughness: 0.4 });
+  const eye = new THREE.Mesh(track.geo(new THREE.SphereGeometry(0.006, 6, 6)), eyeMat);
+  eye.position.set(0.052, 0.132, 0.022);
+  grp.add(glass, water, sand, body, tail, eye);
+  return grp;
+}
+
+/**
+ * Golden watering can (veggies-set reward): the garden tool-can shape
+ * (roomManager buildWateringCan) re-built in trophy gold on a little plinth.
+ * @param {Track} track
+ */
+function buildGoldenWateringCan(track) {
+  const grp = new THREE.Group();
+  grp.name = 'goldenWateringCan';
+  const gold = standardMat('#E8C24A', { roughness: 0.3, metalness: 0.65 });
+  const plinth = new THREE.Mesh(
+    track.geo(new THREE.CylinderGeometry(0.2, 0.24, 0.1, 14)),
+    standardMat('#C9C4BA', { roughness: 0.9 })
+  );
+  plinth.position.y = 0.05;
+  grp.add(plinth);
+  const can = new THREE.Group();
+  can.position.y = 0.1;
+  const body = new THREE.Mesh(track.geo(new THREE.CylinderGeometry(0.13, 0.15, 0.24, 12)), gold);
+  body.position.y = 0.12;
+  can.add(body);
+  const spout = new THREE.Mesh(track.geo(new THREE.CylinderGeometry(0.025, 0.035, 0.28, 8)), gold);
+  spout.position.set(0.19, 0.19, 0);
+  spout.rotation.z = Math.PI / 2.6;
+  can.add(spout);
+  const rose = new THREE.Mesh(track.geo(new THREE.CylinderGeometry(0.05, 0.03, 0.04, 10)), gold);
+  rose.position.set(0.3, 0.26, 0);
+  rose.rotation.z = Math.PI / 2.6;
+  can.add(rose);
+  const handleTop = new THREE.Mesh(track.geo(new THREE.TorusGeometry(0.08, 0.016, 8, 14, Math.PI)), gold);
+  handleTop.position.set(-0.02, 0.24, 0);
+  can.add(handleTop);
+  const handleBack = new THREE.Mesh(track.geo(new THREE.TorusGeometry(0.09, 0.016, 8, 14, Math.PI)), gold);
+  handleBack.position.set(-0.14, 0.13, 0);
+  handleBack.rotation.z = Math.PI / 2;
+  can.add(handleBack);
+  grp.add(can);
+  return grp;
+}
+
+/**
+ * Toy city (landmarks-set reward): a palm-sized skyline of pastel block
+ * towers on a green base plate, tiny road across.
+ * @param {Track} track
+ */
+function buildToyCity(track) {
+  const grp = new THREE.Group();
+  grp.name = 'toyCity';
+  const plate = new THREE.Mesh(
+    track.geo(new THREE.BoxGeometry(0.52, 0.03, 0.4)),
+    standardMat('#9FD8A4', { roughness: 0.9 })
+  );
+  plate.position.y = 0.015;
+  grp.add(plate);
+  const road = new THREE.Mesh(
+    track.geo(new THREE.BoxGeometry(0.52, 0.006, 0.07)),
+    standardMat('#8B8B93', { roughness: 0.95 })
+  );
+  road.position.set(0, 0.033, 0.06);
+  grp.add(road);
+  // towers: [x, z, w, h, color] — tallest in back like a real skyline
+  const towers = [
+    [-0.18, -0.1, 0.1, 0.24, '#6EC6FF'],
+    [-0.05, -0.13, 0.09, 0.32, '#FF9E7B'],
+    [0.09, -0.09, 0.11, 0.2, '#FFD166'],
+    [0.2, -0.13, 0.08, 0.27, '#B39DDB'],
+    [-0.16, 0.13, 0.09, 0.12, '#59C9B9'],
+    [0.16, 0.13, 0.1, 0.15, '#FF7BA9'],
+  ];
+  for (const [x, z, w, h, color] of towers) {
+    const tower = new THREE.Mesh(
+      track.geo(new THREE.BoxGeometry(w, h, w)),
+      standardMat(color, { roughness: 0.7 })
+    );
+    tower.position.set(x, 0.03 + h / 2, z);
+    grp.add(tower);
+  }
+  // the sky-tower landmark: a thin spire with a ball top, city centerpiece
+  const spire = new THREE.Mesh(
+    track.geo(new THREE.ConeGeometry(0.028, 0.14, 8)),
+    standardMat('#F4F0E6', { roughness: 0.6 })
+  );
+  spire.position.set(0.02, 0.35, -0.12);
+  const ball = new THREE.Mesh(
+    track.geo(new THREE.SphereGeometry(0.016, 8, 8)),
+    standardMat('#FFD166', { roughness: 0.4, metalness: 0.3 })
+  );
+  ball.position.set(0.02, 0.43, -0.12);
+  const spireBase = new THREE.Mesh(
+    track.geo(new THREE.BoxGeometry(0.09, 0.25, 0.09)),
+    standardMat('#DCD6C6', { roughness: 0.7 })
+  );
+  spireBase.position.set(0.02, 0.155, -0.12);
+  grp.add(spireBase, spire, ball);
+  return grp;
+}
+
+/**
+ * Candy jar (treats-set reward): glass jar stuffed with candy balls under a
+ * cherry-red lid — kitchen counter eye-candy.
+ * @param {Track} track
+ */
+function buildCandyJar(track) {
+  const grp = new THREE.Group();
+  grp.name = 'candyJar';
+  const jar = new THREE.Mesh(
+    track.geo(new THREE.CylinderGeometry(0.085, 0.075, 0.17, 14, 1, true)),
+    track.mat(new THREE.MeshStandardMaterial({
+      color: '#EAF6FC', roughness: 0.08, transparent: true, opacity: 0.32, side: THREE.DoubleSide,
+    }))
+  );
+  jar.position.y = 0.085;
+  const bottom = new THREE.Mesh(
+    track.geo(new THREE.CylinderGeometry(0.075, 0.075, 0.012, 14)),
+    track.mat(new THREE.MeshStandardMaterial({
+      color: '#EAF6FC', roughness: 0.08, transparent: true, opacity: 0.4,
+    }))
+  );
+  bottom.position.y = 0.006;
+  const lid = new THREE.Mesh(
+    track.geo(new THREE.CylinderGeometry(0.09, 0.09, 0.035, 14)),
+    standardMat('#E0655F', { roughness: 0.5 })
+  );
+  lid.position.y = 0.19;
+  const knob = new THREE.Mesh(
+    track.geo(new THREE.SphereGeometry(0.022, 10, 8)),
+    standardMat('#FFD166', { roughness: 0.4, metalness: 0.3 })
+  );
+  knob.position.y = 0.22;
+  grp.add(jar, bottom, lid, knob);
+  // candy fill: layered pastel balls (deterministic layout — no Math.random)
+  const candyCols = ['#FF7BA9', '#FFD166', '#59C9B9', '#B39DDB', '#FF9E7B'];
+  const ballGeo = track.geo(new THREE.SphereGeometry(0.021, 8, 8));
+  let i = 0;
+  for (let layer = 0; layer < 3; layer += 1) {
+    const y = 0.028 + layer * 0.038;
+    const r = 0.048 - layer * 0.006;
+    const n = 6 - layer;
+    for (let k = 0; k < n; k += 1) {
+      const a = (k / n) * Math.PI * 2 + layer * 0.7;
+      const ballMesh = new THREE.Mesh(ballGeo, standardMat(candyCols[i % candyCols.length], { roughness: 0.35 }));
+      ballMesh.position.set(Math.cos(a) * r, y, Math.sin(a) * r);
+      grp.add(ballMesh);
+      i += 1;
+    }
+  }
   return grp;
 }
 

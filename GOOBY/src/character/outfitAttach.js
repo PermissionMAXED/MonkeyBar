@@ -627,12 +627,15 @@ function buildBellCollar() {
 /** Cape 500 — rigid swoosh that flutters out on hops (§C8.4, cloth-sim-free). */
 function buildCape() {
   const g = new THREE.Group();
-  // clasp band + gold buttons at the throat
-  const band = add(g, new THREE.TorusGeometry(0.325, 0.022, 8, 26), outfitMat(C.RED_DARK, { roughness: 0.8 }), [0, 0.015, -0.05]);
+  // clasp band + gold buttons at the throat. V2/FIX-C P1-1: the band torus
+  // must clear the body lathe (radius ≈0.371 at the neck seam) — 0.36+0.026
+  // keeps the strap proud of the surface all around, and the buttons sit on
+  // the band front instead of inside the chest.
+  const band = add(g, new THREE.TorusGeometry(0.36, 0.026, 8, 26), outfitMat(C.RED_DARK, { roughness: 0.8 }), [0, 0.015, -0.05]);
   band.rotation.x = Math.PI / 2;
   band.scale.set(1, 1, 0.8);
   for (const sx of [-1, 1]) {
-    add(g, new THREE.SphereGeometry(0.02, 8, 8), gold(), [sx * 0.09, 0.02, 0.3]);
+    add(g, new THREE.SphereGeometry(0.022, 8, 8), gold(), [sx * 0.09, 0.02, 0.315]);
   }
   // the cape sheet: an open cone segment wrapped around the back half,
   // pivoted at the shoulders so flutter can swing the hem outward

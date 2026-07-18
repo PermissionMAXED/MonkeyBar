@@ -172,6 +172,9 @@ test('catalog matches the room defs exactly (both directions)', () => {
   }
   // reverse: every catalog entry is reachable in each room it claims
   for (const e of FURNITURE) {
+    // V2/FIX-C: reward entries live in catalog-only slots (not in the frozen
+    // room defs) — placement resolves via the catalog fallback, tested below
+    if (e.reward) continue;
     for (const roomId of e.rooms) {
       // V2/G22: the garden's RoomDef is G19's rooms/garden.js — its slot
       // compat is covered by the catalog-fallback tests below instead
@@ -387,16 +390,20 @@ test('floor buy+apply mirrors wallpaper and stays atomic on low coins', () => {
 
 test('§A3 catalog counts: +30 new furniture buyables, wallpapers 10, floors 7', () => {
   // 40 v1 entries + 23 §C8.1 indoor + 11 §C8.3 garden items
-  assert.equal(FURNITURE.length, 74);
+  //   + 4 V2/FIX-C §C6 set-reward decos
+  assert.equal(FURNITURE.length, 78);
   // §A3 "+30 new buyables": v1 ships 23 non-default furniture buyables;
-  // 2.0 adds 23 indoor + 7 buyable garden pieces = 53 total
+  // 2.0 adds 23 indoor + 7 buyable garden pieces = 53 total (rewards are
+  // price 0 and never counted as buyables)
   const buyables = FURNITURE.filter((e) => !e.default && e.price > 0);
   assert.equal(buyables.length, 53);
   assert.equal(WALLPAPERS.length, 10); // §C8.2: 6 → 10
   assert.equal(FLOORS.length, 7); // §C8.2: 4 → 7
-  // every default is free and every non-default costs coins
+  // every free entry is a slot default OR a §C6 set reward; every
+  // non-free entry is a plain buyable (V2/FIX-C extends the v1 invariant)
   for (const e of FURNITURE) {
-    assert.equal(e.price === 0, !!e.default, e.id);
+    assert.equal(e.price === 0, !!(e.default || e.reward), e.id);
+    assert.ok(!(e.default && e.reward), `${e.id} cannot be both default and reward`);
   }
 });
 
@@ -444,8 +451,11 @@ test('§C8.3 garden decor: 6 slots, 11 items, verbatim prices + defaults', () =>
   assert.deepEqual(roomSlots('garden'), [
     'gardenBench', 'gardenGnome', 'birdbath', 'flowerBed', 'gardenPath', 'gardenTree',
   ]);
+  // 11 §C8.3 pieces + the V2/FIX-C gardenTrophy reward (excluded from the
+  // buyable-slot list asserted just above)
   const garden = FURNITURE.filter((e) => e.rooms.includes('garden'));
-  assert.equal(garden.length, 11);
+  assert.equal(garden.length, 12);
+  assert.equal(garden.filter((e) => !e.reward).length, 11);
   assert.deepEqual(
     garden.filter((e) => e.default).map((e) => e.id),
     ['proc:benchWood', 'flowerBedWild', 'proc:pathDirt', 'treeDefault']
@@ -507,6 +517,84 @@ test('garden placement works pre-G19 via the catalog slot fallback', () => {
   );
   unplace(store, 'garden', 'gardenPath'); // back to the free dirt path
   assert.equal(placedItem(store, 'garden', 'gardenPath'), 'proc:pathDirt');
+});
+
+// ============= V2/FIX-C (P1-3) — §C6 collection-set reward furniture ========
+
+test('V2/FIX-C reward catalog: the 4 §C6 claimSet ids exist with valid reward-only slots', async () => {
+  const { COLLECTIONS } = await import('../src/data/constants.js');
+  /** id → [slot, room] (V2/FIX-C placement design). */
+  const SPEC = {
+    'proc:goldfishBowl': ['fishBowl', 'living'],
+    'proc:goldenWateringCan': ['gardenTrophy', 'garden'],
+    'proc:toyCity': ['toyCorner', 'bedroom'],
+    'proc:candyJar': ['candyShelf', 'kitchen'],
+  };
+  // every §C6 set reward id has a catalog entry (regression: getEntry→null
+  // made canPlace false and the decorate picker never offered them)
+  for (const set of COLLECTIONS.SETS) {
+    assert.ok(SPEC[set.reward.furniture], `${set.id} reward ${set.reward.furniture} covered`);
+    assert.ok(getEntry(set.reward.furniture), `${set.reward.furniture} in catalog`);
+  }
+  for (const [id, [slot, room]] of Object.entries(SPEC)) {
+    const e = getEntry(id);
+    assert.ok(e, `catalog missing ${id}`);
+    assert.equal(e.slot, slot, `${id} slot`);
+    assert.deepEqual(e.rooms, [room], `${id} rooms`);
+    assert.equal(e.price, 0, `${id} is never a purchase`);
+    assert.equal(e.reward, true, `${id} reward flag`);
+    assert.equal(e.procedural, true, `${id} built by decor.js`);
+    assert.equal(e.default, undefined, `${id} is NOT a free slot default`);
+  }
+});
+
+test('V2/FIX-C reward slots hidden from the shop grid, exposed via rewardSlots', async () => {
+  const { rewardSlots } = await import('../src/data/furniture.js');
+  // roomSlots feeds the shop furniture grid — reward slots must never show
+  assert.ok(!roomSlots('living').includes('fishBowl'));
+  assert.ok(!roomSlots('garden').includes('gardenTrophy'));
+  assert.ok(!roomSlots('bedroom').includes('toyCorner'));
+  assert.ok(!roomSlots('kitchen').includes('candyShelf'));
+  // the decorate picker unions these in (home/decor.js)
+  assert.deepEqual(rewardSlots('living'), ['fishBowl']);
+  assert.deepEqual(rewardSlots('garden'), ['gardenTrophy']);
+  assert.deepEqual(rewardSlots('bedroom'), ['toyCorner']);
+  assert.deepEqual(rewardSlots('kitchen'), ['candyShelf']);
+  assert.deepEqual(rewardSlots('bathroom'), []);
+});
+
+test('V2/FIX-C reward placement: locked until claimSet lands it in furniture.owned', () => {
+  // canPlace resolves the reward-only slots via the catalog fallback
+  assert.ok(canPlace('proc:goldfishBowl', 'living', 'fishBowl'));
+  assert.ok(canPlace('proc:goldenWateringCan', 'garden', 'gardenTrophy'));
+  assert.ok(canPlace('proc:toyCity', 'bedroom', 'toyCorner'));
+  assert.ok(canPlace('proc:candyJar', 'kitchen', 'candyShelf'));
+  assert.ok(!canPlace('proc:goldfishBowl', 'kitchen', 'fishBowl')); // wrong room
+  assert.ok(!canPlace('loungeChair', 'living', 'fishBowl')); // wrong slot family
+  assert.equal(slotDefault('living', 'fishBowl'), null); // starts empty
+
+  const store = makeStore();
+  // price 0 but NOT default → not owned before the set is claimed
+  assert.ok(!isFurnitureOwned(store, 'proc:goldfishBowl'));
+  assert.deepEqual(place(store, 'proc:goldfishBowl', 'living', 'fishBowl'), {
+    ok: false,
+    reason: 'notOwned',
+  });
+
+  // claimSet's payout path: the reward id lands in furniture.owned
+  store.update((state) => { state.furniture.owned.push('proc:goldfishBowl'); });
+  assert.ok(isFurnitureOwned(store, 'proc:goldfishBowl'));
+  assert.deepEqual(place(store, 'proc:goldfishBowl', 'living', 'fishBowl'), { ok: true });
+  assert.equal(store.get('furniture.placed')['living:fishBowl'], 'proc:goldfishBowl');
+  assert.equal(placedItem(store, 'living', 'fishBowl'), 'proc:goldfishBowl');
+  // decorate-picker options list it owned+placed
+  assert.deepEqual(
+    slotOptions(store, 'living', 'fishBowl').map((o) => [o.entry.id, o.owned, o.placed]),
+    [['proc:goldfishBowl', true, true]]
+  );
+  // unplace → back to the empty slot (no free default)
+  unplace(store, 'living', 'fishBowl');
+  assert.equal(placedItem(store, 'living', 'fishBowl'), null);
 });
 
 test('every catalog nameKey (incl. V2/G22 additions) exists in EN AND DE', () => {

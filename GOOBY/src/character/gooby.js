@@ -617,6 +617,11 @@ export function createGooby(opts = {}) {
         body.scale.set(tierScaleCur, 1, tierScaleCur);
         belly.scale.set(tierScaleCur, 1.05, 0.42 * tierScaleCur);
         anchors.neck.position.z = 0.06 * tierScaleCur; // outfit-anchor re-fit
+        // V2/FIX-C P1-1: neck items (scarves/collars/bandana/cape clasp) keep
+        // fixed torus radii, so the anchor scales its children in X/Z with the
+        // body tier — items grow/shrink with the belly and stay visible at all
+        // tiers. Y stays 1 so bands don't thicken vertically.
+        anchors.neck.scale.set(tierScaleCur, 1, tierScaleCur);
       }
 
       // --- V2/G20: sickness visuals (§C3.3/§C3.4) ---
