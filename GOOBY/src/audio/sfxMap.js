@@ -328,6 +328,16 @@ export const SFX_MAP = Object.freeze({
   'golf.bank': sample(seq(`${IMP}/impactPlank_medium`, 5, 0), { volume: 0.4 }),
   'golf.bump': synth('boing', { volume: 0.5, haptic: 'light' }), // §C3.1 whitelist: boing*
   // --- end V2/G28 ---
+
+  // --- V3/G36: purblePlace / Tortenwerkstatt (PLAN3 §C9 — §E0.1-4 append:
+  // committed sample keys + the existing 'splat' synth recipe only) ---
+  'cake.apply': sample(seq(`${IMP}/impactGeneric_light`, 5, 0), { volume: 0.6, haptic: 'light' }), // component lands on the belt cake
+  'cake.ovenDing': sample(seq(`${IMP}/impactBell_heavy`, 5, 0), { volume: 0.5 }), // oven release ding (real bell)
+  'cake.splat': synth('splat', { volume: 0.65, haptic: 'medium' }), // rejected cake splats (§C9.4 — chop.junk recipe)
+  'cake.serve': sample(seqN(`${CAS}/chips-stack-`, 2), { volume: 0.8, haptic: 'light' }), // accepted serve cash-in
+  'cake.candle': sample([`${UI}/tick_001`, `${UI}/tick_002`, `${UI}/tick_004`], { volume: 0.55 }), // candle dropper tick
+  'cake.order': sample(seq(`${UI}/question`, 4), { volume: 0.5 }), // new customer order chime
+  // --- end V3/G36 ---
 });
 
 /**
