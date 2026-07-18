@@ -116,9 +116,9 @@ test('coinsChanged fires on award/spend after a flush (§E2 events)', () => {
 
 // ---------------------- payout clamps (12 §C6 rows + V2/G16: 9 §C1.1 rows)
 
-test('coin table has exactly the 21 §C6/§C1.1 rows', () => {
+test('coin table has exactly the 27 §C6/§C1.1/§E0.1-3 rows', () => {
   assert.deepEqual([...MINIGAME_IDS].sort(), Object.keys(COIN_TABLE).sort());
-  assert.equal(MINIGAME_IDS.length, 21); // V2/G16: 12 v1 + 9 §C1.1
+  assert.equal(MINIGAME_IDS.length, 27); // V2/G16: 12 v1 + 9 §C1.1; V3/G34: +6 3.0 rows
 });
 
 for (const id of MINIGAME_IDS.filter((g) => !COIN_TABLE[g].special)) {

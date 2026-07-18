@@ -26,6 +26,10 @@
 //     'weightMin'  weight.value ≤ N reached         (store 'weightChanged')
 //     'play21'     N distinct games played ≥ 1 over all 21 ids
 //     'holeInOne'  miniGolf meta.holeInOnes ≥ N     (§B3 onEnd meta)
+//
+//   V3/G34 special (PLAN3 §B5/§C5.5):
+//     'stickerCount' sticker-BOOK unlocks ≥ N      (stickers.unlocked — the
+//                    §C5 book, NOT the v2 collections 'stickers' special)
 
 /**
  * @typedef {Object} AchievementDef
@@ -38,7 +42,7 @@
  * @property {number} target    threshold the progress value must reach
  */
 
-/** @type {AchievementDef[]} all 33: 16 v1 (§C8.3) + 17 v2 (PLAN2 §C5.3), in table order. */
+/** @type {AchievementDef[]} all 37: 16 v1 (§C8.3) + 17 v2 (PLAN2 §C5.3) + 4 v3 (PLAN3 §C5.5/§C6.4), in table order. */
 export const ACHIEVEMENTS = Object.freeze(
   [
     { id: 'firstFeed', counter: 'feeds', target: 1, coins: 10 },
@@ -79,6 +83,14 @@ export const ACHIEVEMENTS = Object.freeze(
     { id: 'delivery10', counter: 'deliveries', target: 10, coins: 80 },
     { id: 'holeInOne', special: 'holeInOne', target: 1, coins: 50 },
     { id: 'shutterbug', counter: 'photosTaken', target: 10, coins: 60 },
+    // V3/G34: +4 achievements (PLAN3 §C5.5 stickerCount tiers + §C6.4
+    // nougatmeister → catalog 33 → 37). 'stickerCount' counts
+    // stickers.unlocked (the §C5 sticker BOOK — not the v2 collections);
+    // nougatGlobs is a §B1 counter fed by G35's Nougatschleuse flow.
+    { id: 'stickerBook10', special: 'stickerCount', target: 10, coins: 50 },
+    { id: 'stickerBook20', special: 'stickerCount', target: 20, coins: 100 },
+    { id: 'stickerBookFull', special: 'stickerCount', target: 28, coins: 300 },
+    { id: 'nougatmeister', counter: 'nougatGlobs', target: 25, coins: 80 },
   ].map((a) => Object.freeze({ ...a, nameKey: `ach.${a.id}.name`, descKey: `ach.${a.id}.desc` }))
 );
 

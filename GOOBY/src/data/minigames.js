@@ -17,10 +17,11 @@ import { COIN_TABLE, UNLOCK_LEVELS, UNLOCKS, MINIGAME } from './constants.js'; /
  */
 
 /**
- * The 21 shipping games (§C6 + PLAN2 §C1), in unlock order (§B6 merged with
- * v1 §C6.3; v1-first within a level). V2/G16: 9 new 2.0 ids added — their
- * modules land in waves 3–4 (metadata-only entries render "coming soon",
- * §E8), their coin rows are live in COIN_TABLE (§C1.1).
+ * The 27 shipping games (§C6 + PLAN2 §C1 + PLAN3 §C8–§C10), in unlock order
+ * (§B6/§B8 merged with v1 §C6.3; earlier-generation-first within a level).
+ * V2/G16: 9 new 2.0 ids added. V3/G34 (§E0.1-9): 6 new 3.0 ids added — their
+ * modules land in waves 2–3 (metadata-only entries render "coming soon",
+ * §E8), their coin rows are live in COIN_TABLE (§E0.1-3).
  */
 export const MINIGAME_IDS = Object.freeze([
   'carrotCatch', //  L1
@@ -33,8 +34,10 @@ export const MINIGAME_IDS = Object.freeze([
   'gardenRush', //   L4  (2.0)
   'pancakeTower', // L5
   'burgerBuild', //  L5  (2.0)
+  'shoppingSurf', // L5  (3.0 — V3/G34, flagship §C8)
   'runner', //       L6
   'veggieChop', //   L6  (2.0)
+  'purblePlace', //  L6  (3.0 — V3/G34, flagship §C9)
   'bubblePop', //    L7
   'deliveryRush', // L7  (2.0)
   'fishingPond', //  L8
@@ -44,6 +47,10 @@ export const MINIGAME_IDS = Object.freeze([
   'goalieGooby', //  L11 (2.0)
   'starHopper', //   L12 (2.0)
   'pipeFlow', //     L14 (2.0)
+  'toyRacer', //     L15 (3.0 — V3/G34, §C10.1)
+  'ghostHunt', //    L16 (3.0 — V3/G34, §C10.1)
+  'rocketRescue', // L18 (3.0 — V3/G34, §C10.1)
+  'harborHopper', // L20 (3.0 — V3/G34, §C10.1)
 ]);
 
 const ICONS = {
@@ -70,6 +77,14 @@ const ICONS = {
   goalieGooby: 'shield',
   starHopper: 'star',
   pipeFlow: 'gear',
+  // V3/G34: 3.0 tiles reuse existing icon names (ui/icons.js is not ours this
+  // wave); game agents may swap in bespoke icons with their modules (§E0.1-9).
+  shoppingSurf: 'run',
+  purblePlace: 'hunger',
+  toyRacer: 'car',
+  ghostHunt: 'sparkle',
+  rocketRescue: 'star',
+  harborHopper: 'fish',
 };
 
 /** V2/G16: car games cost 6 energy (§C1 shared rules — cityDrive + deliveryRush). */

@@ -107,8 +107,37 @@ const V2_COUNTER_DEFAULTS = Object.freeze({
 });
 // --- end V2/G16 slice factories ---
 
+// --- V3/G34: schema v3 slice factories (PLAN3 §B1, exact defaults) ---------
+
+/** The v3 top-level slices at their exact §B1 defaults. @returns {object} */
+function v3SliceDefaults() {
+  return {
+    stickers: { unlocked: {}, seen: {} }, // id → unlock epoch-ms / id → true (§C5)
+    nougat: { lastGlobAt: 0, installed: false }, // §C6 Nougatschleuse
+  };
+}
+
+/** §B1 v3 additions to settings (v1/v2 keys unchanged). @returns {object} */
+function v3SettingsDefaults() {
+  return {
+    uiScale: 100, // 85|100|115|130 (§C1)
+    volumes: { master: 80, sfx: 100, music: 70, voice: 100, ambience: 80 }, // 0–100 ints (§C2)
+    devUnlocked: false, // §C4 gate — persisted
+  };
+}
+
+/** §B1 additions to achievements.counters (v1/v2 keys unchanged). */
+const V3_COUNTER_DEFAULTS = Object.freeze({
+  nougatGlobs: 0, cakesServed: 0, perfectCakes: 0, surfRuns: 0, surfDistanceM: 0,
+  races: 0, ghostsCaught: 0, rescues: 0, cratesShipped: 0,
+});
+
+/** Legal §C1 uiScale stops; validate() coerces anything else to 100. */
+const UI_SCALE_STOPS = Object.freeze([85, 100, 115, 130]);
+// --- end V3/G34 slice factories ---
+
 /**
- * Fresh save-state per schema v2 (§E3 + PLAN2 §B2).
+ * Fresh save-state per schema v3 (§E3 + PLAN2 §B2 + PLAN3 §B1).
  * @returns {object}
  */
 export function defaultState() {
@@ -126,22 +155,29 @@ export function defaultState() {
     inventory: { ...ECONOMY.STARTER_INVENTORY },
     furniture: { owned: [], placed: {} },
     decor: { wallpaper: {}, floor: {} },
-    outfits: { owned: [], equipped: { hat: null, glasses: null, neck: null } },
+    // V3/G34: 4th equip slot 'back' (§B1/§C13 — G40 ships the items, wave 2)
+    outfits: { owned: [], equipped: { hat: null, glasses: null, neck: null, back: null } },
     minigames: { best: {}, plays: {}, lastPlayDay: {} },
     achievements: {
       unlocked: {},
       counters: {
         feeds: 0, washes: 0, sleeps: 0, trips: 0, tickles: 0, petsToday: 0, petsDay: '',
         ...V2_COUNTER_DEFAULTS, // V2/G16 (§B2)
+        ...V3_COUNTER_DEFAULTS, // V3/G34 (§B1)
       },
     },
     daily: { lastClaimDay: '', streak: 0 },
     quickDelivery: false,
-    settings: { lang: 'auto', sfx: true, music: true, haptics: true, notifications: 'unasked' },
+    settings: {
+      lang: 'auto', sfx: true, music: true, haptics: true, notifications: 'unasked',
+      ...v3SettingsDefaults(), // V3/G34 (§B1: uiScale/volumes/devUnlocked)
+    },
     // V2/G16: whatsNew2Seen true for FRESH saves — only migrated v1 veterans
     // get false and see the one-time "What's new" panel (§E0.1-6; G30 builds it).
-    onboarding: { done: false, step: 0, whatsNew2Seen: true },
+    // V3/G34: whatsNew3Seen mirrors the rule for 3.0 (§E0.1-8; G48 builds it).
+    onboarding: { done: false, step: 0, whatsNew2Seen: true, whatsNew3Seen: true },
     ...v2SliceDefaults(), // V2/G16 (§B2)
+    ...v3SliceDefaults(), // V3/G34 (§B1)
   };
 }
 
@@ -183,6 +219,42 @@ export const migrations = [
     }
     if (out.onboarding == null || isObj(out.onboarding)) {
       out.onboarding = { ...out.onboarding, whatsNew2Seen: false };
+    }
+    return out;
+  },
+  // V3/G34 — v2 → v3 (PLAN3 §B1 steps 1–5, exact behavior):
+  //  1. spread the new top-level slices (stickers/nougat) ONLY when absent,
+  //  2. settings gains uiScale/volumes/devUnlocked defaults-first — existing
+  //     keys (sfx/music/haptics/lang/notifications) pass through verbatim;
+  //     a v2 save with music:false boots muted with the slider at its
+  //     default 70 (muting stays honest, nothing is lost — §B1 step 2),
+  //  3. outfits.equipped.back = null when the key is absent (§C13 4th slot),
+  //  4. achievements.counters merged defaults-first (existing values win),
+  //  5. never rewrite any existing key; validate() (not this migration)
+  //     clamps uiScale/volumes to their legal ranges (§B1 step 5),
+  //  plus onboarding.whatsNew3Seen = false so v1/v2 veterans see the
+  //  one-time "What's new in 3.0" panel (§E0.1-8; fresh saves default true).
+  //  Same corruption-guard style as migrations[1]: wrong-typed containers
+  //  are left untouched so validate()'s mergeDefaults throws → F2 recovery.
+  (state) => {
+    const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
+    const out = { ...v3SliceDefaults(), ...state, v: 3 };
+    if (out.settings == null || isObj(out.settings)) {
+      out.settings = { ...v3SettingsDefaults(), ...out.settings };
+    }
+    if (isObj(out.outfits) && (out.outfits.equipped == null || isObj(out.outfits.equipped))) {
+      const equipped = { ...out.outfits.equipped };
+      if (!('back' in equipped)) equipped.back = null;
+      out.outfits = { ...out.outfits, equipped };
+    }
+    if (isObj(out.achievements) && (out.achievements.counters == null || isObj(out.achievements.counters))) {
+      out.achievements = {
+        ...out.achievements,
+        counters: { ...V3_COUNTER_DEFAULTS, ...out.achievements.counters },
+      };
+    }
+    if (out.onboarding == null || isObj(out.onboarding)) {
+      out.onboarding = { ...out.onboarding, whatsNew3Seen: false };
     }
     return out;
   },
@@ -303,6 +375,36 @@ function validate(state) {
       : defaultPlot()
   );
   // --- end V2/G16 ---
+  // --- V3/G34: v3 slice validation (§B1 step 5) ---
+  // uiScale: one of the 4 legal §C1 stops, anything else → 100.
+  if (!UI_SCALE_STOPS.includes(s.settings.uiScale)) s.settings.uiScale = 100;
+  // volumes: integer 0–100 per bus; anything that isn't a finite NUMBER
+  // (strings/booleans/null — incl. JSON's NaN→null round-trip) → that bus's
+  // default, per §B1 step 5 "int 0–100 else default". A lenient Number()
+  // here would silently turn null into volume 0 and mute a bus forever.
+  // (mergeDefaults already guarantees the container + all 5 keys exist and
+  //  throws on wrong-typed containers — F2 recovery contract.)
+  {
+    const volDefaults = v3SettingsDefaults().volumes;
+    for (const [bus, def] of Object.entries(volDefaults)) {
+      const v = s.settings.volumes[bus];
+      s.settings.volumes[bus] = typeof v === 'number' && Number.isFinite(v)
+        ? Math.min(100, Math.max(0, Math.round(v)))
+        : def;
+    }
+  }
+  // devUnlocked: strict boolean — junk-typed truthy values never open the gate.
+  s.settings.devUnlocked = s.settings.devUnlocked === true;
+  // nougat: finite non-negative cooldown timestamp; installed strict boolean.
+  {
+    const at = Number(s.nougat.lastGlobAt);
+    s.nougat.lastGlobAt = Number.isFinite(at) && at > 0 ? at : 0;
+    s.nougat.installed = s.nougat.installed === true;
+  }
+  // outfits.equipped.back exists via mergeDefaults (defaultState carries it).
+  // stickers.unlocked/seen are open id-maps: wrong-typed CONTAINERS throw in
+  // mergeDefaults (F2); entries pass through verbatim (engine reads guarded).
+  // --- end V3/G34 ---
   return s;
 }
 

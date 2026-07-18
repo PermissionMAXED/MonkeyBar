@@ -1,0 +1,213 @@
+{
+  "v": 2,
+  "createdAt": 1780000000000,
+  "lastTickAt": 1784281282655,
+  "stats": {
+    "hunger": 58.75,
+    "energy": 66,
+    "hygiene": 91.5,
+    "fun": 47.25
+  },
+  "sleep": {
+    "sleeping": false,
+    "startedAt": 1784200000000,
+    "wakeAt": 1784227000000
+  },
+  "grumpyUntil": 0,
+  "coins": 3210,
+  "xp": 118,
+  "level": 17,
+  "inventory": {
+    "carrot": 4,
+    "apple": 1,
+    "burger": 2,
+    "watermelon": 1,
+    "harvested:radish": 2
+  },
+  "furniture": {
+    "owned": ["loungeDesignSofa", "televisionModern", "rugRound", "kitchenBar", "pottedPlant"],
+    "placed": {
+      "living:sofa": "loungeDesignSofa",
+      "living:tv": "televisionModern",
+      "living:rug": "rugRound",
+      "kitchen:table": "kitchenBar",
+      "garden:planter": "pottedPlant"
+    }
+  },
+  "decor": {
+    "wallpaper": {
+      "living": "mint",
+      "bedroom": "sky",
+      "bathroom": "bubble"
+    },
+    "floor": {
+      "living": "tile",
+      "kitchen": "wood"
+    }
+  },
+  "outfits": {
+    "owned": ["partyHat", "cap", "strawHat", "roundGlasses", "sunglasses", "scarfRed", "bowtie", "flowerCrown"],
+    "equipped": {
+      "hat": "strawHat",
+      "glasses": null,
+      "neck": "bowtie"
+    }
+  },
+  "minigames": {
+    "best": {
+      "carrotCatch": 81,
+      "bunnyHop": 44,
+      "cityDrive": 35,
+      "memoryMatch": 41,
+      "runner": 412,
+      "fishingPond": 74,
+      "danceParty": 163,
+      "goobySays": 58,
+      "gardenRush": 66,
+      "deliveryRush": 190,
+      "miniGolf": 92,
+      "starHopper": 130
+    },
+    "plays": {
+      "carrotCatch": 40,
+      "bunnyHop": 21,
+      "cityDrive": 16,
+      "memoryMatch": 9,
+      "runner": 17,
+      "fishingPond": 12,
+      "danceParty": 7,
+      "goobySays": 11,
+      "gardenRush": 13,
+      "deliveryRush": 8,
+      "miniGolf": 6,
+      "starHopper": 5
+    },
+    "lastPlayDay": {
+      "carrotCatch": "2026-07-17",
+      "deliveryRush": "2026-07-17",
+      "miniGolf": "2026-07-16"
+    }
+  },
+  "achievements": {
+    "unlocked": {
+      "firstFeed": 1780000100000,
+      "firstWash": 1780000200000,
+      "firstSleep": 1780086400000,
+      "firstDrive": 1780090000000,
+      "level10": 1783000000000,
+      "coins1000": 1782000000000,
+      "firstHarvest": 1783100000000,
+      "firstQuest": 1783200000000,
+      "firstSticker": 1783300000000,
+      "vetVisit": 1783400000000
+    },
+    "counters": {
+      "feeds": 55,
+      "washes": 31,
+      "sleeps": 19,
+      "trips": 15,
+      "tickles": 88,
+      "petsToday": 2,
+      "petsDay": "2026-07-17",
+      "cleanTrips": 4,
+      "harvests": 12,
+      "plantings": 16,
+      "waterings": 33,
+      "sells": 6,
+      "cures": 1,
+      "vetTrips": 2,
+      "deliveries": 7,
+      "questsDone": 21,
+      "photosTaken": 5,
+      "nightPlays": 3,
+      "medsGiven": 1,
+      "balls": 27,
+      "sickEver": 1,
+      "holeInOnes": 1,
+      "photoXpDay": "2026-07-17",
+      "photoXpToday": 2
+    }
+  },
+  "daily": {
+    "lastClaimDay": "2026-07-17",
+    "streak": 11
+  },
+  "quickDelivery": true,
+  "settings": {
+    "lang": "de",
+    "sfx": true,
+    "music": false,
+    "haptics": true,
+    "notifications": "granted"
+  },
+  "onboarding": {
+    "done": true,
+    "step": 4,
+    "whatsNew2Seen": true
+  },
+  "garden": {
+    "plotsOwned": 5,
+    "plots": [
+      { "crop": "corn", "plantedAt": 1784270000000, "progressMin": 42.5, "wateredUntil": 1784284000000, "waterings": 1, "fertilized": false },
+      { "crop": "pumpkin", "plantedAt": 1784100000000, "progressMin": 310, "wateredUntil": 0, "waterings": 3, "fertilized": true },
+      { "crop": null, "plantedAt": 0, "progressMin": 0, "wateredUntil": 0, "waterings": 0, "fertilized": false },
+      { "crop": "radish", "plantedAt": 1784281000000, "progressMin": 2, "wateredUntil": 1784282200000, "waterings": 1, "fertilized": false },
+      { "crop": null, "plantedAt": 0, "progressMin": 0, "wateredUntil": 0, "waterings": 0, "fertilized": false },
+      { "crop": null, "plantedAt": 0, "progressMin": 0, "wateredUntil": 0, "waterings": 0, "fertilized": false }
+    ],
+    "lastTickAt": 1784281282655
+  },
+  "health": {
+    "state": "queasy",
+    "junkScore": 4,
+    "neglectMin": 12,
+    "recoverMin": 0,
+    "since": 1784275000000
+  },
+  "weight": {
+    "value": 63.5
+  },
+  "quests": {
+    "day": "2026-07-17",
+    "active": [
+      { "id": "q.feed3", "progress": 2, "claimed": false },
+      { "id": "q.earn60", "progress": 60, "claimed": true },
+      { "id": "q.wash1", "progress": 0, "claimed": false, "seen": ["runner"] }
+    ],
+    "rerolledDay": "2026-07-16",
+    "completedTotal": 21
+  },
+  "collections": {
+    "entries": {
+      "veggies.radish": 3,
+      "veggies.carrot": 5,
+      "fish.sunnyCarp": 2,
+      "fish.goldenFish": 1,
+      "landmarks.fountain": 1,
+      "treats.cupcake": 4
+    },
+    "claimedSets": {
+      "veggies": 1783500000000
+    }
+  },
+  "skins": {
+    "owned": ["cream", "snow", "golden"],
+    "equipped": "snow"
+  },
+  "items": {
+    "medicine": 2,
+    "fertilizer": 3,
+    "harvested:radish": 2
+  },
+  "profile": {
+    "playtimeMin": 1240,
+    "coinsEarned": 9876,
+    "coinsSpent": 6666,
+    "distanceM": 15300,
+    "photos": 5
+  },
+  "futureFeature": {
+    "hello": "from a mod",
+    "nested": [1, 2, 3]
+  }
+}

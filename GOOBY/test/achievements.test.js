@@ -33,6 +33,9 @@ const SPEC_COINS = {
   firstSticker: 10, setComplete: 60, albumFull: 300, firstCure: 20, vetVisit: 20,
   neverSick: 150, chonkZone: 40, sleekMode: 40, play21: 250, delivery10: 80,
   holeInOne: 50, shutterbug: 60,
+  // V3/G34: +4 3.0 rewards (PLAN3 §C5.5 stickerCount tiers + §C6.4 nougat;
+  // deep coverage in dataV3.test.js)
+  stickerBook10: 50, stickerBook20: 100, stickerBookFull: 300, nougatmeister: 80,
 };
 
 function freshState() {
@@ -42,7 +45,7 @@ function freshState() {
 // ------------------------------------------------------------------ catalog
 
 test('catalog has all 16 §C8.3 achievements with verbatim coin rewards', () => {
-  assert.equal(ACHIEVEMENTS.length, 33); // V2/G16: 16 v1 + 17 §C5.3
+  assert.equal(ACHIEVEMENTS.length, 37); // V2/G16: 16 v1 + 17 §C5.3; V3/G34: +4 (§C5.5/§C6.4)
   assert.deepEqual(new Set(ACHIEVEMENTS.map((a) => a.id)), new Set(Object.keys(SPEC_COINS)));
   for (const [id, coins] of Object.entries(SPEC_COINS)) {
     assert.equal(ACHIEVEMENTS_BY_ID[id].coins, coins, `${id} reward (§C8.3 binding)`);
@@ -226,9 +229,9 @@ test('streak7: daily streak ≥ 7', () => {
 test('play12: each of the 12 games played ≥ 1 (plays map)', () => {
   const def = ACHIEVEMENTS_BY_ID.play12;
   const state = freshState();
-  // V2/G16: the catalog now lists 21 games (§C1.1) — play12 needs ANY 12
-  // distinct ones played; play21 (all 21) is the 2.0 tier (§C5.3, G23 wires).
-  assert.equal(MINIGAME_IDS.length, 21);
+  // V2/G16: play12 needs ANY 12 distinct catalog games played; play21 (21 of
+  // the now-27 ids — §C5.3) is the 2.0 tier. V3/G34: catalog is 27 (§E0.1-9).
+  assert.equal(MINIGAME_IDS.length, 27);
   for (const id of MINIGAME_IDS.slice(0, 11)) state.minigames.plays[id] = 2;
   state.minigames.plays._smoke = 99; // dev game never counts
   assert.equal(isSatisfied(def, state), false);

@@ -101,11 +101,24 @@ test('V2/G16: unlock queries cover the 9 new §B6 games', () => {
   assert.equal(isMinigameUnlocked('starHopper', 12), true);
   assert.equal(isMinigameUnlocked('pipeFlow', 13), false);
   assert.equal(isMinigameUnlocked('pipeFlow', 14), true);
-  // L10: all 12 v1 games + the 6 §B6 games gated ≤ 10
+  // L10: all 12 v1 games + every §B6/§E0.1-3 game gated ≤ 10
   const atOldMax = Object.keys(UNLOCK_LEVELS).length +
     Object.values(UNLOCKS.MINIGAMES).filter((l) => l <= 10).length;
   assert.equal(unlockedMinigames(10).length, atOldMax);
-  // L14+: every one of the 21 games (§C1.1)
-  assert.equal(unlockedMinigames(14).length, 21);
-  assert.equal(unlockedMinigames(40).length, 21);
+  // V3/G34: catalog is 27 now; the last gate is harborHopper at L20 (§E0.1-3)
+  assert.equal(unlockedMinigames(20).length, 27);
+  assert.equal(unlockedMinigames(40).length, 27);
+});
+
+test('V3/G34: unlock queries cover the 6 new §E0.1-3 gates', () => {
+  assert.equal(isMinigameUnlocked('shoppingSurf', 4), false);
+  assert.equal(isMinigameUnlocked('shoppingSurf', 5), true);
+  assert.equal(isMinigameUnlocked('purblePlace', 6), true);
+  assert.equal(isMinigameUnlocked('toyRacer', 14), false);
+  assert.equal(isMinigameUnlocked('toyRacer', 15), true);
+  assert.equal(isMinigameUnlocked('ghostHunt', 16), true);
+  assert.equal(isMinigameUnlocked('rocketRescue', 17), false);
+  assert.equal(isMinigameUnlocked('rocketRescue', 18), true);
+  assert.equal(isMinigameUnlocked('harborHopper', 19), false);
+  assert.equal(isMinigameUnlocked('harborHopper', 20), true);
 });

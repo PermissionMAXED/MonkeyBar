@@ -22,6 +22,8 @@ import { initPermissionFlow } from './ui/permissionPrompt.js';
 import { createSettingsScreen } from './ui/settingsScreen.js';
 import { initSleepFlow } from './ui/sleepFlow.js';
 // end G6 imports
+// V3/G33: UI-scale boot applier — import for the marked block below (PLAN3 §B3)
+import { initUiScale } from './ui/settingsScreen.js';
 // G12: wardrobe/outfits, achievements, daily bonus — imports for the marked block
 import { initAchievements } from './systems/achievementsEngine.js';
 import { initOutfitSync } from './character/outfitAttach.js';
@@ -33,6 +35,8 @@ import { initDailyBonus } from './ui/dailyBonusPopup.js';
 import { initSkinSync } from './character/skins.js';
 // V2/G30: one-time "What's new in 2.0" panel — import for the marked block below (§A3-12)
 import { initWhatsNew } from './ui/whatsNew.js';
+// V3/G34: sticker-book engine — import for the marked block below (PLAN3 §B5/§C5)
+import { initStickerBook } from './systems/stickerBook.js';
 // V2/G23: progression UI — imports for the marked block below (PLAN2 §C5/C6/C12)
 import { registerQuestBoard } from './ui/questBoard.js';
 import { registerAlbumScreen } from './ui/albumScreen.js';
@@ -92,6 +96,14 @@ async function boot() {
   const loaded = save.load();
   const store = createStore(loaded.state);
   setLang(store.get('settings.lang'));
+
+  // ---- V3/G33: UI scale boot-apply (PLAN3 §B3, single marked block) ----
+  // Root font-size + data-ui-scale from settings.uiScale BEFORE the first
+  // paint (index.html's inline pre-boot line already set it from the raw
+  // save to avoid FOUC — this re-applies from the validated store and then
+  // follows it live, emitting 'uiScaleChanged' §B10 on every change).
+  initUiScale({ store });
+  // ---- end V3/G33 block ----
 
   const assets = await loadAssets();
 
@@ -161,6 +173,33 @@ async function boot() {
   initSleepFlow({ store, ui });
   // ---- end G6 block ----
 
+  // ---- V3/G33: hidden dev panel (PLAN3 §B4/§C4, single marked block) ----
+  // Registered UNCONDITIONALLY as §E6 screen id 'devPanel' but the module
+  // itself is lazy-loaded on first open (§B4: hidden-by-flag, no build
+  // stripping; the settings entry row renders only when devUnlocked, and
+  // the dev harness ?open=devPanel works in dev builds regardless §E9).
+  {
+    let devPanelMod = null;
+    ui.registerScreen('devPanel', {
+      mount(el, params) {
+        const deps = { store, ui, audio, sceneManager, framework };
+        if (devPanelMod) {
+          devPanelMod.mountDevPanel(el, deps, params);
+          return;
+        }
+        import('./ui/devPanel.js').then((mod) => {
+          devPanelMod = mod;
+          // Only mount if this screen instance is still the active one.
+          if (el.isConnected) mod.mountDevPanel(el, deps, params);
+        });
+      },
+      unmount() {
+        devPanelMod?.unmountDevPanel();
+      },
+    });
+  }
+  // ---- end V3/G33 block ----
+
   // ---- V2/G19: garden — panels + self-wiring 3D interactions (PLAN2 §C2) ----
   // Panels register once; gardenInteractions polls for the live roomManager
   // (rebuilt on every home enter — sleepFlow pattern) and wires plots/drags.
@@ -180,6 +219,14 @@ async function boot() {
   initOutfitSync({ store });
   initDailyBonus({ store, ui, audio, sceneManager });
   // ---- end G12 block ----
+
+  // ---- V3/G34: sticker-book engine (PLAN3 §B5/§C5, single marked block) ----
+  // Wires condition checks to the coalesced 'change' event and the runtime
+  // 'stickerHook' event (§E0.1-7: firers call store.emit('stickerHook',{id})).
+  // Sits after the achievements engine so its counter latches (sickEver etc.)
+  // land before sticker evaluation; the Stickerbuch UI lives in albumScreen.
+  initStickerBook({ store, ui, audio });
+  // ---- end V3/G34 block ----
 
   // ---- V2/G30: one-time "What's new in 2.0" panel (PLAN2 §A3 checklist 12) ----
   // Shows ONCE for migrated v1 veterans (onboarding.whatsNew2Seen === false,

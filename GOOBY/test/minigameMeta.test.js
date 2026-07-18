@@ -47,6 +47,7 @@ const EXPECTED_UNLOCKS = {
 };
 
 // V2/G16: the 9 new §B6 games with their unlock levels (verbatim).
+// V3/G34: +6 3.0 games at their §E0.1-3 gates (dataV3.test.js re-asserts).
 const EXPECTED_V2_UNLOCKS = {
   goobySays: 2,
   gardenRush: 4,
@@ -57,10 +58,16 @@ const EXPECTED_V2_UNLOCKS = {
   goalieGooby: 11,
   starHopper: 12,
   pipeFlow: 14,
+  shoppingSurf: 5,
+  purblePlace: 6,
+  toyRacer: 15,
+  ghostHunt: 16,
+  rocketRescue: 18,
+  harborHopper: 20,
 };
 
-test('exactly 21 shipping game ids (§C6 + V2 §C1.1)', () => {
-  assert.equal(MINIGAME_IDS.length, 21);
+test('exactly 27 shipping game ids (§C6 + V2 §C1.1 + V3 §E0.1-9)', () => {
+  assert.equal(MINIGAME_IDS.length, 27);
   assert.deepEqual(
     [...MINIGAME_IDS].sort(),
     [...Object.keys(EXPECTED_UNLOCKS), ...Object.keys(EXPECTED_V2_UNLOCKS)].sort()
@@ -110,12 +117,12 @@ test('energy costs: 8 per play, 6 for the drives (§C6 + V2 §C1.1)', () => {
   }
 });
 
-test('_smoke is dev-only and hidden from the menu; 22 total entries', () => {
-  assert.equal(MINIGAMES.length, 22); // V2/G16: 21 shipping + _smoke
+test('_smoke is dev-only and hidden from the menu; 28 total entries', () => {
+  assert.equal(MINIGAMES.length, 28); // V3/G34: 27 shipping + _smoke
   const smoke = getMinigame('_smoke');
   assert.ok(smoke, '_smoke registered');
   assert.equal(smoke.dev, true);
-  assert.ok(MINIGAMES.filter((m) => !m.dev).length === 21);
+  assert.ok(MINIGAMES.filter((m) => !m.dev).length === 27);
 });
 
 test('every title key exists in EN and DE dictionaries (bilingual §A)', () => {

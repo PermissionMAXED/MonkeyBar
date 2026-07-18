@@ -114,6 +114,16 @@ export function progressOf(def, state) {
         current = v2SpecialProgress(def, state);
         break;
       // ── end V2/G23 ──
+      // ── V3/G34: 'stickerCount' special (PLAN3 §B5/§C5.5) — count of
+      // sticker-BOOK unlocks (stickers.unlocked, §B1 slice; systems/
+      // stickerBook.js latches them). Distinct from the v2 'stickers'
+      // special, which counts collection-album entries. Unlock detection
+      // needs no extra wiring: stickerBook writes through store.update, so
+      // the coalesced 'change' event already re-runs checkNow(). ──
+      case 'stickerCount':
+        current = Object.keys(state?.stickers?.unlocked ?? {}).length;
+        break;
+      // ── end V3/G34 ──
       default:
         current = 0;
     }

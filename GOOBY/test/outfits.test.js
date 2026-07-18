@@ -257,10 +257,14 @@ test('V2/FIX-C P1-1: cape clasp band + gold buttons clear the body at default ti
 test('equip persistence roundtrip: owned + equipped survive save/load (§E3)', () => {
   save.clear();
   const { state } = save.load();
-  assert.deepEqual(state.outfits, { owned: [], equipped: { hat: null, glasses: null, neck: null } });
+  // V3/G34: schema v3 adds the 4th 'back' slot at null (§B1/§C13 — G40 wave 2)
+  assert.deepEqual(state.outfits, {
+    owned: [],
+    equipped: { hat: null, glasses: null, neck: null, back: null },
+  });
 
   state.outfits.owned = ['crown', 'starGlasses', 'scarfRed', 'beanie'];
-  state.outfits.equipped = { hat: 'crown', glasses: 'starGlasses', neck: 'scarfRed' };
+  state.outfits.equipped = { hat: 'crown', glasses: 'starGlasses', neck: 'scarfRed', back: null };
   save.persist(state);
 
   const reloaded = save.load();
@@ -270,6 +274,7 @@ test('equip persistence roundtrip: owned + equipped survive save/load (§E3)', (
     hat: 'crown',
     glasses: 'starGlasses',
     neck: 'scarfRed',
+    back: null,
   });
   save.clear();
 });

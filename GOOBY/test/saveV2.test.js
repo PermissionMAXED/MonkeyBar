@@ -4,10 +4,11 @@
 //   (b) v1-midgame.json    — level 12, 5000c, 7 outfits, 40 feeds, streak 6,
 //                            furniture placed, best scores for all 12 v1 games
 //   (c) v1-extra-keys.json — unknown keys at several depths (must survive)
-// Asserts: post-load v === 2; EVERY v1 value identical; every new slice at its
-// exact §B2 default; whatsNew2Seen false for migrants / true for fresh saves;
-// forward-version (v:3) still refuses; corrupt payloads still recover; v2
-// loads are idempotent (load → persist → load is byte-stable).
+// Asserts: post-load v === SAVE.VERSION (V3/G34: the chain continues to v3 —
+// v3-specific coverage lives in saveV3.test.js); EVERY v1 value identical;
+// every new v2 slice at its exact §B2 default; whatsNew2Seen false for
+// migrants / true for fresh saves; forward-version (v > current) refuses;
+// corrupt payloads recover; loads are idempotent (persist → load byte-stable).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -79,14 +80,14 @@ const B2_NEW_COUNTERS = {
 
 // ------------------------------------------------------------------ schema
 
-test('SAVE.VERSION is 2 and the migration chain has one entry per step', () => {
-  assert.equal(SAVE.VERSION, 2);
-  assert.equal(migrations.length, 2); // v0→1, v1→2
+test('SAVE.VERSION is 3 and the migration chain has one entry per step', () => {
+  assert.equal(SAVE.VERSION, 3); // V3/G34: schema v3 (§B1) — was 2
+  assert.equal(migrations.length, 3); // v0→1, v1→2, v2→3
 });
 
 test('fresh defaultState: v2 slices at §B2 defaults, whatsNew2Seen true', () => {
   const s = defaultState();
-  assert.equal(s.v, 2);
+  assert.equal(s.v, SAVE.VERSION);
   for (const [slice, def] of Object.entries(B2_SLICE_DEFAULTS())) {
     assert.deepEqual(s[slice], def, `defaultState().${slice}`);
   }
@@ -98,13 +99,15 @@ test('fresh defaultState: v2 slices at §B2 defaults, whatsNew2Seen true', () =>
 // -------------------------------------------------- fixture migrations (§B2)
 
 for (const name of ['v1-fresh.json', 'v1-midgame.json', 'v1-extra-keys.json']) {
-  test(`migration ${name}: v → 2, every v1 value intact, new slices at defaults`, () => {
+  test(`migration ${name}: v → current, every v1 value intact, new slices at defaults`, () => {
     const v1 = fixture(name);
     assert.equal(v1.v, 1, 'fixture must be a v1 save');
     const { state, fresh, recovered } = loadRaw(v1);
     assert.equal(fresh, false);
     assert.equal(recovered, false);
-    assert.equal(state.v, 2);
+    // V3/G34: the chain now ends at v3 (v1→v2 behavior unchanged; the v3
+    // additions are asserted fixture-by-fixture in saveV3.test.js).
+    assert.equal(state.v, SAVE.VERSION);
 
     // 1. every v1 value passes through verbatim (§B2 migration step 2)
     const { v: _v, ...v1Values } = v1;
@@ -157,12 +160,13 @@ test('extra-keys fixture: unknown keys at every depth survive', () => {
 
 // ------------------------------------------------ refusal + recovery (§B2)
 
-test('forward version v:3 still refuses: fresh state + corrupt backup', () => {
-  const payload = JSON.stringify({ ...defaultState(), v: 3 });
+test('forward version (v > current) still refuses: fresh state + corrupt backup', () => {
+  // V3/G34: v3 is current now — the forward-refusal check moves to v4.
+  const payload = JSON.stringify({ ...defaultState(), v: SAVE.VERSION + 1 });
   const { state, fresh, recovered } = loadRaw(payload);
   assert.equal(fresh, false);
   assert.equal(recovered, true);
-  assert.equal(state.v, 2); // fresh v2 state
+  assert.equal(state.v, SAVE.VERSION); // fresh current-version state
   assert.equal(backing.get(SAVE.CORRUPT_KEY), payload);
 });
 
@@ -178,7 +182,7 @@ test('corrupt payloads still recover (v1 wrong-typed containers incl. v2 paths)'
   for (const payload of hostile) {
     const { state, recovered } = loadRaw(payload);
     assert.equal(recovered, true, `${payload.slice(0, 40)} should recover`);
-    assert.equal(state.v, 2);
+    assert.equal(state.v, SAVE.VERSION);
     assert.equal(backing.get(SAVE.CORRUPT_KEY), payload);
   }
 });

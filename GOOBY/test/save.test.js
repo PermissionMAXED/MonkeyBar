@@ -39,6 +39,9 @@ test('fresh load: no prior save → defaults per §E3', () => {
     // V2/G16: §B2 counter extensions (deep coverage in saveV2.test.js)
     harvests: 0, plantings: 0, waterings: 0, sells: 0, cures: 0, vetTrips: 0,
     deliveries: 0, questsDone: 0, photosTaken: 0, nightPlays: 0, medsGiven: 0, balls: 0,
+    // V3/G34: §B1 counter extensions (deep coverage in saveV3.test.js)
+    nougatGlobs: 0, cakesServed: 0, perfectCakes: 0, surfRuns: 0, surfDistanceM: 0,
+    races: 0, ghostsCaught: 0, rescues: 0, cratesShipped: 0,
   });
   assert.equal(state.onboarding.done, false);
 });

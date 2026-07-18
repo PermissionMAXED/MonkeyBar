@@ -4,7 +4,8 @@
 
 /** Save schema / persistence (§E3). */
 export const SAVE = Object.freeze({
-  VERSION: 2, // V2/G16: schema v2 — garden/health/weight/quests/collections/skins/items/profile slices (PLAN2 §B2)
+  // V2/G16: schema v2 — garden/health/weight/quests/collections/skins/items/profile slices (PLAN2 §B2)
+  VERSION: 3, // V3/G34: schema v3 — stickers/nougat slices + settings.uiScale/volumes/devUnlocked + back slot + new counters (PLAN3 §B1)
   KEY: 'gooby.save',
   CORRUPT_KEY: 'gooby.save.corrupt',
   /** New-game stat defaults (§E3). */
@@ -152,6 +153,13 @@ export const COIN_TABLE = Object.freeze({
   goalieGooby: Object.freeze({ divisor: 3, min: 4, max: 26 }),
   starHopper: Object.freeze({ divisor: 9, min: 4, max: 26 }),
   pipeFlow: Object.freeze({ divisor: 5, min: 4, max: 25 }),
+  // V3/G34: 6 new coin rows (PLAN3 §C8.5/§C9.5/§C10.1 verbatim — §E0.1-3)
+  shoppingSurf: Object.freeze({ divisor: 40, min: 5, max: 34 }),
+  purblePlace: Object.freeze({ divisor: 5, min: 5, max: 30 }),
+  toyRacer: Object.freeze({ divisor: 6, min: 5, max: 30 }),
+  ghostHunt: Object.freeze({ divisor: 4, min: 4, max: 28 }),
+  rocketRescue: Object.freeze({ divisor: 5, min: 4, max: 28 }),
+  harborHopper: Object.freeze({ divisor: 5, min: 4, max: 30 }),
 });
 
 /** Minigame unlock schedule (§C6.3): level → new game. */
@@ -517,6 +525,13 @@ export const UNLOCKS = Object.freeze({
     goalieGooby: 11,
     starHopper: 12,
     pipeFlow: 14,
+    // V3/G34: 6 new 3.0 games (PLAN3 §B8/§C8.5/§C9.5/§C10.1 — §E0.1-3)
+    shoppingSurf: 5,
+    purblePlace: 6,
+    toyRacer: 15,
+    ghostHunt: 16,
+    rocketRescue: 18,
+    harborHopper: 20,
   }),
   /** Crop unlock levels (§B6/§C2.3). */
   CROPS: Object.freeze({
@@ -717,3 +732,14 @@ export const ITEM_PRICES = Object.freeze({
 });
 
 // ============================================================== end V2/G16 ==
+
+// ============================================================================
+// V3/G34: GOOBY 3.0 data spine (PLAN3 §B8/§E0.1-3 — the SINGLE 3.0 re-opening
+// of this file): SAVE.VERSION → 3 (§B1), 6 new COIN_TABLE rows and 6 new
+// UNLOCKS.MINIGAMES levels — marked inline at their tables above, because the
+// frozen objects cannot be extended after definition. Every other 3.0 number
+// (medley tables, surf/cake tuning, nougat numbers, sticker defs, scale/
+// volume mapping, PIECE_PORTS) lives as exported frozen consts inside the
+// owning module (§E0.1-2 pattern). constants.js is FROZEN again after this
+// edit — no other 3.0 agent may touch it.
+// ============================================================== end V3/G34 ==

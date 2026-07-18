@@ -20,6 +20,28 @@ import { EN as V2_AMBIENCE_EN, DE as V2_AMBIENCE_DE } from './strings/v2-ambienc
 import { EN as V2_AUDIO_EN, DE as V2_AUDIO_DE } from './strings/v2-audio.js';
 import { EN as V2_POLISH_EN, DE as V2_POLISH_DE } from './strings/v2-polish.js';
 
+// V3/G34: per-feature 3.0 string modules (PLAN3 §E0.1-2) — static imports,
+// spread below AFTER all v2 spreads. This file is edited exactly ONCE for
+// 3.0 (this edit); every 3.0 agent adds keys ONLY to their own v3-*.js
+// module (ownership headers inside each module).
+import { EN as V3_CORE_EN, DE as V3_CORE_DE } from './strings/v3-core.js';
+import { EN as V3_STICKERS_EN, DE as V3_STICKERS_DE } from './strings/v3-stickers.js';
+import { EN as V3_AUDIO_EN, DE as V3_AUDIO_DE } from './strings/v3-audio.js';
+import { EN as V3_UX_EN, DE as V3_UX_DE } from './strings/v3-ux.js';
+import { EN as V3_DEV_EN, DE as V3_DEV_DE } from './strings/v3-dev.js';
+import { EN as V3_NUTELLA_EN, DE as V3_NUTELLA_DE } from './strings/v3-nutella.js';
+import { EN as V3_CAKE_EN, DE as V3_CAKE_DE } from './strings/v3-cake.js';
+import { EN as V3_SURF_EN, DE as V3_SURF_DE } from './strings/v3-surf.js';
+import { EN as V3_TRAVEL_EN, DE as V3_TRAVEL_DE } from './strings/v3-travel.js';
+import { EN as V3_DRIVE_EN, DE as V3_DRIVE_DE } from './strings/v3-drive.js';
+import { EN as V3_OUTFITS_EN, DE as V3_OUTFITS_DE } from './strings/v3-outfits.js';
+import { EN as V3_GAMES_F_EN, DE as V3_GAMES_F_DE } from './strings/v3-games-f.js';
+import { EN as V3_GAMES_G_EN, DE as V3_GAMES_G_DE } from './strings/v3-games-g.js';
+import { EN as V3_DEPTH_A_EN, DE as V3_DEPTH_A_DE } from './strings/v3-depth-a.js';
+import { EN as V3_DEPTH_B_EN, DE as V3_DEPTH_B_DE } from './strings/v3-depth-b.js';
+import { EN as V3_DEPTH_C_EN, DE as V3_DEPTH_C_DE } from './strings/v3-depth-c.js';
+import { EN as V3_POLISH_EN, DE as V3_POLISH_DE } from './strings/v3-polish.js';
+
 /** @type {Record<string, string>} */
 export const EN = {
   'app.title': 'GOOBY',
@@ -505,6 +527,25 @@ export const EN = {
   ...V2_AMBIENCE_EN,
   ...V2_AUDIO_EN,
   ...V2_POLISH_EN,
+
+  // --- V3/G34: 3.0 per-feature modules (§E0.1-2 — after ALL v2 spreads) ---
+  ...V3_CORE_EN,
+  ...V3_STICKERS_EN,
+  ...V3_AUDIO_EN,
+  ...V3_UX_EN,
+  ...V3_DEV_EN,
+  ...V3_NUTELLA_EN,
+  ...V3_CAKE_EN,
+  ...V3_SURF_EN,
+  ...V3_TRAVEL_EN,
+  ...V3_DRIVE_EN,
+  ...V3_OUTFITS_EN,
+  ...V3_GAMES_F_EN,
+  ...V3_GAMES_G_EN,
+  ...V3_DEPTH_A_EN,
+  ...V3_DEPTH_B_EN,
+  ...V3_DEPTH_C_EN,
+  ...V3_POLISH_EN,
 };
 
 /** @type {Record<string, string>} */
@@ -992,6 +1033,25 @@ export const DE = {
   ...V2_AMBIENCE_DE,
   ...V2_AUDIO_DE,
   ...V2_POLISH_DE,
+
+  // --- V3/G34: 3.0 per-feature modules (§E0.1-2 — after ALL v2 spreads) ---
+  ...V3_CORE_DE,
+  ...V3_STICKERS_DE,
+  ...V3_AUDIO_DE,
+  ...V3_UX_DE,
+  ...V3_DEV_DE,
+  ...V3_NUTELLA_DE,
+  ...V3_CAKE_DE,
+  ...V3_SURF_DE,
+  ...V3_TRAVEL_DE,
+  ...V3_DRIVE_DE,
+  ...V3_OUTFITS_DE,
+  ...V3_GAMES_F_DE,
+  ...V3_GAMES_G_DE,
+  ...V3_DEPTH_A_DE,
+  ...V3_DEPTH_B_DE,
+  ...V3_DEPTH_C_DE,
+  ...V3_POLISH_DE,
 };
 
 const DICTS = { en: EN, de: DE };
