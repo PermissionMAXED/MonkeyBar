@@ -18,6 +18,8 @@ import {
 } from '../scripts/kenney-manifest.mjs';
 // V3/G31 (PLAN3 §B6/§D2): second asset root
 import { KAYKIT_PACKS, kaykitEntry } from '../scripts/kaykit-manifest.mjs';
+// V4/G79 (§G9.3): food model keys can resolve through the itch root.
+import { MODEL_PACKS as ITCH_MODEL_PACKS } from '../scripts/fetch-itch.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const KENNEY = path.join(ROOT, 'public', 'assets', 'kenney');
@@ -135,6 +137,7 @@ test('all committed .glb files are valid binary glTF', () => {
 const ALL_SLUGS = [
   ...PACKS.map((p) => p.slug),
   ...KAYKIT_PACKS.map((p) => p.slug), // V3/G31
+  ...ITCH_MODEL_PACKS.map((p) => p.slug), // V4/G79
 ];
 
 /** Collect asset-key-shaped strings ('<known-slug>/<name>') from a value tree. */
@@ -155,6 +158,12 @@ function assetKeyToFile(key) {
   // V3/G31: kaykit slugs live under the second root with their own ext (§B6).
   const kaykit = KAYKIT_PACKS.find((p) => p.slug === slug);
   if (kaykit) return path.join(KAYKIT, slug, `${name}.${kaykit.ext}`);
+  // V4/G79: committed itch packs carry either self-contained GLB or glTF.
+  const itch = ITCH_MODEL_PACKS.find((p) => p.slug === slug);
+  if (itch) {
+    const ext = itch.form === 'gltf' ? 'gltf' : 'glb';
+    return path.join(ROOT, 'public', 'assets', 'itch', slug, `${name}.${ext}`);
+  }
   const pack = PACKS.find((p) => p.slug === slug);
   return pack.glob || pack.oggs
     ? path.join(KENNEY, slug, 'audio', `${name}.ogg`)

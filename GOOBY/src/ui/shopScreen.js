@@ -27,7 +27,7 @@
 
 import { ECONOMY, ROOMS, UNLOCKS, ITEM_PRICES } from '../data/constants.js'; // V2/G22: + UNLOCKS/ITEM_PRICES
 import { t, getLang } from '../data/strings.js'; // V4/G-UI: getLang for hyphens:auto lang tagging (FIX-C precedent)
-import { FOODS } from '../data/foods.js';
+import { FOODS, visibleFoodValues } from '../data/foods.js'; // V4/G79: §G9.2 chips
 import { WALLPAPERS, FLOORS, furnitureFor, roomSlots } from '../data/furniture.js';
 import { CROPS } from '../data/crops.js'; // V2/G22: seed rows in the Care section (§C7)
 import { SKINS, DEFAULT_SKIN, getSkin } from '../data/skins.js'; // V2/G22: Skins tab (§C8.5)
@@ -68,6 +68,8 @@ const FOOD_EMOJI = {
   cookie: '🍪', chocolate: '🍫', 'candy-bar': '🍬', muffin: '🥮',
   fries: '🍟', 'corn-dog': '🍢', sundae: '🍨',
   nutella: '🫙', // V3/G35 (§C6.1 — kept in sync with interactions.js)
+  // V4/G79 (§G9.3): Tiny Treats bakery rows (croissant keeps its v2 glyph).
+  cupcakePink: '🧁', cinnamonRoll: '🍥',
 };
 
 /** Furniture id → emoji (falls back to the slot emoji). */
@@ -167,6 +169,11 @@ const SHOP_FIX_CSS = `
 /* V3/G48: Nutella + Nougatschleuse NEU ribbons; styles.css belongs to G47. */
 .shop-card.g48-new-content{position:relative;overflow:visible;}
 .g48-shop-ribbon{position:absolute;z-index:3;right:-0.3125rem;top:0.3125rem;min-width:2.75rem;padding:0.1875rem 0.4375rem;border-radius:999px;background:var(--pink);color:#fff;font-size:0.625rem;font-weight:900;line-height:1.2;letter-spacing:.04em;box-shadow:0 0.125rem 0 rgba(74,59,54,.16);transform:rotate(7deg);pointer-events:none;}
+/* ── V4/G79 food-value chips (§G9.2): identical to the fridge tray. */
+.screen-shop .g79-food-values{display:flex;align-items:center;justify-content:center;gap:.25rem;min-height:.75rem;color:var(--brown,#4A3B36);font-size:.625rem;font-weight:800;line-height:1;opacity:.7;pointer-events:none;}
+.screen-shop .g79-food-chip{display:inline-flex;align-items:center;gap:.0625rem;white-space:nowrap;}
+.screen-shop .g79-food-chip svg{width:.75rem;height:.75rem;}
+/* ── end V4/G79 food-value chips. */
 /* ── V4/G70 sick-shop focus block (owned): Care tab + medicine highlight. */
 .shop-card.g70-sick-medicine{outline:0.1875rem solid var(--pink);outline-offset:0.125rem;box-shadow:0 0 .75rem rgba(255,123,169,.28);}
 .shop-card.g70-sick-medicine.g70-pulse{animation:g70-shop-medicine 1.15s ease-in-out 3;}
@@ -273,6 +280,16 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
       : `<span class="shop-price">${t('shop.free')}</span>`;
   }
 
+  // ---- V4/G79 (§G9.2): hunger/fun chips from the catalog deltas ------------
+  function foodValueChips(food) {
+    const chips = visibleFoodValues(food).map(([stat, value]) => `
+      <span class="g79-food-chip" aria-label="${t(`food.value${stat === 'hunger' ? 'Hunger' : 'Fun'}`, { value })}">
+        +${value}${icon(stat, 12)}
+      </span>`);
+    return `<span class="g79-food-values">${chips.join('')}</span>`;
+  }
+  // ---- end V4/G79 ----------------------------------------------------------
+
   // ------------------------------------------------------------------ food
   /** V2/G22 (§C7): Alle/Gesund/Süßkram category filters on the food tab. */
   const FOOD_FILTERS = [
@@ -316,7 +333,8 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
         ${food.junk ? '<span class="g22-junk" aria-hidden="true">🍬</span>' : ''}
         <span class="shop-emoji">${FOOD_EMOJI[food.id] ?? '🍽️'}</span>
         <span class="shop-name">${t(food.nameKey)}</span>
-        ${priceTag(foodUnit(food))}`;
+        ${priceTag(foodUnit(food))}
+        ${foodValueChips(food)}`;
       card.addEventListener('click', () => {
         audio.play('ui.tap');
         // V3/G48: clicking the featured content acknowledges its NEU ribbon.

@@ -21,7 +21,7 @@
 // works (degraded) before G4's files exist.
 
 import { INTERACT, XP, CARE_TUNING, COLLECTIONS, LEVELING, ITEM_PRICES, STATS } from '../data/constants.js';
-import { getFood } from '../data/foods.js';
+import { getFood, visibleFoodValues } from '../data/foods.js'; // V4/G79: §G9.2 tray chips
 import { applyDeltas, clampStat } from '../systems/stats.js';
 import { currentMood } from '../systems/sleep.js';
 import { bandAt } from '../systems/dayNight.js';
@@ -30,6 +30,7 @@ import { applyXp } from '../systems/leveling.js';
 import { deriveEmotion } from '../character/emotions.js';
 import { t } from '../data/strings.js';
 import { now, localDay } from '../core/clock.js';
+import { icon } from '../ui/icons.js'; // V4/G79: shared hunger/fun chip glyphs
 // V2/G20: pet-sim engines feeding the care pipeline (all pure modules)
 import { onEat as healthOnEat, tick as healthTick, HEALTH } from '../systems/health.js';
 import { onEat as weightOnEat, onBallFetch as weightOnBallFetch, tierOf } from '../systems/weight.js';
@@ -512,6 +513,8 @@ const FOOD_EMOJI = {
   cookie: '🍪', chocolate: '🍫', 'candy-bar': '🍬', muffin: '🥮',
   fries: '🍟', 'corn-dog': '🍢', sundae: '🍨',
   nutella: '🫙', // V3/G35 (§C6.1): jar glyph — SVG icon treatment in icons.js
+  // V4/G79 (§G9.3): Tiny Treats bakery rows (croissant keeps its v2 glyph).
+  cupcakePink: '🧁', cinnamonRoll: '🍥',
 };
 
 /** V2/G20: junkScore band → belly icon fill (§C7 green/yellow/orange). */
@@ -532,6 +535,11 @@ const CARE_CSS = `
 .tray-title{margin:0;font-size:22px;font-weight:800;color:var(--brown,#4A3B36);}
 .tray-hint{font-size:13px;font-weight:700;opacity:.55;margin-top:2px;}
 .tray-empty{padding:24px 8px;text-align:center;font-weight:700;opacity:.6;}
+/* ── V4/G79 food-value chips (§G9.2): 0.625rem, brown 70%, max two. */
+.g79-food-values{display:flex;align-items:center;justify-content:center;gap:.25rem;min-height:.75rem;color:var(--brown,#4A3B36);font-size:.625rem;font-weight:800;line-height:1;opacity:.7;pointer-events:none;}
+.g79-food-chip{display:inline-flex;align-items:center;gap:.0625rem;white-space:nowrap;}
+.g79-food-chip svg{width:.75rem;height:.75rem;}
+/* ── end V4/G79 food-value chips. */
 .g5-wash{position:absolute;inset:0;pointer-events:none;z-index:60;}
 .g5-wash-meter{position:absolute;top:calc(76px + var(--safe-top,0px));left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.94);border-radius:999px;padding:8px 16px;font-weight:800;font-size:15px;color:var(--brown,#4A3B36);box-shadow:0 6px 24px rgba(74,59,54,.14);}
 .g5-wash-track{display:inline-block;width:90px;height:12px;border-radius:999px;background:rgba(74,59,54,.12);overflow:hidden;}
@@ -1116,6 +1124,16 @@ function bellyIconSvg(color) {
   </svg>`;
 }
 
+// ---- V4/G79 (§G9.2): shared-value shape rendered with the icon set ----------
+function foodValueChips(food) {
+  const chips = visibleFoodValues(food).map(([stat, value]) => `
+    <span class="g79-food-chip" aria-label="${t(`food.value${stat === 'hunger' ? 'Hunger' : 'Fun'}`, { value })}">
+      +${value}${icon(stat, 12)}
+    </span>`);
+  return `<span class="g79-food-values">${chips.join('')}</span>`;
+}
+// ---- end V4/G79 ------------------------------------------------------------
+
 /** ui panel module for the food tray (registered in registerCareUi). */
 function createFoodTrayPanel() {
   return {
@@ -1137,12 +1155,14 @@ function createFoodTrayPanel() {
         if (!grid) break;
         const btn = document.createElement('button');
         btn.className = 'tray-item';
+        const food = getFood(id);
         // V2/G20: §C7 junk foods carry a tiny 🍬 badge
-        const junkBadge = getFood(id)?.junk ? `<span class="tray-junk" title="${t('tray.junkBadge')}">🍬</span>` : '';
+        const junkBadge = food?.junk ? `<span class="tray-junk" title="${t('tray.junkBadge')}">🍬</span>` : '';
         btn.innerHTML = `
           ${junkBadge}<span class="tray-count">×${count}</span>
           <span class="tray-emoji">${FOOD_EMOJI[id] ?? '🍽️'}</span>
-          <span class="tray-name">${t(`food.${id}`)}</span>`;
+          <span class="tray-name">${t(`food.${id}`)}</span>
+          ${food ? foodValueChips(food) : ''}`;
         btn.addEventListener('pointerdown', (e) => {
           if (active) startFoodDrag(active, id, e);
         });

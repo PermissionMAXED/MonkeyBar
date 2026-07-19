@@ -19,6 +19,24 @@ export const ROOM = Object.freeze({
     washer: Object.freeze({ default: null, items: Object.freeze(['washer']) }),
   }),
 
+  // ---- V4/G79 (PLAN4-GAMES §G9.1): static room dressing, never saved ------
+  // Trim, the towel set and Aline cactus share one vertex-color batch/call.
+  dressing: Object.freeze([
+    Object.freeze({
+      id: 'wallTrim', kind: 'wallTrim', batch: 'color',
+      tint: '#D9E8E4', walls: Object.freeze(['back', 'left']),
+    }),
+    Object.freeze({
+      id: 'towelRail', kind: 'towelRail', batch: 'color',
+      at: Object.freeze([-1.35, 1.62, -1.43]),
+    }),
+    Object.freeze({
+      id: 'alineCactus', kind: 'asset', batch: 'color',
+      key: 'aline-furniture/cactus', at: Object.freeze([1.1, 1.65, -1.23]), scale: 0.62, rotY: -12,
+    }),
+  ]),
+  // ---- end V4/G79 ----------------------------------------------------------
+
   furniture: Object.freeze([
     // bathtub along the left side, facing the camera (tub decor slot)
     Object.freeze({

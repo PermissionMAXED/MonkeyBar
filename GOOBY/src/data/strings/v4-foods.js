@@ -4,7 +4,19 @@
 // No other agent may edit this module.
 
 /** @type {Record<string, string>} */
-export const EN = {};
+export const EN = {
+  'food.croissant': 'Croissant',
+  'food.cupcakePink': 'Pink Cupcake',
+  'food.cinnamonRoll': 'Cinnamon Roll',
+  'food.valueHunger': '+{value} hunger',
+  'food.valueFun': '+{value} fun',
+};
 
 /** @type {Record<string, string>} */
-export const DE = {};
+export const DE = {
+  'food.croissant': 'Croissant',
+  'food.cupcakePink': 'Rosa Cupcake',
+  'food.cinnamonRoll': 'Zimtschnecke',
+  'food.valueHunger': '+{value} Hunger',
+  'food.valueFun': '+{value} Spaß',
+};

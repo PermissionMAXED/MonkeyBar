@@ -23,6 +23,27 @@ export const ROOM = Object.freeze({
     floorClutter: Object.freeze({ default: null, items: Object.freeze(['pillow', 'pillowBlue', 'books', 'trashcan']) }),
   }),
 
+  // ---- V4/G79 (PLAN4-GAMES §G9.1): static room dressing, never saved ------
+  // Rug + frame/cord merge into `color`; emissive fairy dots and sticker art
+  // are one call each (3 added calls). The picture stays clear of the window,
+  // wardrobe and lamp-switch interaction zones.
+  dressing: Object.freeze([
+    Object.freeze({
+      id: 'alineRug', kind: 'asset', batch: 'color',
+      key: 'aline-furniture/rug', at: Object.freeze([-1.2, 0.01, -0.55]),
+      scale: 0.72, rotX: -90,
+    }),
+    Object.freeze({
+      id: 'fairyLights', kind: 'fairyLights', batch: 'fairy',
+      at: Object.freeze([0, 2.72, -1.43]), count: 14, width: 3.35,
+    }),
+    Object.freeze({
+      id: 'pictureSleepyhead', kind: 'picture', batch: 'picture-sleepyhead',
+      art: 'sleepyhead', at: Object.freeze([-0.68, 2.12, -1.43]),
+    }),
+  ]),
+  // ---- end V4/G79 ----------------------------------------------------------
+
   furniture: Object.freeze([
     // bed on the left, headboard against the back wall (bed decor slot)
     Object.freeze({

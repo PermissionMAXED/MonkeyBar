@@ -29,6 +29,7 @@
 // only ever loaded via dynamic import (ui/shopScreen.js).
 
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ENGINE, ROOMS } from '../data/constants.js';
 import { t } from '../data/strings.js';
 // V2/G22: + roomSlots (garden fallback); V2/FIX-C: + rewardSlots (§C6 decos)
@@ -40,7 +41,7 @@ import {
   slotOptions,
 } from '../systems/furniturePlacement.js';
 import { getCamera, getGooby, getRoomManager } from './homeScene.js';
-import { ROOM_DEFS, FURNITURE_SCALE } from './roomManager.js';
+import { ROOM_DEFS, FURNITURE_SCALE, SHELL } from './roomManager.js';
 import { standardMat, goobyMat, disposeIfOwned, PALETTE } from '../gfx/materials.js';
 import { SLOT_EMOJI, furnEmoji } from '../ui/shopScreen.js';
 import { icon } from '../ui/icons.js';
@@ -92,6 +93,8 @@ export function initDecor({ store, ui, audio }) {
   let createdHolders = new Map();
   /** serialized apply runs (GLB preloads are async) */
   let applying = Promise.resolve();
+  /** V4/G79 static room-dressing resources for the current roomManager. */
+  let roomDressing = null;
 
   function disposeBuilt(key) {
     const rec = built.get(key);
@@ -100,6 +103,12 @@ export function initDecor({ store, ui, audio }) {
     for (const m of rec.mats) disposeIfOwned(m);
     for (const tx of rec.textures) tx.dispose();
     built.delete(key);
+  }
+
+  function disposeRoomDressing() {
+    if (!roomDressing) return;
+    disposeG79RoomDressing(roomDressing);
+    roomDressing = null;
   }
 
   /**
@@ -114,6 +123,7 @@ export function initDecor({ store, ui, audio }) {
   };
 
   function resetForInstance(nextRm) {
+    disposeRoomDressing(); // V4/G79: old room groups/resources never leak
     for (const key of [...built.keys()]) disposeBuilt(key); // old scene is gone
     createdHolders = new Map(); // holders belonged to the old scene graph
     applied = new Map();
@@ -129,6 +139,14 @@ export function initDecor({ store, ui, audio }) {
   async function applyAll() {
     if (!rm) return;
     const target = rm;
+    if (roomDressing?.rm !== target) {
+      const next = await buildG79RoomDressing(target);
+      if (rm !== target) {
+        disposeG79RoomDressing(next);
+        return;
+      }
+      roomDressing = next;
+    }
     for (const def of ROOM_DEFS) {
       if (rm !== target) return; // scene switched mid-apply
       // V2/G22: outdoor rooms (G19's garden) have no wallpaper/floor decor
@@ -351,6 +369,320 @@ export function initDecor({ store, ui, audio }) {
     canvas.addEventListener('pointercancel', cancel);
   }
 }
+
+// ===========================================================================
+// V4/G79 (PLAN4-GAMES §G9.1): draw-call-batched static room dressing
+// ===========================================================================
+
+const G79_DRESSING_ASSET_KEYS = Object.freeze([
+  ...new Set(
+    ROOM_DEFS.flatMap((def) =>
+      (def.dressing ?? []).flatMap((entry) => {
+        if (entry.kind === 'asset') return [entry.key];
+        if (entry.kind === 'assetCluster') return entry.pieces.map((piece) => piece.key);
+        return [];
+      })
+    )
+  ),
+]);
+
+/**
+ * @typedef {{
+ *   rm: object, groups: THREE.Group[], geos: THREE.BufferGeometry[],
+ *   mats: THREE.Material[], textures: THREE.Texture[]
+ * }} G79DressingRecord
+ */
+
+/**
+ * Build all four indoor dressing groups. Colored props/procedural details are
+ * flattened to vertex colors; Tiny Treats keeps its shared atlas UVs in one
+ * batch; each sticker picture is one texture plane. `castShadow=false` keeps
+ * those batches to one renderer call each even with the home shadow pass.
+ * @param {object} target live roomManager
+ * @returns {Promise<G79DressingRecord>}
+ */
+async function buildG79RoomDressing(target) {
+  await assets.preload(G79_DRESSING_ASSET_KEYS);
+  const rec = { rm: target, groups: [], geos: [], mats: [], textures: [] };
+
+  for (const def of ROOM_DEFS) {
+    if (!def.dressing?.length) continue; // garden intentionally untouched
+    const room = target.getRoomGroup(def.id);
+    if (!room) continue;
+
+    const group = new THREE.Group();
+    group.name = `v4-g79-dressing-${def.id}`;
+    room.add(group);
+    rec.groups.push(group);
+
+    const colored = [];
+    const fairy = [];
+    const textured = new Map();
+    const pictures = [];
+
+    for (const entry of def.dressing) {
+      if (entry.kind === 'asset') {
+        colored.push(...g79AssetGeometries(entry, 'color'));
+      } else if (entry.kind === 'assetCluster') {
+        const batch = textured.get(entry.batch) ?? { geos: [], material: null };
+        for (const piece of entry.pieces) {
+          const result = g79AssetGeometries(piece, 'texture');
+          batch.geos.push(...result.geos);
+          batch.material ??= result.material;
+        }
+        textured.set(entry.batch, batch);
+      } else if (entry.kind === 'wallTrim') {
+        g79WallTrim(entry, colored);
+      } else if (entry.kind === 'hangingUtensils') {
+        g79HangingUtensils(entry, colored);
+      } else if (entry.kind === 'towelRail') {
+        g79TowelRail(entry, colored);
+      } else if (entry.kind === 'fairyLights') {
+        g79FairyLights(entry, colored, fairy);
+      } else if (entry.kind === 'picture') {
+        g79PictureFrame(entry, colored);
+        pictures.push(entry);
+      }
+    }
+
+    g79AddMergedMesh(group, colored, new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.82,
+      metalness: 0,
+    }), `${def.id}-color`, rec);
+
+    for (const [batchId, batch] of textured) {
+      const material = batch.material?.clone() ?? new THREE.MeshStandardMaterial({ color: '#FFF6EC' });
+      material.userData = { ...material.userData, shared: false };
+      if ('metalness' in material) material.metalness = 0;
+      if ('roughness' in material) material.roughness = Math.max(0.65, material.roughness ?? 0);
+      g79AddMergedMesh(group, batch.geos, material, `${def.id}-${batchId}`, rec);
+    }
+
+    if (fairy.length) {
+      g79AddMergedMesh(group, fairy, new THREE.MeshStandardMaterial({
+        color: '#FFE7A3',
+        emissive: '#FFB85C',
+        emissiveIntensity: 1.5,
+        roughness: 0.5,
+        metalness: 0,
+      }), `${def.id}-fairy`, rec);
+    }
+
+    for (const picture of pictures) g79AddPicture(group, picture, rec);
+    group.userData.drawCalls = group.children.filter((child) => child.isMesh).length;
+  }
+  return rec;
+}
+
+/** @param {G79DressingRecord} rec */
+function disposeG79RoomDressing(rec) {
+  for (const group of rec.groups) group.parent?.remove(group);
+  for (const geo of rec.geos) geo.dispose();
+  for (const mat of rec.mats) disposeIfOwned(mat);
+  for (const texture of rec.textures) texture.dispose();
+  rec.groups.length = 0;
+  rec.geos.length = 0;
+  rec.mats.length = 0;
+  rec.textures.length = 0;
+}
+
+/**
+ * Clone and flatten one committed model while leaving cache masters untouched.
+ * @param {object} piece
+ * @param {'color'|'texture'} mode
+ * @returns {THREE.BufferGeometry[]|{geos: THREE.BufferGeometry[], material: THREE.Material|null}}
+ */
+function g79AssetGeometries(piece, mode) {
+  const model = assets.getModel(piece.key);
+  const scale = piece.scale ?? 1;
+  if (Array.isArray(scale)) model.scale.set(scale[0], scale[1], scale[2]);
+  else model.scale.setScalar(scale);
+  model.rotation.set(
+    THREE.MathUtils.degToRad(piece.rotX ?? 0),
+    THREE.MathUtils.degToRad(piece.rotY ?? 0),
+    THREE.MathUtils.degToRad(piece.rotZ ?? 0)
+  );
+  groundAndCenter(model);
+  model.position.add(new THREE.Vector3(...piece.at));
+  model.updateMatrixWorld(true);
+
+  const geos = [];
+  let material = null;
+  model.traverse((obj) => {
+    if (!obj.isMesh || !obj.geometry) return;
+    const mat = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+    material ??= mat ?? null;
+    geos.push(g79FlattenGeometry(
+      obj.geometry,
+      obj.matrixWorld,
+      mode,
+      mat?.color ?? new THREE.Color('#FFFFFF')
+    ));
+  });
+  return mode === 'texture' ? { geos, material } : geos;
+}
+
+/**
+ * Normalize attributes before merging: every color batch has position/normal/
+ * color; every textured batch has position/normal/uv.
+ */
+function g79FlattenGeometry(source, matrix, mode, color) {
+  const geo = source.index ? source.toNonIndexed() : source.clone();
+  geo.applyMatrix4(matrix);
+  if (!geo.getAttribute('normal')) geo.computeVertexNormals();
+  const keep = new Set(mode === 'texture'
+    ? ['position', 'normal', 'uv']
+    : ['position', 'normal', 'color']);
+  for (const name of Object.keys(geo.attributes)) {
+    if (!keep.has(name)) geo.deleteAttribute(name);
+  }
+  const count = geo.getAttribute('position').count;
+  if (mode === 'texture' && !geo.getAttribute('uv')) {
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(count * 2), 2));
+  }
+  if (mode === 'color') {
+    const values = new Float32Array(count * 3);
+    for (let i = 0; i < count; i += 1) color.toArray(values, i * 3);
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(values, 3));
+  }
+  return geo;
+}
+
+function g79Primitive(geo, color, at, rot = [0, 0, 0], scale = [1, 1, 1]) {
+  const matrix = new THREE.Matrix4().compose(
+    new THREE.Vector3(...at),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(...rot)),
+    new THREE.Vector3(...scale)
+  );
+  return g79FlattenGeometry(geo, matrix, 'color', new THREE.Color(color));
+}
+
+function g79WallTrim(entry, out) {
+  const y = 1.04;
+  if (entry.walls.includes('back')) {
+    out.push(g79Primitive(
+      new THREE.BoxGeometry(SHELL.WIDTH - 0.14, 0.12, 0.05),
+      entry.tint,
+      [0, y, -SHELL.DEPTH / 2 + 0.075]
+    ));
+  }
+  for (const side of ['left', 'right']) {
+    if (!entry.walls.includes(side)) continue;
+    out.push(g79Primitive(
+      new THREE.BoxGeometry(0.05, 0.12, SHELL.SIDE_DEPTH - 0.14),
+      entry.tint,
+      [(side === 'left' ? -1 : 1) * (SHELL.WIDTH / 2 - 0.075), y, -0.62]
+    ));
+  }
+}
+
+function g79HangingUtensils(entry, out) {
+  const [x, y, z] = entry.at;
+  out.push(g79Primitive(new THREE.BoxGeometry(0.95, 0.045, 0.035), '#A98B72', [x, y, z]));
+  const colors = ['#D9E8E4', '#F4C6C6', '#E8D5C0', '#BDD7E7'];
+  for (let i = 0; i < 4; i += 1) {
+    const ux = x - 0.34 + i * 0.23;
+    out.push(g79Primitive(
+      new THREE.CylinderGeometry(0.018, 0.018, 0.34, 8),
+      '#806B59',
+      [ux, y - 0.19, z + 0.015]
+    ));
+    if (i % 2 === 0) {
+      out.push(g79Primitive(
+        new THREE.SphereGeometry(0.065, 10, 8),
+        colors[i],
+        [ux, y - 0.39, z + 0.02],
+        [0, 0, 0],
+        [0.75, 1, 0.35]
+      ));
+    } else {
+      out.push(g79Primitive(
+        new THREE.BoxGeometry(0.105, 0.13, 0.025),
+        colors[i],
+        [ux, y - 0.39, z + 0.02]
+      ));
+    }
+  }
+}
+
+function g79TowelRail(entry, out) {
+  const [x, y, z] = entry.at;
+  out.push(g79Primitive(
+    new THREE.CylinderGeometry(0.025, 0.025, 0.78, 10),
+    '#9DABA8',
+    [x, y, z],
+    [0, 0, Math.PI / 2]
+  ));
+  for (const [dx, color] of [[-0.19, '#F4B9C8'], [0.19, '#AFCFDE']]) {
+    out.push(g79Primitive(
+      new THREE.BoxGeometry(0.28, 0.45, 0.035),
+      color,
+      [x + dx, y - 0.25, z + 0.025]
+    ));
+  }
+}
+
+function g79FairyLights(entry, colored, fairy) {
+  const [cx, cy, z] = entry.at;
+  const points = [];
+  for (let i = 0; i < entry.count; i += 1) {
+    const t = i / (entry.count - 1);
+    const x = cx - entry.width / 2 + t * entry.width;
+    const y = cy - Math.sin(t * Math.PI) * 0.2;
+    points.push(new THREE.Vector3(x, y, z));
+    fairy.push(g79Primitive(new THREE.SphereGeometry(0.045, 9, 7), '#FFE7A3', [x, y, z + 0.025]));
+  }
+  const curve = new THREE.CatmullRomCurve3(points);
+  colored.push(g79Primitive(new THREE.TubeGeometry(curve, 32, 0.009, 5, false), '#806B59', [0, 0, 0]));
+}
+
+function g79PictureFrame(entry, colored) {
+  colored.push(g79Primitive(
+    new THREE.BoxGeometry(0.58, 0.46, 0.035),
+    '#8B6248',
+    entry.at
+  ));
+}
+
+function g79AddMergedMesh(group, sources, material, name, rec) {
+  if (!sources.length) {
+    material.dispose();
+    return;
+  }
+  const merged = mergeGeometries(sources, false);
+  for (const source of sources) source.dispose();
+  if (!merged) {
+    material.dispose();
+    throw new Error(`[V4/G79] failed to merge dressing batch '${name}'`);
+  }
+  const mesh = new THREE.Mesh(merged, material);
+  mesh.name = `v4-g79-${name}`;
+  mesh.castShadow = false;
+  mesh.receiveShadow = true;
+  group.add(mesh);
+  rec.geos.push(merged);
+  rec.mats.push(material);
+}
+
+function g79AddPicture(group, entry, rec) {
+  const texture = new THREE.TextureLoader().load(
+    `${import.meta.env?.BASE_URL ?? '/'}assets/stickers/${entry.art}.png`
+  );
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const geo = new THREE.PlaneGeometry(0.48, 0.36);
+  const mat = new THREE.MeshBasicMaterial({ map: texture, toneMapped: false });
+  const picture = new THREE.Mesh(geo, mat);
+  picture.name = `v4-g79-picture-${entry.art}`;
+  picture.position.set(entry.at[0], entry.at[1], entry.at[2] + 0.021);
+  picture.castShadow = false;
+  group.add(picture);
+  rec.geos.push(geo);
+  rec.mats.push(mat);
+  rec.textures.push(texture);
+}
+
+// ============================================================= end V4/G79 ==
 
 // ---------------------------------------------------------------------------
 // Decorate-mode slot picker (bottom sheet)

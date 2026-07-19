@@ -10,6 +10,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ROOMS } from '../src/data/constants.js';
 import { PACKS, modelEntry } from '../scripts/kenney-manifest.mjs';
+import { MODEL_PACKS as ITCH_MODEL_PACKS } from '../scripts/fetch-itch.mjs';
+import { STICKERS } from '../src/data/stickers.js';
 import { ROOM as KITCHEN } from '../src/home/rooms/kitchen.js';
 import { ROOM as LIVING } from '../src/home/rooms/living.js';
 import { ROOM as BATHROOM } from '../src/home/rooms/bathroom.js';
@@ -264,6 +266,57 @@ test('V3/G46 garden uses real additions but keeps the compost identity item proc
   const compost = GARDEN.furniture.find((entry) => entry.interact === 'compost');
   assert.equal(compost?.proc, 'compostBin');
   assert.equal(compost?.item, undefined);
+});
+
+test('V4/G79 indoor dressing is complete, asset-backed, and budgeted at ≤4 calls per room', () => {
+  const expected = {
+    kitchen: ['wallTrim', 'bakeryCorner', 'hangingUtensils'],
+    living: ['alineBookshelf', 'pictureFirstNom', 'pictureBallBuddy', 'alinePlant'],
+    bathroom: ['wallTrim', 'towelRail', 'alineCactus'],
+    bedroom: ['alineRug', 'fairyLights', 'pictureSleepyhead'],
+  };
+  const itchKeys = new Set(
+    ITCH_MODEL_PACKS.flatMap((pack) => pack.files.map(({ key }) => `${pack.slug}/${key}`))
+  );
+  const stickerIds = new Set(STICKERS.map((sticker) => sticker.id));
+
+  assert.equal(GARDEN.dressing, undefined, 'G79 must leave the already-dense garden untouched');
+  for (const [roomId, ids] of Object.entries(expected)) {
+    const dressing = byId[roomId].dressing;
+    assert.ok(Object.isFrozen(dressing), `${roomId}: dressing table not frozen`);
+    assert.deepEqual(dressing.map((entry) => entry.id), ids, `${roomId}: dressing recipe`);
+    assert.equal(new Set(ids).size, ids.length, `${roomId}: duplicate dressing id`);
+
+    for (const entry of dressing) {
+      assert.ok(Object.isFrozen(entry), `${roomId}.${entry.id}: entry not frozen`);
+      const pieces = entry.kind === 'assetCluster' ? entry.pieces : [entry];
+      for (const piece of pieces) {
+        if (piece.key) {
+          assert.ok(
+            itchKeys.has(piece.key),
+            `${roomId}.${entry.id}: itch asset '${piece.key}' missing from manifest`
+          );
+        }
+      }
+      if (entry.kind === 'picture') {
+        assert.ok(stickerIds.has(entry.art), `${roomId}.${entry.id}: unknown sticker '${entry.art}'`);
+      }
+    }
+
+    const colored = dressing.some((entry) =>
+      ['asset', 'wallTrim', 'hangingUtensils', 'towelRail', 'fairyLights', 'picture']
+        .includes(entry.kind)
+    ) ? 1 : 0;
+    const textured = new Set(
+      dressing.filter((entry) => entry.kind === 'assetCluster').map((entry) => entry.batch)
+    ).size;
+    const emissive = dressing.some((entry) => entry.kind === 'fairyLights') ? 1 : 0;
+    const pictures = dressing.filter((entry) => entry.kind === 'picture').length;
+    assert.ok(
+      colored + textured + emissive + pictures <= 4,
+      `${roomId}: dressing recipe exceeds the four-call budget`
+    );
+  }
 });
 
 test('all required anchors are present in their owning rooms', () => {

@@ -29,6 +29,30 @@ export const ROOM = Object.freeze({
     sideboard: Object.freeze({ default: null, items: Object.freeze(['tableCoffee', 'tableCoffeeGlass', 'cabinetTelevision', 'radio', 'speaker']) }),
   }),
 
+  // ---- V4/G79 (PLAN4-GAMES §G9.1): static room dressing, never saved ------
+  // Aline geometry + picture frames merge into `color`; each sticker artwork
+  // is one textured plane, for exactly 3 added calls. Placements avoid the TV,
+  // front-door hitbox, ballSpawn and the player-owned wallArt slot.
+  dressing: Object.freeze([
+    Object.freeze({
+      id: 'alineBookshelf', kind: 'asset', batch: 'color',
+      key: 'aline-furniture/bookshelf', at: Object.freeze([-0.08, 0, -1.13]), scale: 0.68,
+    }),
+    Object.freeze({
+      id: 'pictureFirstNom', kind: 'picture', batch: 'picture-firstNom',
+      art: 'firstNom', at: Object.freeze([0.32, 2.15, -1.43]),
+    }),
+    Object.freeze({
+      id: 'pictureBallBuddy', kind: 'picture', batch: 'picture-ballBuddy',
+      art: 'ballBuddy', at: Object.freeze([0.9, 2.15, -1.43]),
+    }),
+    Object.freeze({
+      id: 'alinePlant', kind: 'asset', batch: 'color',
+      key: 'aline-furniture/plant', at: Object.freeze([-1.68, 0, 0.82]), scale: 1.35, rotY: 18,
+    }),
+  ]),
+  // ---- end V4/G79 ----------------------------------------------------------
+
   furniture: Object.freeze([
     // rug under the seating area (decor slot)
     Object.freeze({ slot: 'rug', item: 'rugRounded', at: Object.freeze([-0.2, 0, 0.3]), rotY: 0, noShadow: true }),

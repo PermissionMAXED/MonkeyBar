@@ -16,23 +16,65 @@ import { FOOD_TABLE } from './constants.js';
  *   'treats' sticker set (§C6); 🍬 badge in the shop/tray.
  */
 
+// ============================================================================
+// V4/G79 (PLAN4-GAMES §G9.3): Tiny Treats bakery foods. `croissant` already
+// exists in the frozen v2 FOOD_TABLE, so its unique catalog row is upgraded
+// here instead of creating a duplicate id/card; the two genuinely new ids are
+// appended below. This keeps existing croissant inventory save-compatible.
+// ============================================================================
+export const V4_BAKERY_FOODS = Object.freeze([
+  Object.freeze({
+    id: 'croissant',
+    nameKey: 'food.croissant',
+    modelKey: 'baked-goods/croissant',
+    price: 12,
+    deltas: Object.freeze({ hunger: 14, fun: 4, energy: 2, hygiene: -1 }),
+    favorite: false,
+    junk: false,
+  }),
+  Object.freeze({
+    id: 'cupcakePink',
+    nameKey: 'food.cupcakePink',
+    modelKey: 'baked-goods/cupcake',
+    price: 14,
+    deltas: Object.freeze({ hunger: 10, fun: 10, energy: 2, hygiene: -2 }),
+    favorite: false,
+    junk: true,
+  }),
+  Object.freeze({
+    id: 'cinnamonRoll',
+    nameKey: 'food.cinnamonRoll',
+    modelKey: 'baked-goods/cinnamon-roll',
+    price: 16,
+    deltas: Object.freeze({ hunger: 16, fun: 8, energy: 3, hygiene: -2 }),
+    favorite: false,
+    junk: true,
+  }),
+]);
+
+const V4_BAKERY_BY_ID = Object.freeze(
+  Object.fromEntries(V4_BAKERY_FOODS.map((food) => [food.id, food]))
+);
+// ============================================================ end V4/G79 ==
+
 /** @type {FoodItem[]} ordered by price ascending (catalog/tray order). */
 export const FOODS = Object.freeze([
   ...Object.entries(FOOD_TABLE).map(([id, row]) =>
-    Object.freeze({
-      id,
-      nameKey: `food.${id}`,
-      modelKey: `food-kit/${id}`,
-      price: row.price,
-      deltas: Object.freeze({
-        hunger: row.hunger ?? 0,
-        fun: row.fun ?? 0,
-        energy: row.energy ?? 0,
-        hygiene: row.hygiene ?? 0,
-      }),
-      favorite: row.favorite === true,
-      junk: row.junk === true, // V2/G16 (§B3/§C7)
-    })
+    V4_BAKERY_BY_ID[id] ??
+      Object.freeze({
+        id,
+        nameKey: `food.${id}`,
+        modelKey: `food-kit/${id}`,
+        price: row.price,
+        deltas: Object.freeze({
+          hunger: row.hunger ?? 0,
+          fun: row.fun ?? 0,
+          energy: row.energy ?? 0,
+          hygiene: row.hygiene ?? 0,
+        }),
+        favorite: row.favorite === true,
+        junk: row.junk === true, // V2/G16 (§B3/§C7)
+      })
   ),
   // ==========================================================================
   // V3/G35 (§C6.1 verbatim): Nutella — priciest treat, doubles as the
@@ -52,6 +94,8 @@ export const FOODS = Object.freeze([
     junk: true, // junk pipeline: junkScore +1, weight +2 on a normal feed
   }),
   // ============================================================ end V3/G35 ==
+  // V4/G79: croissant is already represented by its upgraded v2-id row above.
+  ...V4_BAKERY_FOODS.filter((food) => !(food.id in FOOD_TABLE)),
 ]);
 
 /** @type {Record<string, FoodItem>} id → item lookup. */
@@ -63,4 +107,23 @@ export const FOODS_BY_ID = Object.freeze(Object.fromEntries(FOODS.map((f) => [f.
  */
 export function getFood(id) {
   return FOODS_BY_ID[id];
+}
+
+/**
+ * V4/G79 (§G9.2): compact tray/shop values — only hunger and fun, only when
+ * non-zero, in stable icon order (energy/hygiene intentionally stay hidden).
+ * @param {FoodItem} food
+ * @returns {readonly (readonly ['hunger'|'fun', number])[]}
+ */
+export function visibleFoodValues(food) {
+  return Object.freeze(
+    /** @type {Array<readonly ['hunger'|'fun', number]>} */ (
+      [
+        ['hunger', food?.deltas?.hunger ?? 0],
+        ['fun', food?.deltas?.fun ?? 0],
+      ]
+        .filter(([, value]) => value !== 0)
+        .map(([stat, value]) => Object.freeze([stat, value]))
+    )
+  );
 }

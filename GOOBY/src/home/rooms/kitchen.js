@@ -32,6 +32,32 @@ export const ROOM = Object.freeze({
     bar: Object.freeze({ default: null, items: Object.freeze(['kitchenBar', 'stoolBar']) }),
   }),
 
+  // ---- V4/G79 (PLAN4-GAMES §G9.1): static room dressing, never saved ------
+  // Batch ids are the draw-call contract consumed by decor.js: all procedural
+  // trim/utensils merge once; the shared Tiny Treats atlas merges the bakery
+  // corner once (2 added calls total, below the ≤4 room delta).
+  dressing: Object.freeze([
+    Object.freeze({
+      id: 'wallTrim', kind: 'wallTrim', batch: 'color',
+      tint: '#E8D5C0', walls: Object.freeze(['back', 'left']),
+    }),
+    Object.freeze({
+      id: 'bakeryCorner', kind: 'assetCluster', batch: 'bakery',
+      pieces: Object.freeze([
+        Object.freeze({ key: 'bakery-interior/display_case_short', at: Object.freeze([1.55, 0, -0.58]), scale: 0.42, rotY: -90 }),
+        Object.freeze({ key: 'bakery-interior/stand_mixer', at: Object.freeze([1.54, 0.66, -0.61]), scale: 0.22, rotY: -90 }),
+        Object.freeze({ key: 'bakery-interior/macaron_pink', at: Object.freeze([1.35, 0.68, -0.43]), scale: 0.42 }),
+        Object.freeze({ key: 'bakery-interior/macaron_blue', at: Object.freeze([1.51, 0.68, -0.42]), scale: 0.42 }),
+        Object.freeze({ key: 'bakery-interior/macaron_yellow', at: Object.freeze([1.67, 0.68, -0.43]), scale: 0.42 }),
+      ]),
+    }),
+    Object.freeze({
+      id: 'hangingUtensils', kind: 'hangingUtensils', batch: 'color',
+      at: Object.freeze([0.72, 1.72, -1.43]),
+    }),
+  ]),
+  // ---- end V4/G79 ----------------------------------------------------------
+
   furniture: Object.freeze([
     // fridge — fixed interactable + decor slot (model swap kitchenFridgeLarge)
     Object.freeze({
