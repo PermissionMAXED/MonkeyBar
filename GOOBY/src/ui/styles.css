@@ -3719,6 +3719,241 @@
 
 /* =============================== end V4/G67 =============================== */
 
+/* ========= V4/G64 — recap cinematic overlay (PLAN4 §C-SYS2) ===============
+   Fullscreen takeover above every screen AND the sceneManager fade (z 9999):
+   the §C-SYS2.1 entry/exit fades must stay WHITE, so the overlay root sits at
+   z 10010 with a transparent stage over the 3D vignette canvas. rem-based
+   (§B3); text readable at 320 px @ 130 % via clamp() with vw ceilings. */
+
+body.g64-recap .g5-hud { display: none !important; } /* §C-SYS2.1 HUD hidden */
+
+.g64-root {
+  position: fixed;
+  inset: 0;
+  z-index: 10010;
+  pointer-events: auto; /* input limited to the overlay (§C-SYS2.1) */
+  overflow: hidden;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.g64-root.g64-boot .g64-stage,
+.g64-root.g64-boot .g64-bg { visibility: hidden; } /* behind the entry white */
+
+/* DOM colored-backdrop fallback layers (G63 absent — §E block G64) */
+.g64-bg {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 500ms ease;
+  background-size: cover;
+  background-position: center;
+}
+
+.g64-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: max(2.5rem, calc(var(--safe-top) + 1.5rem)) 1rem 1rem;
+  text-align: center;
+}
+
+/* intro title card (§C-SYS2.2: bars 0–1 before the first cut) */
+.g64-intro {
+  margin-top: 8vh;
+  transition: opacity 600ms ease, transform 600ms ease;
+}
+
+.g64-intro.g64-gone {
+  opacity: 0;
+  transform: scale(1.08);
+  pointer-events: none;
+}
+
+.g64-title {
+  font-size: clamp(2.25rem, 13vw, 4.5rem);
+  font-weight: 900;
+  color: #fff;
+  text-shadow: 0 4px 22px rgba(40, 20, 60, 0.45), 0 2px 4px rgba(40, 20, 60, 0.5);
+  letter-spacing: 0.0313rem;
+  animation: g64intro 900ms cubic-bezier(0.2, 1.6, 0.4, 1) both;
+}
+
+.g64-subtitle {
+  margin-top: 0.5rem;
+  font-size: clamp(0.9375rem, 4.5vw, 1.375rem);
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 2px 10px rgba(40, 20, 60, 0.5);
+  animation: g64intro 900ms 150ms cubic-bezier(0.2, 1.6, 0.4, 1) both;
+}
+
+@keyframes g64intro {
+  from { opacity: 0; transform: translateY(1.25rem) scale(0.85); }
+  to { opacity: 1; transform: none; }
+}
+
+/* beat-synced stat-text pops (§C-SYS2.6: 0.8→1.05→1.0 over popBeats) */
+.g64-pops {
+  position: absolute;
+  left: 0.75rem;
+  right: 0.75rem;
+  top: 16vh;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.g64-pop {
+  max-width: 92%;
+  font-size: clamp(1.375rem, 7vw, 2.5rem);
+  font-weight: 900;
+  line-height: 1.15;
+  color: #fff;
+  text-shadow: 0 4px 18px rgba(40, 20, 60, 0.5), 0 2px 3px rgba(40, 20, 60, 0.55);
+  font-variant-numeric: tabular-nums;
+  animation: g64pop 1200ms cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+
+@keyframes g64pop {
+  0% { opacity: 0; transform: scale(0.8); }
+  55% { opacity: 1; transform: scale(1.05); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.g64-pop-out { transition: opacity 300ms ease; opacity: 0 !important; }
+
+/* §C-SYS2.2 skip affordance: 13px→0.8125rem, 40 % opacity, no chrome,
+   bottom-right, 1 s fade-in from t = 10 s; padded to the 44 px tap floor. */
+.g64-skip {
+  position: absolute;
+  right: max(0.5rem, var(--safe-right));
+  bottom: max(0.75rem, var(--safe-bottom));
+  min-width: max(44px, 2.75rem);
+  min-height: max(44px, 2.75rem);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0.625rem 0.875rem;
+  font-size: 0.8125rem;
+  font-weight: 800;
+  color: #fff;
+  text-shadow: 0 1px 6px rgba(40, 20, 60, 0.6);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 1000ms ease;
+}
+
+.g64-skip.g64-skip-in { opacity: 0.4; pointer-events: auto; cursor: pointer; }
+
+/* §C-SYS2.2 skip → 300 ms hard cut flash */
+.g64-cut .g64-stage { transition: opacity 300ms ease; opacity: 0; }
+
+/* §C-SYS2.7 end card — OWN keyframes: the pop-in must END on the centering
+   translate (g64intro ends on `transform: none`, which would un-center it). */
+.g64-endcard {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(88vw, 22rem);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.625rem;
+  background: rgba(255, 255, 255, 0.96);
+  border-radius: 1.375rem;
+  box-shadow: 0 12px 40px rgba(40, 20, 60, 0.35);
+  padding: 1.25rem 1rem 1.125rem;
+  text-align: center;
+  animation: g64card 700ms cubic-bezier(0.2, 1.5, 0.4, 1) both;
+}
+
+@keyframes g64card {
+  from { opacity: 0; transform: translate(-50%, -44%) scale(0.85); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+.g64-ring { position: relative; width: 4.5rem; height: 4.5rem; }
+.g64-ring-bg { fill: #fff; stroke: rgba(74, 59, 54, 0.12); stroke-width: 6; }
+.g64-ring-fg {
+  fill: none;
+  stroke: var(--teal);
+  stroke-width: 6;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+  transition: stroke-dashoffset 1400ms cubic-bezier(0.3, 0.9, 0.3, 1);
+}
+
+.g64-ring-n {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  font-weight: 900;
+  color: var(--brown);
+  font-variant-numeric: tabular-nums;
+}
+
+.g64-end-title {
+  font-size: clamp(1.5rem, 8vw, 2.25rem);
+  font-weight: 900;
+  color: var(--brown);
+}
+
+.g64-end-line {
+  font-size: clamp(0.8125rem, 4vw, 1rem);
+  font-weight: 800;
+  color: var(--brown);
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+
+.g64-end-next { opacity: 0.6; }
+.g64-continue { margin-top: 0.375rem; min-width: 60%; }
+
+/* G58's beat-debug overlay (dev card 15 toggle — §A2 ±80 ms evidence) */
+.g64-debug {
+  display: none;
+  position: absolute;
+  left: max(0.5rem, var(--safe-left));
+  bottom: max(0.5rem, var(--safe-bottom));
+  max-width: 78vw;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.5rem;
+  background: rgba(0, 0, 0, 0.62);
+  color: #9fffb3;
+  font: 700 0.625rem/1.5 ui-monospace, Menlo, monospace;
+  white-space: pre-wrap;
+  pointer-events: none;
+}
+
+/* entry/exit white (§C-SYS2.1: 400 ms in, 500 ms out — always WHITE) */
+.g64-white {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  pointer-events: none;
+}
+
+/* profile „Rückblicke" empty state (§C-SYS2.8 — rows reuse .g59-pr-row) */
+.g64-pr-empty {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--brown);
+  opacity: 0.55;
+}
+
+/* =============================== end V4/G64 =============================== */
+
 /* ========= V4/G62 — purblePlace side-view rework (PLAN4-GAMES §G1) ========
    Comfy-Cakes control bar: hold-pedals (bottom row, left pair; the framework
    pause button keeps its bottom-right spot) + a full-width station dock ROW

@@ -26,6 +26,9 @@ import { stickerCounts } from '../systems/stickerBook.js';
 import { tG } from '../systems/gallery.logic.js';
 // V4/G69 (§C-SYS3): session/lifetime XP-source summaries for the profile row.
 import { sessionXpSources, knownLifetimeXpSources } from './xpInfoSheet.js';
+// V4/G64 (§C-SYS2.8): „Rückblicke" row model (pure) — the player itself is
+// lazy-imported on tap so the recap chunk never rides the profile mount.
+import { historyRows, agoLabel } from './recapOverlay.logic.js';
 
 const RING_R = 20;
 const RING_C = 2 * Math.PI * RING_R;
@@ -329,7 +332,49 @@ export function registerProfileScreen({ store, ui, audio, sceneManager }) {
             </button>
           </div>
         </div>`;
+        })()}
+        ${(() => {
+          // ── V4/G64 (§C-SYS2.8): „Rückblicke" — recap.history newest-first
+          // („Level 25 · vor 3 Tagen"); tap → replay from the STORED stats
+          // (no re-snapshot, reward text unchanged). Empty state until the
+          // first milestone recap has played. Wiring re-attached below.
+          const rows = historyRows(state.recap?.history);
+          const body64 = rows.length === 0
+            ? `<p class="g64-pr-empty">${t('recap.profile.empty')}</p>`
+            : rows.map((row) => {
+              const ago = agoLabel(row.at, now());
+              return `
+              <button class="g59-pr-row" data-g64-replay="${row.index}"
+                aria-label="${t('recap.profile.replay')}">
+                ${icon('star', 16)}
+                <span class="g59-pr-row-k">${t('recap.profile.row', {
+                  level: row.level,
+                  ago: t(ago.key, ago.vars),
+                })}</span>
+                ${icon('arrowRight', 14)}
+              </button>`;
+            }).join('');
+          return `
+        <div class="g23-pr-card">
+          <h2>${t('recap.profile.title')}</h2>
+          <div class="g59-pr-rows">${body64}</div>
+        </div>`;
         })()}`;
+
+      // ── V4/G64 (§C-SYS2.8): replay taps — lazy import keeps the recap
+      // player out of the profile chunk; the row index addresses the ORIGINAL
+      // history array entry.
+      body.querySelectorAll('[data-g64-replay]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const row = (store.get('recap')?.history ?? [])[Number(btn.dataset.g64Replay)];
+          if (!row) return;
+          audio.play('ui.confirmBig');
+          import('./recapOverlay.js')
+            .then((mod) => mod.replayRecap({ ...row, replay: true }))
+            .catch((err) => console.warn('[profile] recap replay unavailable:', err));
+        });
+      });
+      // ── end V4/G64 ──
 
       // V4/G59: album-row deep links (showScreen closes the profile first)
       body.querySelector('[data-g59="book"]')?.addEventListener('click', () => {

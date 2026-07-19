@@ -362,6 +362,22 @@ async function boot() {
   }
   // ---- end V4/G55 block ----
 
+  // ---- V4/G64: recap cinematic player (PLAN4 §C-SYS2, single marked block) ----
+  // Consumes G55's recap.pendingLevel: the overlay polls for the NEXT quiet
+  // home moment (home scene, no switch in flight, no active screen — never
+  // mid-gameplay §C-SYS2.1) and plays the beat-synced cinematic; finish/skip
+  // commits systems/recap.js completeRecap() atomically (§B5.2 — the ONLY
+  // pendingLevel-clearing path). Also registers the 'recap' §E1 scene (G63's
+  // vignettes, feature-detected w/ DOM backdrop fallback) and the dev-card-15
+  // playback API. Lazy import + guard: a broken recap chunk never kills boot.
+  try {
+    const { initRecapOverlay } = await import('./ui/recapOverlay.js');
+    initRecapOverlay({ store, ui, audio, sceneManager, assets });
+  } catch (err) {
+    console.warn('[boot] V4/G64 recap player unavailable:', err);
+  }
+  // ---- end V4/G64 block ----
+
   // First-gesture audio unlock (iOS requirement §D6).
   const unlock = () => {
     audio.init();
