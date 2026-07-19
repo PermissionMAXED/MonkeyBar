@@ -97,7 +97,7 @@ export function sleepRemainingMs(state, nowMs) {
  * @returns {object} new state
  */
 export function applyCompletedSleepGrants(state) {
-  const progress = applyXp({ xp: state.xp, level: state.level }, XP.COMPLETED_SLEEP);
+  const progress = applyXp({ xp: state.xp, level: state.level }, XP.COMPLETED_SLEEP, 'sleep'); // V4/G56: xpGranted source tag (§C-SYS3.1 #5)
   const counters = { ...(state.achievements?.counters ?? {}) };
   counters.sleeps = (Number(counters.sleeps) || 0) + 1;
   return {

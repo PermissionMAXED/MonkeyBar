@@ -115,7 +115,7 @@ export function applyGlob(state, nowMs) {
     weight = weightOnEat(weight, { junk: true });
   }
 
-  const prog = applyXp({ xp: state.xp, level: state.level }, NOUGAT.XP);
+  const prog = applyXp({ xp: state.xp, level: state.level }, NOUGAT.XP, 'nougat'); // V4/G56: xpGranted source tag (§C-SYS3.1 #12)
 
   return {
     ok: true,

@@ -416,9 +416,10 @@ export function initAchievements({ store, ui, audio, framework }) {
     }
   }
 
-  /** Apply XP through the §C5.2 curve (level-up coins ride economy's rule). */
-  function grantXp(state, amount) {
-    const p = applyXp({ xp: state.xp, level: state.level }, amount);
+  /** Apply XP through the §C5.2 curve (level-up coins ride economy's rule).
+   * V4/G56: forwards the §C-SYS3.1 `source` tag into applyXp's xpGranted emit. */
+  function grantXp(state, amount, source) {
+    const p = applyXp({ xp: state.xp, level: state.level }, amount, source);
     state.xp = p.xp;
     state.level = p.level;
     state.coins += p.coinsAwarded;
@@ -438,7 +439,7 @@ export function initAchievements({ store, ui, audio, framework }) {
       counters.questsDone = Math.floor(Number(counters.questsDone) || 0) + 1;
     });
     economyAward(store, r.reward.coins, 'quest');
-    store.update((state) => grantXp(state, r.reward.xp));
+    store.update((state) => grantXp(state, r.reward.xp, 'quest')); // V4/G56: xpGranted source tag (§C-SYS3.1 #6)
     checkNow();
     return r.reward;
   }
@@ -493,7 +494,7 @@ export function initAchievements({ store, ui, audio, framework }) {
       }
     });
     economyAward(store, r.reward.coins, 'album');
-    store.update((state) => grantXp(state, r.reward.xp ?? LEVELING.XP_SET_COMPLETE));
+    store.update((state) => grantXp(state, r.reward.xp ?? LEVELING.XP_SET_COMPLETE, 'collection')); // V4/G56: xpGranted source tag (§C-SYS3.1 #11)
     checkNow();
     return r.reward;
   }
@@ -512,7 +513,7 @@ export function initAchievements({ store, ui, audio, framework }) {
       counters.photosTaken = Math.floor(Number(counters.photosTaken) || 0) + 1;
       state.profile = profileStats.onPhoto(state.profile);
       if (g.xp > 0) {
-        grantXp(state, g.xp);
+        grantXp(state, g.xp, 'photo'); // V4/G56: xpGranted source tag (§C-SYS3.1 #9 — daily cap 5 suppresses via g.xp = 0)
         granted = g.xp;
       }
     });
@@ -556,7 +557,7 @@ export function initAchievements({ store, ui, audio, framework }) {
     if (dot <= 0) return;
     const setId = key.slice(0, dot);
     const entryId = key.slice(dot + 1);
-    store.update((state) => grantXp(state, LEVELING.XP_STICKER));
+    store.update((state) => grantXp(state, LEVELING.XP_STICKER, 'sticker')); // V4/G56: xpGranted source tag (§C-SYS3.1 #10)
     ui?.toast?.('toast.sticker', { name: t(`sticker.${setId}.${entryId}.name`), xp: LEVELING.XP_STICKER });
     audio?.play?.('sticker.get');
   }
@@ -605,10 +606,17 @@ export function initAchievements({ store, ui, audio, framework }) {
     // path bumps counters.harvests/.deliveries pays exactly once, through the
     // real leveling path (grantXp — level-ups pay coins like quest/sticker XP).
     const deliveriesDelta = cur.counters.deliveries - prev.counters.deliveries;
-    const counterXp =
-      Math.max(0, harvestsDelta) * LEVELING.XP_HARVEST +
-      Math.max(0, deliveriesDelta) * LEVELING.XP_DELIVERY;
-    if (counterXp > 0) store.update((state) => grantXp(state, counterXp));
+    // V4/G56 (§C-SYS3.1 #7/#8): the combined counter-diff grant splits into
+    // per-source grants so each xpGranted emit carries its own tag — the
+    // total XP paid per flush is unchanged (harvestXp + deliveryXp).
+    const harvestXp = Math.max(0, harvestsDelta) * LEVELING.XP_HARVEST;
+    const deliveryXp = Math.max(0, deliveriesDelta) * LEVELING.XP_DELIVERY;
+    if (harvestXp > 0 || deliveryXp > 0) {
+      store.update((state) => {
+        if (harvestXp > 0) grantXp(state, harvestXp, 'harvest'); // V4/G56: xpGranted source tag (§C-SYS3.1 #7)
+        if (deliveryXp > 0) grantXp(state, deliveryXp, 'delivery'); // V4/G56: xpGranted source tag (§C-SYS3.1 #8)
+      });
+    }
     // neverSick bookkeeping (§C5.3): latch every → sick transition
     if (cur.healthState === 'sick' && prev.healthState !== 'sick') track('sickEver');
     // first-time stickers (§C5.2): +5 XP + toast, whoever awarded them

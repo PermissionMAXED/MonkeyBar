@@ -301,7 +301,7 @@ export function feedGooby(slice, foodId) {
   const inventory = invRemove(slice.inventory, foodId);
   if (inventory == null) return { ok: false, reason: 'none' };
   const stats = applyDeltas(slice.stats, food.deltas);
-  const prog = applyXp({ xp: slice.xp, level: slice.level }, XP.FEED);
+  const prog = applyXp({ xp: slice.xp, level: slice.level }, XP.FEED, 'feed'); // V4/G56: xpGranted source tag (§C-SYS3.1 #2)
   return {
     ok: true,
     stats,
@@ -366,7 +366,7 @@ export function washRinse(slice, coverage) {
     hygiene: hygieneGain,
     fun: full ? INTERACT.FULL_WASH_FUN : 0,
   });
-  const prog = applyXp({ xp: slice.xp, level: slice.level }, full ? XP.FULL_WASH : 0);
+  const prog = applyXp({ xp: slice.xp, level: slice.level }, full ? XP.FULL_WASH : 0, 'wash'); // V4/G56: xpGranted source tag (§C-SYS3.1 #3 — partial wash grants 0 → no emit)
   return {
     stats,
     xp: prog.xp,
@@ -967,7 +967,7 @@ function wireGestures(s) {
       st.achievements.counters = gain.counters;
       if (gain.fun > 0) st.stats.fun = clampStat(st.stats.fun + gain.fun);
       if (gain.xp > 0) {
-        const prog = applyXp({ xp: st.xp, level: st.level }, gain.xp);
+        const prog = applyXp({ xp: st.xp, level: st.level }, gain.xp, 'pet'); // V4/G56: xpGranted source tag (§C-SYS3.1 #4 — daily cap 20 suppresses via gain.xp = 0)
         st.xp = prog.xp;
         st.level = prog.level;
         st.coins += prog.coinsAwarded;
@@ -1482,7 +1482,7 @@ function performFeed(s, foodId, screenPos) {
       st.collections = awarded.c;
       firstSticker = awarded.first;
       if (firstSticker) {
-        const prog = applyXp({ xp: st.xp, level: st.level }, LEVELING.XP_STICKER);
+        const prog = applyXp({ xp: st.xp, level: st.level }, LEVELING.XP_STICKER, 'sticker'); // V4/G56: xpGranted source tag (§C-SYS3.1 #10 — feed-drop first find)
         st.xp = prog.xp;
         st.level = prog.level;
         st.coins += prog.coinsAwarded;
