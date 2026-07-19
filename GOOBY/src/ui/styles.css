@@ -27,6 +27,15 @@
   --stat-fun: #ff7ba9;
   --card-radius: 1.25rem;
   --btn-radius: 1.125rem;
+  /* V4/G-UI style-audit tokens: the de-facto repeated values, named so new
+     surfaces stop drifting. --radius-row is the small rounded-rect family
+     (list rows, hint banners, square icon buttons); --ink-soft is muted BODY
+     text (≈4.6:1 on white — WCAG-ish), --ink-faint is caption/footnote text
+     (deliberately lighter); --track-soft is the shared progress-track bed. */
+  --radius-row: 0.875rem;
+  --ink-soft: rgba(74, 59, 54, 0.72);
+  --ink-faint: rgba(74, 59, 54, 0.55);
+  --track-soft: rgba(74, 59, 54, 0.1);
   --shadow-soft: 0 6px 24px rgba(74, 59, 54, 0.14);
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -359,7 +368,7 @@
   align-items: center;
   justify-content: space-between;
   background: var(--bg-cream);
-  border-radius: 0.875rem;
+  border-radius: var(--radius-row);
   padding: 0.75rem 1rem;
   font-size: 1.125rem;
   font-weight: 700;
@@ -370,6 +379,11 @@
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
+}
+/* V4/G-UI: the coin glyph is yellow everywhere else (.g5-coins/.shop-coins
+   svg) — the results row was the one place it rendered ink-brown. */
+.mg-results-row .mg-value svg {
+  color: var(--yellow);
 }
 .mg-badge {
   display: inline-block;
@@ -561,7 +575,7 @@
 .settings-status {
   font-size: 0.875rem;
   font-weight: 700;
-  opacity: 0.6;
+  opacity: 0.72; /* V4/G-UI: was .6 (≈3.4:1) — .72 ≈ 4.7:1 body-text contrast */
 }
 .settings-danger {
   justify-content: center;
@@ -673,7 +687,7 @@
 }
 .shop-hint {
   background: rgba(255, 209, 102, 0.28);
-  border-radius: 0.875rem;
+  border-radius: var(--radius-row);
   padding: 0.5625rem 0.875rem;
   font-size: 0.875rem;
   font-weight: 700;
@@ -693,7 +707,7 @@
   border: none;
   min-height: max(44px, 2.875rem);
   padding: 0.375rem 0.25rem;
-  border-radius: 0.875rem;
+  border-radius: var(--radius-row);
   background: rgba(255, 255, 255, 0.7);
   color: var(--brown);
   font-family: inherit;
@@ -1002,7 +1016,7 @@
   width: 2.75rem;
   height: 2.75rem;
   border: none;
-  border-radius: 0.875rem;
+  border-radius: var(--radius-row);
   background: var(--bg-cream);
   color: var(--brown);
   font-family: inherit;
@@ -1195,7 +1209,7 @@
 }
 .vet-hint {
   background: rgba(255, 209, 102, 0.28);
-  border-radius: 0.875rem;
+  border-radius: var(--radius-row);
   padding: 0.5625rem 0.875rem;
   font-size: 0.875rem;
   font-weight: 700;
@@ -1495,7 +1509,7 @@
   text-align: center;
   font-size: 0.9375rem;
   font-weight: 700;
-  color: rgba(74, 59, 54, 0.55);
+  color: var(--ink-faint);
 }
 /* crop / sell rows — scrollable list, 8 crops max (§C2.3) */
 .g19-rows {
@@ -1520,7 +1534,7 @@
   flex: none;
   gap: 0.5rem;
   background: var(--bg-cream);
-  border-radius: 0.875rem;
+  border-radius: var(--radius-row);
   padding: 0.5rem 0.625rem;
   min-height: max(44px, 3.5rem);
 }
@@ -2966,7 +2980,7 @@
 .g58-codes-sub {
   margin: 0 0.25rem 0.625rem;
   font-size: 0.8125rem;
-  color: rgba(74, 59, 54, 0.72);
+  color: var(--ink-soft);
 }
 
 .g58-codes-inputrow {
@@ -3039,7 +3053,7 @@
 .g58-codes-date {
   font-size: 0.71875rem;
   font-weight: 600;
-  color: rgba(74, 59, 54, 0.55);
+  color: var(--ink-faint);
 }
 
 .g58-codes-effect {
@@ -3161,7 +3175,7 @@
   flex: 1;
   min-width: 8rem;
   font-size: 0.71875rem;
-  color: rgba(74, 59, 54, 0.72);
+  color: var(--ink-soft);
 }
 
 .g58-cheat-copy {
@@ -3207,7 +3221,7 @@
   margin-top: 0.375rem;
   font-size: 0.8125rem;
   font-weight: 700;
-  color: rgba(74, 59, 54, 0.72);
+  color: var(--ink-soft);
 }
 
 .mg-loading-dots {
@@ -3955,11 +3969,12 @@ body.g64-recap .g5-hud { display: none !important; } /* §C-SYS2.1 HUD hidden */
 /* =============================== end V4/G64 =============================== */
 
 /* ========= V4/G62 — purblePlace side-view rework (PLAN4-GAMES §G1) ========
-   Comfy-Cakes control bar: hold-pedals (bottom row, left pair; the framework
-   pause button keeps its bottom-right spot) + a full-width station dock ROW
-   directly above them whose buttons are positioned per-frame by JS under
-   their projected nozzle x (width/height/transform are inline px — the
-   ≥56 real-px §G1.7 floor is enforced in purblePlace.js updateDock()).
+   Comfy-Cakes control bar: round 4.5 rem hold-pedals (§G1.7: ◀ bottom-left,
+   ▶ bottom-right inward of the 3.25 rem framework pause) + a full-width
+   station dock ROW directly above them whose buttons are positioned
+   per-frame by JS under their projected nozzle x (width/height/transform
+   are inline px — the ≥56 real-px §G1.7 floor is enforced in purblePlace.js
+   updateDock()).
    Ticket board + §G1.4 belt-overview strip live at the top, display-only.
    All gated props are rem (§B3); px only where px-audit exempts them. */
 
@@ -4064,19 +4079,21 @@ body.g64-recap .g5-hud { display: none !important; } /* §C-SYS2.1 HUD hidden */
   pointer-events: none;
 }
 
-/* ---- bottom row: hold pedals (§G1.3/§G1.7 — ≥56 real px at every scale) - */
+/* ---- bottom row: hold pedals (§G1.3/§G1.7 — 4.5 rem ROUND, 72 px @100 %,
+   56 real-px floor at 85 % uiScale; held = scale 0.92 + color deepen, the
+   g7-brake pattern — pointer capture keeps the press alive through it) ---- */
 .g62-pedal {
   position: absolute;
   bottom: calc(0.75rem + var(--safe-bottom));
-  width: max(56px, 4.25rem);
-  height: max(56px, 3.5rem);
+  width: max(56px, 4.5rem);
+  height: max(56px, 4.5rem);
   min-height: 0;
   padding: 0;
   border: none;
-  border-radius: 1rem;
+  border-radius: 50%;
   background: linear-gradient(#8f7c72, #6f5c52);
   color: var(--bg-cream);
-  font-size: 1.625rem;
+  font-size: 2rem;
   line-height: 1;
   box-shadow: 0 4px 0 rgba(58, 44, 38, 0.9), var(--shadow-soft);
   pointer-events: auto;
@@ -4089,21 +4106,33 @@ body.g64-recap .g5-hud { display: none !important; } /* §C-SYS2.1 HUD hidden */
   left: max(0.75rem, var(--safe-left));
 }
 .g62-pedal-fwd {
-  left: calc(max(0.75rem, var(--safe-left)) + max(56px, 4.25rem) + 0.5rem);
+  /* §G1.7: bottom-RIGHT, inward of the framework pause (3.25 rem round at
+     right 16px) so the two never touch at any uiScale */
+  right: calc(16px + var(--safe-right) + 3.25rem + 0.5rem);
 }
 .g62-pedal.g62-held {
-  transform: translateY(0.1875rem);
+  transform: scale(0.92);
   box-shadow: 0 1px 0 rgba(58, 44, 38, 0.9);
   background: linear-gradient(#7d685e, #5d4a41);
+}
+@media (max-width: 359px) {
+  /* §G1.7: pedals shift inward 0.5 rem at < 360 px — keeps the ◀/▶ pair
+     clear of each other and of the pause at 130 % UI scale */
+  .g62-pedal-back {
+    left: calc(max(0.75rem, var(--safe-left)) + 0.5rem);
+  }
+  .g62-pedal-fwd {
+    right: calc(16px + var(--safe-right) + 3.25rem + 1rem);
+  }
 }
 
 /* ---- station dock row (sits directly above the pedal row) --------------- */
 .g62-dock {
   position: absolute;
-  bottom: calc(0.75rem + var(--safe-bottom) + max(56px, 3.5rem) + 0.5rem);
+  bottom: calc(0.75rem + var(--safe-bottom) + max(56px, 4.5rem) + 0.5rem);
   left: max(0.375rem, var(--safe-left));
   right: max(0.375rem, var(--safe-right));
-  height: max(58px, 3.75rem);
+  height: max(58px, 4rem); /* §G1.7 dock row height 4.0 rem */
   pointer-events: none;
 }
 .g62-drop {
@@ -4170,3 +4199,45 @@ body.g64-recap .g5-hud { display: none !important; } /* §C-SYS2.1 HUD hidden */
   to { box-shadow: 0 3px 0 rgba(74, 59, 54, 0.4), 0 0 12px 5px rgba(255, 123, 169, 1); }
 }
 /* =============================== end V4/G62 =============================== */
+
+/* ================= V4/G-UI: style audit & polish (§C11.2 parity) ==========
+   The G47 reskin framed quest cards, album pages, shop cards and wardrobe
+   items — but their sibling surfaces (achievement tiles, profile cards, vet
+   clinic cards) kept the plain pre-reskin rounded-rect look. Same pattern,
+   same sprites, padding compensated exactly like the G47 blocks above. */
+
+/* --- achievements: tiles match the quest cards (same list-row family) ----- */
+.screen-achievements .g12-ach-tile {
+  border: 0.5rem solid transparent;
+  border-image: var(--g47-card) 24 / 0.5rem stretch;
+  border-radius: 0.375rem;
+  background-clip: padding-box;
+  padding: 0.125rem 0.375rem; /* compensates the frame border (was 0.625rem 0.875rem) */
+}
+
+/* --- profile: stat/summary cards match the album/quest card frames ------- */
+.screen-profile .g23-pr-card {
+  border: 0.5rem solid transparent;
+  border-image: var(--g47-card) 24 / 0.5rem stretch;
+  border-radius: 0.375rem;
+  background-clip: padding-box;
+  padding: 0.25rem 0.375rem; /* compensates the frame border (was 0.75rem 0.875rem) */
+}
+
+/* --- vet clinic: doctor card = card frame; action cards = the flat frame
+   the shop's buyable item cards wear (both are tappable commerce rows) ----- */
+.vet-doc {
+  border: 0.5rem solid transparent;
+  border-image: var(--g47-card) 24 / 0.5rem stretch;
+  border-radius: 0.375rem;
+  background-clip: padding-box;
+  padding: 0.25rem 0.375rem; /* compensates the frame border (was 0.75rem 0.875rem) */
+}
+.vet-action {
+  border: 0.3125rem solid transparent;
+  border-image: var(--g47-flat) 12 / 0.3125rem stretch;
+  border-radius: 0.375rem;
+  background-clip: padding-box;
+  padding: 0.5rem 0.625rem; /* compensates the frame border (was 0.8125rem 0.9375rem) */
+}
+/* ============================== end V4/G-UI =============================== */

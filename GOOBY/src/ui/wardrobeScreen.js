@@ -79,7 +79,7 @@ const WARDROBE_CSS = `
 .g12-wr-item-sub.g12-sub-equipped{color:var(--pink-dark);opacity:1;}
 .g12-wr-item-sub.g12-sub-owned{color:var(--teal-dark);opacity:1;}
 .g12-wr-buy{margin-top:0.125rem;min-height:max(44px, 2.75rem);padding:0.25rem 0.875rem;font-size:0.8125rem;border-radius:0.75rem;} /* F3: ≥44px touch target */
-.g12-wr-hint{width:100%;max-width:27.5rem;text-align:center;font-size:0.7813rem;font-weight:700;opacity:.55;padding-bottom:0.875rem;}
+.g12-wr-hint{width:100%;max-width:27.5rem;text-align:center;font-size:0.7813rem;font-weight:700;opacity:.72;padding-bottom:0.875rem;} /* V4/G-UI: .55→.72 — instructional body-text contrast (cream bg) */
 `;
 
 /** @type {Map<string, string>} outfit id → rendered thumbnail dataURL (session cache) */

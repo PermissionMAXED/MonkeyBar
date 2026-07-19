@@ -25,8 +25,8 @@ const ACH_CSS = `
 .g12-ach-tile.g12-done .g12-ach-medal{background:var(--yellow);color:#fff;}
 .g12-ach-body{flex:1;min-width:0;}
 .g12-ach-name{font-size:0.9375rem;font-weight:800;color:var(--brown);}
-.g12-ach-desc{font-size:0.75rem;font-weight:700;opacity:.55;margin-top:1px;}
-.g12-ach-bar{margin-top:0.375rem;height:0.5rem;border-radius:999px;background:rgba(74,59,54,.1);overflow:hidden;}
+.g12-ach-desc{font-size:0.75rem;font-weight:700;opacity:.72;margin-top:1px;} /* V4/G-UI: .55→.72 — body-text contrast ≈4.7:1 (WCAG-ish) */
+.g12-ach-bar{margin-top:0.375rem;height:0.5rem;border-radius:999px;background:var(--track-soft);overflow:hidden;}
 .g12-ach-fill{display:block;height:100%;border-radius:999px;background:var(--teal);transition:width 300ms ease;}
 .g12-ach-tile.g12-done .g12-ach-fill{background:var(--yellow);}
 .g12-ach-side{flex:none;text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:0.1875rem;}

@@ -80,7 +80,7 @@ const POLL_MS = 400;
 const WN_CSS = `
 .g30-wn{text-align:left;}
 .g30-wn-title{margin:0 0 0.125rem;font-size:1.5rem;font-weight:800;color:var(--brown);text-align:center;}
-.g30-wn-sub{margin:0 0 0.75rem;font-size:0.8438rem;font-weight:700;opacity:.6;text-align:center;line-height:1.35;}
+.g30-wn-sub{margin:0 0 0.75rem;font-size:0.8438rem;font-weight:700;opacity:.72;text-align:center;line-height:1.35;} /* V4/G-UI: .6→.72 — body-text contrast ≈4.7:1 (WCAG-ish) */
 .g30-wn-list{display:flex;flex-direction:column;gap:0.5rem;margin:0 0 0.875rem;max-height:52vh;overflow-y:auto;-webkit-overflow-scrolling:touch;}
 .g30-wn-item{display:flex;align-items:flex-start;gap:0.625rem;background:rgba(74,59,54,.05);border-radius:0.875rem;padding:0.5625rem 0.75rem;}
 .g30-wn-ico{flex:none;font-size:1.125rem;line-height:1.3;}

@@ -86,45 +86,48 @@ function tintOf(setId, entryId) {
   return `hsl(${h % 360} 62% 72%)`;
 }
 
+/* V4/G-UI: G23 block swept px→rem (§B3 — was the last FILE_ALLOW holdout in
+   px-audit; values ÷16, matching the sibling screens' rem conventions:
+   27.5rem rail, 0.625rem gaps, max(44px,2.75rem) tap floors). */
 const ALBUM_CSS = `
 .screen-album{justify-content:flex-start;overflow-y:auto;-webkit-overflow-scrolling:touch;}
-.g23-al-head{width:100%;max-width:440px;display:flex;align-items:center;gap:10px;margin:6px 0 6px;flex:none;}
-.g23-al-title{flex:1;min-width:0;margin:0;font-size:clamp(15px,5.5vw,30px);font-weight:800;color:var(--brown);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;} /* V3/FIX-C: 6vw→5.5vw — "Sticker Album" beside the n/28 pill at 320px @ 130% */
-.g23-al-count{flex:none;background:var(--white);border-radius:999px;padding:8px 12px;font-size:15px;font-weight:800;color:var(--teal-dark);box-shadow:var(--shadow-soft);font-variant-numeric:tabular-nums;}
+.g23-al-head{width:100%;max-width:27.5rem;display:flex;align-items:center;gap:0.625rem;margin:0.375rem 0 0.375rem;flex:none;}
+.g23-al-title{flex:1;min-width:0;margin:0;font-size:clamp(0.9375rem,5.5vw,1.875rem);font-weight:800;color:var(--brown);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;} /* V3/FIX-C: 6vw→5.5vw — "Sticker Album" beside the n/28 pill at 320px @ 130% */
+.g23-al-count{flex:none;background:var(--white);border-radius:999px;padding:0.5rem 0.75rem;font-size:0.9375rem;font-weight:800;color:var(--teal-dark);box-shadow:var(--shadow-soft);font-variant-numeric:tabular-nums;}
 /* V3/FIX-C (E9/E13 P1): a single 4-tab row can never hold the DE set names
    („Stadt-Sehenswürdigkeiten") at 320px — the strip wraps into a 2×2 grid and
    labels wrap to 2 hyphenated lines instead of ellipsizing („Stadt-…"). */
-.g23-al-tabs{width:100%;max-width:440px;display:flex;flex-wrap:wrap;gap:6px;flex:none;margin-bottom:8px;}
-.g23-al-tab{flex:1 1 40%;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:5px;border:none;border-radius:14px;min-height:44px;padding:9px 4px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;background:rgba(255,255,255,.6);color:var(--brown);box-shadow:var(--shadow-soft);-webkit-tap-highlight-color:transparent;} /* V2 fix (E16): >=44px hit target */
+.g23-al-tabs{width:100%;max-width:27.5rem;display:flex;flex-wrap:wrap;gap:0.375rem;flex:none;margin-bottom:0.5rem;}
+.g23-al-tab{flex:1 1 40%;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:0.3125rem;border:none;border-radius:var(--radius-row);min-height:max(44px,2.75rem);padding:0.5625rem 0.25rem;font-family:inherit;font-size:0.75rem;font-weight:800;cursor:pointer;background:rgba(255,255,255,.6);color:var(--brown);box-shadow:var(--shadow-soft);-webkit-tap-highlight-color:transparent;} /* V2 fix (E16): >=44px hit target */
 .g23-al-tab span{min-width:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:break-word;hyphens:auto;text-align:center;line-height:1.15;}
 .g23-al-tab.g23-active{background:var(--teal);color:#fff;}
-.g23-al-page{width:100%;max-width:440px;background:var(--white);border-radius:18px;box-shadow:var(--shadow-soft);padding:14px;flex:none;margin-bottom:18px;}
-.g23-al-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(76px,1fr));gap:10px;}
-.g23-al-slot{position:relative;display:flex;flex-direction:column;align-items:center;gap:4px;border:none;background:none;padding:0;font-family:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;}
-.g23-al-art{width:58px;height:58px;border-radius:16px;display:flex;align-items:center;justify-content:center;box-shadow:var(--shadow-soft);}
+.g23-al-page{width:100%;max-width:27.5rem;background:var(--white);border-radius:1.125rem;box-shadow:var(--shadow-soft);padding:0.875rem;flex:none;margin-bottom:1.125rem;}
+.g23-al-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(4.75rem,1fr));gap:0.625rem;}
+.g23-al-slot{position:relative;display:flex;flex-direction:column;align-items:center;gap:0.25rem;border:none;background:none;padding:0;font-family:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+.g23-al-art{width:3.625rem;height:3.625rem;border-radius:1rem;display:flex;align-items:center;justify-content:center;box-shadow:var(--shadow-soft);}
 .g23-al-slot.g23-owned .g23-al-art{color:rgba(42,26,60,.75);}
-.g23-al-slot.g23-missing .g23-al-art{background:rgba(74,59,54,.1)!important;color:rgba(74,59,54,.28);}
-.g23-al-name{max-width:80px;font-size:10px;font-weight:800;color:var(--brown);text-align:center;line-height:1.15;overflow:hidden;text-overflow:ellipsis;}
+.g23-al-slot.g23-missing .g23-al-art{background:var(--track-soft)!important;color:rgba(74,59,54,.28);}
+.g23-al-name{max-width:5rem;font-size:0.625rem;font-weight:800;color:var(--brown);text-align:center;line-height:1.15;overflow:hidden;text-overflow:ellipsis;}
 .g23-al-slot.g23-missing .g23-al-name{opacity:.45;}
-.g23-al-n{position:absolute;top:-4px;right:2px;background:var(--pink);color:#fff;border-radius:999px;font-size:10px;font-weight:800;padding:2px 6px;font-variant-numeric:tabular-nums;}
-.g23-al-flavor{min-height:16px;margin-top:10px;font-size:12px;font-weight:700;color:var(--brown);opacity:.65;text-align:center;}
-.g23-al-setrow{display:flex;align-items:center;gap:10px;margin-top:12px;}
-.g23-al-bar{flex:1;height:9px;border-radius:999px;background:rgba(74,59,54,.1);overflow:hidden;}
+.g23-al-n{position:absolute;top:-0.25rem;right:0.125rem;background:var(--pink);color:#fff;border-radius:999px;font-size:0.625rem;font-weight:800;padding:0.125rem 0.375rem;font-variant-numeric:tabular-nums;}
+.g23-al-flavor{min-height:1rem;margin-top:0.625rem;font-size:0.75rem;font-weight:700;color:var(--brown);opacity:.72;text-align:center;} /* V4/G-UI: .65→.72 — body-text contrast */
+.g23-al-setrow{display:flex;align-items:center;gap:0.625rem;margin-top:0.75rem;}
+.g23-al-bar{flex:1;height:0.5625rem;border-radius:999px;background:var(--track-soft);overflow:hidden;}
 .g23-al-fill{display:block;height:100%;border-radius:999px;background:var(--teal);transition:width 300ms ease;}
-.g23-al-progress{flex:none;font-size:12px;font-weight:800;opacity:.6;font-variant-numeric:tabular-nums;}
-.g23-al-claim{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:5px;border:none;border-radius:999px;min-height:44px;min-width:44px;padding:8px 14px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;background:rgba(74,59,54,.08);color:rgba(74,59,54,.45);-webkit-tap-highlight-color:transparent;} /* V2 fix (E16): >=44px hit target */
+.g23-al-progress{flex:none;font-size:0.75rem;font-weight:800;opacity:.6;font-variant-numeric:tabular-nums;}
+.g23-al-claim{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:0.3125rem;border:none;border-radius:999px;min-height:max(44px,2.75rem);min-width:max(44px,2.75rem);padding:0.5rem 0.875rem;font-family:inherit;font-size:0.75rem;font-weight:800;cursor:pointer;background:rgba(74,59,54,.08);color:rgba(74,59,54,.45);-webkit-tap-highlight-color:transparent;} /* V2 fix (E16): >=44px hit target */
 .g23-al-claim.g23-ready{background:var(--yellow);color:#fff;box-shadow:var(--shadow-soft);}
 .g23-al-claim.g23-claimed-btn{color:var(--teal-dark);}
 
 /* ── V3/G34: top-level album tabs + Stickerbuch (§C5.3 — rem-based) ─────── */
-.g34-al-toptabs{width:100%;max-width:440px;display:flex;gap:0.375rem;flex:none;margin-bottom:0.5rem;}
+.g34-al-toptabs{width:100%;max-width:27.5rem;display:flex;gap:0.375rem;flex:none;margin-bottom:0.5rem;}
 /* V3/FIX-C (E8 P2): vw-capped font + inline (non-absolute) count badge — the
    absolutely-positioned badge used to sit ON the tab text at 320px @ 130% DE. */
 .g34-al-toptab{flex:1;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:0.3125rem;border:none;border-radius:0.875rem;min-height:max(44px,2.75rem);padding:0.5625rem 0.25rem;font-family:inherit;font-size:min(0.8125rem,4vw);font-weight:800;cursor:pointer;background:rgba(255,255,255,.6);color:var(--brown);box-shadow:var(--shadow-soft);-webkit-tap-highlight-color:transparent;position:relative;}
 .g34-al-toptab.g34-active{background:var(--pink);color:#fff;}
 .g34-al-toptab>span:not(.g34-sb-newdot){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .g34-al-toptab .g34-sb-newdot{position:static;flex:none;}
-.g34-sb-pager{width:100%;max-width:440px;flex:none;display:flex;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;scrollbar-width:none;border-radius:1.125rem;}
+.g34-sb-pager{width:100%;max-width:27.5rem;flex:none;display:flex;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;scrollbar-width:none;border-radius:1.125rem;}
 .g34-sb-pager::-webkit-scrollbar{display:none;}
 .g34-sb-page{flex:0 0 100%;min-width:100%;scroll-snap-align:center;scroll-snap-stop:always;background:var(--white);border-radius:1.125rem;box-shadow:var(--shadow-soft);padding:0.875rem;box-sizing:border-box;}
 .g34-sb-pagetitle{margin:0 0 0.625rem;font-size:0.8125rem;font-weight:800;color:var(--brown);opacity:.55;text-align:center;}
@@ -156,7 +159,7 @@ const ALBUM_CSS = `
 
 /* ── V4/G59: Fotos tab + viewer + secret slot (§C-SYS9.2/§C-SYS5.4 — rem) ── */
 .g59-ph-wrap{width:100%;max-width:27.5rem;display:flex;flex-direction:column;align-items:center;flex:none;margin-bottom:1.125rem;}
-.g59-ph-note{width:100%;margin:0 0 0.5rem;font-size:0.6875rem;font-weight:700;color:var(--brown);opacity:.55;text-align:center;}
+.g59-ph-note{width:100%;margin:0 0 0.5rem;font-size:0.6875rem;font-weight:700;color:var(--brown);opacity:.72;text-align:center;} /* V4/G-UI: .55→.72 — instructional body-text contrast */
 .g59-ph-grid{width:100%;display:grid;grid-template-columns:repeat(3,1fr);gap:0.375rem;}
 .g59-ph-cell{position:relative;border:none;background:rgba(74,59,54,.08);border-radius:0.875rem;padding:0;aspect-ratio:1;min-width:0;min-height:max(44px,2.75rem);overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent;}
 .g59-ph-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;}

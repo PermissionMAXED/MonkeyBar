@@ -46,7 +46,7 @@ const PROFILE_CSS = `
 .g23-pr-portrait img{width:100%;height:100%;object-fit:cover;}
 .g23-pr-idbody{flex:1;min-width:0;}
 .g23-pr-name{font-size:1.1875rem;font-weight:800;color:var(--brown);}
-.g23-pr-sub{font-size:0.75rem;font-weight:700;opacity:.55;margin-top:0.125rem;}
+.g23-pr-sub{font-size:0.75rem;font-weight:700;opacity:.72;margin-top:0.125rem;} /* V4/G-UI: .55→.72 — body-text contrast ≈4.7:1 (WCAG-ish) */
 .g23-pr-ring{position:relative;width:3.25rem;height:3.25rem;flex:none;}
 .g23-pr-ring svg{transform:rotate(-90deg);}
 .g23-pr-ring .g23-pr-ring-bg{fill:rgba(255,255,255,.92);stroke:rgba(74,59,54,.12);stroke-width:5;}
@@ -62,7 +62,7 @@ const PROFILE_CSS = `
 @media (max-width:340px){.g23-pr-grid{grid-template-columns:1fr;}}
 .g23-pr-rowline{display:flex;align-items:baseline;gap:0.5rem;min-width:0;}
 /* V3/FIX-C: totals keys („Münzen ausgegeben") wrap to 2 lines at 130% */
-.g23-pr-k{flex:1;min-width:0;font-size:0.75rem;font-weight:700;color:var(--brown);opacity:.6;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:break-word;hyphens:auto;line-height:1.2;}
+.g23-pr-k{flex:1;min-width:0;font-size:0.75rem;font-weight:700;color:var(--brown);opacity:.72;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:break-word;hyphens:auto;line-height:1.2;} /* V4/G-UI: .6→.72 — body-text contrast */
 .g23-pr-v{flex:none;font-size:0.8125rem;font-weight:800;color:var(--brown);font-variant-numeric:tabular-nums;}
 .g23-pr-games{display:flex;flex-direction:column;gap:0.25rem;max-height:17.5rem;overflow-y:auto;-webkit-overflow-scrolling:touch;}
 .g23-pr-game{display:flex;align-items:center;gap:0.5rem;padding:0.3125rem 0.375rem;border-radius:0.75rem;}
@@ -78,7 +78,7 @@ const PROFILE_CSS = `
 .g23-pr-set{display:flex;align-items:center;gap:0.625rem;}
 /* V3/FIX-C (E13 P1): „Stadt-Sehenswürdigkeiten" wraps to 2 lines, no ellipsis */
 .g23-pr-set-name{flex:none;width:6.875rem;font-size:0.75rem;font-weight:800;color:var(--brown);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:break-word;hyphens:auto;line-height:1.2;}
-.g23-pr-set-bar{flex:1;height:0.5625rem;border-radius:999px;background:rgba(74,59,54,.1);overflow:hidden;}
+.g23-pr-set-bar{flex:1;height:0.5625rem;border-radius:999px;background:var(--track-soft);overflow:hidden;}
 .g23-pr-set-fill{display:block;height:100%;border-radius:999px;background:var(--teal);}
 .g23-pr-set-n{flex:none;font-size:0.75rem;font-weight:800;opacity:.6;font-variant-numeric:tabular-nums;}
 /* ── V4/G59 (§C-SYS9.3-2): album rows under the sticker progress card ──── */

@@ -24,10 +24,7 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
 
 /** Files whose UI CSS is NOT yet swept (owner justification required). */
 const FILE_ALLOW = new Set([
-  // G34 owns albumScreen.js in wave 1b (Stickerbuch styles are component-
-  // injected); its px→rem sweep is flagged for the wave-2 owner in G33's
-  // report. Remove this entry once swept.
-  'src/ui/albumScreen.js',
+  // (empty — V4/G-UI swept the last holdout, albumScreen.js' G23 block)
 ]);
 
 /** Properties gated by §B3 (px here breaks uiScale scaling). */

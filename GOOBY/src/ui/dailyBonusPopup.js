@@ -19,7 +19,7 @@ import { icon } from './icons.js';
 const DAILY_CSS = `
 .g12-daily{text-align:center;}
 .g12-daily-title{margin:0 0 0.125rem;font-size:1.5rem;font-weight:800;color:var(--brown);}
-.g12-daily-sub{margin:0 0 0.875rem;font-size:0.8438rem;font-weight:700;opacity:.6;}
+.g12-daily-sub{margin:0 0 0.875rem;font-size:0.8438rem;font-weight:700;opacity:.72;} /* V4/G-UI: .6→.72 — body-text contrast ≈4.7:1 (WCAG-ish) */
 .g12-daily-cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:0.3125rem;margin-bottom:0.875rem;}
 .g12-daily-slot{display:flex;flex-direction:column;align-items:center;gap:0.125rem;min-width:0;background:rgba(74,59,54,.06);border:0.1563rem solid transparent;border-radius:0.8125rem;padding:0.4375rem 1px;}
 .g12-daily-slot-day{font-size:0.625rem;font-weight:800;opacity:.55;white-space:nowrap;}

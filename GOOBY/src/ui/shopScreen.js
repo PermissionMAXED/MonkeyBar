@@ -26,7 +26,7 @@
 // can import this file headlessly.
 
 import { ECONOMY, ROOMS, UNLOCKS, ITEM_PRICES } from '../data/constants.js'; // V2/G22: + UNLOCKS/ITEM_PRICES
-import { t } from '../data/strings.js';
+import { t, getLang } from '../data/strings.js'; // V4/G-UI: getLang for hyphens:auto lang tagging (FIX-C precedent)
 import { FOODS } from '../data/foods.js';
 import { WALLPAPERS, FLOORS, furnitureFor, roomSlots } from '../data/furniture.js';
 import { CROPS } from '../data/crops.js'; // V2/G22: seed rows in the Care section (§C7)
@@ -157,7 +157,7 @@ let skinRenderer = null;
 const SHOP_FIX_CSS = `
 .swatch .swatch-name{max-width:100%;text-align:center;line-height:1.2;overflow-wrap:anywhere;}
 .swatch .swatch-price{max-width:100%;flex-wrap:wrap;justify-content:center;text-align:center;}
-.shop-tabs .shop-tab{min-width:0;min-height:max(44px, 2.875rem);overflow:hidden;overflow-wrap:anywhere;font-size:clamp(0.6875rem,3.4vw,0.8125rem);line-height:1.2;padding:0.375rem 0.1875rem;}
+.shop-tabs .shop-tab{min-width:0;min-height:max(44px, 2.875rem);overflow:hidden;overflow-wrap:break-word;hyphens:auto;font-size:clamp(0.6875rem,3.4vw,0.8125rem);line-height:1.2;padding:0.375rem 0.1875rem;} /* V4/G-UI: anywhere→break-word+hyphens — EN "Furniture" broke mid-word with no hyphen (album-tab convention) */
 /* V3/G40 (§C13.3): compact arcade-style lock rows in the shop's outfit tab. */
 .g40-shop-outfit-locks{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0.375rem;margin-top:0.75rem;}
 .g40-shop-outfit-lock{min-width:0;display:flex;align-items:center;justify-content:space-between;gap:0.25rem;padding:0.375rem 0.5rem;border-radius:0.75rem;background:rgba(74,59,54,.08);font-size:0.6875rem;font-weight:800;}
@@ -190,6 +190,12 @@ export function sickShopFocus(health, medicineCount, pulseShown = false) {
     pulseMedicine: sick && Number(medicineCount) <= 0 && !pulseShown,
   });
 }
+
+/** V4/G-UI: soft-hyphen break points for one-word tab labels ≥8 chars (EN
+ * "Furniture" broke mid-word with no hyphen — hyphens:auto needs dictionaries
+ * that not every runtime ships). FIX-C's hy() precedent; display-only. */
+const hyTab = (s) => String(s)
+  .replace(/[A-Za-zÀ-ÿ]{8,}/g, (w) => w.replace(/(.{5})(?=.{3})/g, '$1\u00AD'));
 
 /**
  * Register the shop screen + quick-delivery hooks. Called once from the G11
@@ -1012,7 +1018,8 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
         const b = document.createElement('button');
         b.className = `shop-tab${tab === id ? ' shop-tab-on' : ''}`;
         b.dataset.tab = id;
-        b.textContent = t(key);
+        b.lang = getLang(); // V4/G-UI: language-correct hyphenation (wardrobe precedent)
+        b.textContent = hyTab(t(key));
         b.addEventListener('click', () => {
           audio.play('ui.tap');
           tab = id;
