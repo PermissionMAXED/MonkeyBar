@@ -135,6 +135,11 @@ export function initWhatsNew({ store, ui, audio, sceneManager }) {
     mount(el, params = {}) {
       const version = params.version === 3 ? 3 : 2;
       const isV3 = version === 3;
+      // V3/FIX-D (E20 P1-1): the veteran greeting must not be buried under
+      // the boot toast storm (offline summary + achievement/sticker queue) —
+      // gate non-critical toasts while the panel is up; ui.releaseToasts()
+      // in unmount() flushes them once the player closes the tour.
+      ui.holdToasts?.();
       // Persist SEEN on show (not on dismiss): once-only survives backdrop
       // taps and app kills mid-view. flush() beats the autosave debounce so
       // an immediate reload can't resurrect the panel.
@@ -167,7 +172,9 @@ export function initWhatsNew({ store, ui, audio, sceneManager }) {
       });
       el.querySelector('.mg-btn-row').appendChild(cta);
     },
-    unmount() {},
+    unmount() {
+      ui.releaseToasts?.(); // V3/FIX-D (E20 P1-1): flush the held toast queue
+    },
   });
 
   // ---- show-once boot poll (dailyBonusPopup.js pattern) ----

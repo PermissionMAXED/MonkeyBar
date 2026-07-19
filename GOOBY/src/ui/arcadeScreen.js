@@ -11,6 +11,7 @@ import { icon } from './icons.js';
 import { isMinigameUnlocked } from '../systems/leveling.js';
 import { hasGame } from '../minigames/registry.js';
 import musicDirector from '../audio/musicDirector.js'; // V3/G32: arcade medley overlay (§B2.4)
+import audio from '../audio/audio.js'; // V3/FIX-D (E19): tile/back tap cues
 import { localDay, now } from '../core/clock.js'; // V3/G48: §C10.3 local-day ribbons
 
 // ---- V3/G48: GOOBY 3.0 arcade ribbons (PLAN3 §C10.3) ----------------------
@@ -35,12 +36,17 @@ function dayOrdinal(day) {
 /**
  * Pure ribbon rule. All six stop being new after first play; the flagship
  * window also expires after 3 local calendar days (§C10.3).
+ * V3/FIX-D (E20 P1-2): LOCKED tiles never carry the ribbon — §C10.3 reads
+ * "after first unlock", so a still-locked 3.0 game shows only its level
+ * badge until the player actually reaches its unlock level.
  * @param {object} state save state
  * @param {string} id minigame id
  * @param {number} [nowMs] game-clock timestamp
  */
 export function shouldShowV3GameRibbon(state, id, nowMs = now()) {
   if (!V3_GAME_SET.has(id) || Number(state?.minigames?.plays?.[id] ?? 0) > 0) return false;
+  const level = Math.max(1, Math.floor(Number(state?.level) || 1));
+  if (!isMinigameUnlocked(id, level)) return false; // V3/FIX-D (E20 P1-2)
   if (!V3_FLAGSHIP_SET.has(id)) return true;
   const unlockedDay = state?.minigames?.newUnlockDay?.[id];
   if (typeof unlockedDay !== 'string') return true;
@@ -139,7 +145,10 @@ export function createArcadeScreen({ store, ui, framework }) {
       backBtn.className = 'btn btn-ghost btn-round';
       backBtn.setAttribute('aria-label', t('ui.back'));
       backBtn.innerHTML = icon('arrowLeft', 22);
-      backBtn.addEventListener('click', () => ui.closeAll());
+      backBtn.addEventListener('click', () => {
+        audio.play('ui.close'); // V3/FIX-D (E19)
+        ui.closeAll();
+      });
       const title = document.createElement('h1');
       title.className = 'g5-arcade-title';
       title.textContent = t('arcade.title');
@@ -179,16 +188,23 @@ export function createArcadeScreen({ store, ui, framework }) {
           lock.className = 'g5-tile-lock';
           lock.innerHTML = `${icon('lock', 22)}<span>${t('arcade.lockLevel', { level: meta.minLevel })}</span>`;
           tile.appendChild(lock);
-          tile.addEventListener('click', () => ui.toast('mg.locked', { level: meta.minLevel }));
+          tile.addEventListener('click', () => {
+            audio.play('ui.error'); // V3/FIX-D (E19)
+            ui.toast('mg.locked', { level: meta.minLevel });
+          });
         } else if (!implemented) {
           tile.classList.add('g5-soon');
           const lock = document.createElement('span');
           lock.className = 'g5-tile-lock';
           lock.innerHTML = `<span>${t('arcade.soon')}</span>`;
           tile.appendChild(lock);
-          tile.addEventListener('click', () => ui.toast('toast.minigameMissing'));
+          tile.addEventListener('click', () => {
+            audio.play('ui.error'); // V3/FIX-D (E19)
+            ui.toast('toast.minigameMissing');
+          });
         } else {
           tile.addEventListener('click', () => {
+            audio.play('ui.pick'); // V3/FIX-D (E19): tile tap cue
             if (!framework) {
               ui.toast('toast.minigameMissing');
               return;

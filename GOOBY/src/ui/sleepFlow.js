@@ -198,10 +198,12 @@ export function initSleepFlow({ store, ui, roomManager, homeScene, gooby }) {
   }
 
   // ---------------------------------------------------------------- confirm sheet
+  /** @type {ReturnType<typeof setInterval>|null} FIX-D: sheet refresh timer */
+  let wakeRefreshTimer = null;
   ui.registerPanel('wakeConfirm', {
     /** @param {HTMLElement} el */
     mount(el) {
-      const allowed = canWakeEarly(store.get(), now());
+      let allowed = canWakeEarly(store.get(), now());
       el.innerHTML = `
         <div class="wake-confirm">
           <h2 class="perm-title">${t('sleep.wakeConfirm.title')}</h2>
@@ -217,8 +219,29 @@ export function initSleepFlow({ store, ui, roomManager, homeScene, gooby }) {
         earlyWake();
       });
       el.querySelector('.wake-no').addEventListener('click', () => ui.closePanel('wakeConfirm'));
+      // FIX-D (E7): the sheet can outlive the early-wake threshold while it
+      // stays open — the mount-time snapshot left a stale disabled Wake
+      // button. Re-check the live state and refresh button+body in place.
+      if (wakeRefreshTimer != null) clearInterval(wakeRefreshTimer);
+      wakeRefreshTimer = setInterval(() => {
+        const ok = canWakeEarly(store.get(), now());
+        if (ok === allowed) return;
+        allowed = ok;
+        const yes = el.querySelector('.wake-yes');
+        if (yes) yes.disabled = !ok;
+        const body = el.querySelector('.perm-body');
+        if (body) {
+          body.textContent = ok
+            ? t('sleep.wakeConfirm.body')
+            : t('sleep.wakeConfirm.tooEarly', { min: SLEEP.EARLY_WAKE_AFTER_MIN });
+        }
+      }, 1000);
     },
-    unmount() {},
+    unmount() {
+      // FIX-D (E7): stop the refresh timer with the sheet.
+      if (wakeRefreshTimer != null) clearInterval(wakeRefreshTimer);
+      wakeRefreshTimer = null;
+    },
   });
 
   function openWakeSheet() {

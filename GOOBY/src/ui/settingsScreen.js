@@ -133,6 +133,24 @@ export function resetSaveAndReload() {
   location.reload();
 }
 
+/**
+ * V3/FIX-D (E14 P1-2): persist an IMPORTED save and reload — the dev panel's
+ * save-import sibling of resetSaveAndReload above. A bare
+ * `save.persist(parsed); location.reload()` loses the same §E2 race: the
+ * store's pagehide/visibilitychange flush re-persists the live (pre-import)
+ * state during the reload. Re-persist the imported state AFTER those flush
+ * listeners ran (same registration-order guarantee as the reset fix).
+ * @param {object} state parsed save-schema state (load() migrates/validates
+ *   whatever this writes on the next boot)
+ */
+export function importSaveAndReload(state) {
+  save.persist(state);
+  const rewrite = () => save.persist(state);
+  window.addEventListener('pagehide', rewrite);
+  document.addEventListener('visibilitychange', rewrite);
+  location.reload();
+}
+
 // ---------------------------------------------------------------------------
 
 /** Bespoke gear-wrench icon for the Entwickler row (§B4 — icons.js is a
@@ -140,6 +158,29 @@ export function resetSaveAndReload() {
 const WRENCH_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
   '<path d="M21.6 6.6a5.4 5.4 0 0 1-7.3 6.5L7.4 20a2.3 2.3 0 0 1-3.3-3.3l6.9-6.9a5.4 5.4 0 0 1 6.5-7.3L14 6l.7 3.3L18 10l3.6-3.4z"/></svg>';
+
+// V3/FIX-D (E9 P1): toggle hit-area floors. styles.css gives .g14-toggle an
+// invisible ::after halo of exactly max(44px, …) — integer hit-test sampling
+// plus row overlap in the dev panel measured 34–42 px effective. Raise the
+// floor to 48 px on BOTH axes (visuals untouched — the halo is invisible)
+// for the settings + dev-panel scopes; the dev panel additionally reserves
+// ≥50 px row height so stacked toggles can't shave each other's halos.
+// Injected from both mounts (either screen can open first via ?open=…).
+const FIXD_TOGGLE_CSS = `
+.settings-wrap .g14-toggle::after,.g33-dev-wrap .g14-toggle::after{
+  inset:calc((1.875rem - max(48px, 3rem)) / 2) calc((3.25rem - max(48px, 3.75rem)) / 2);
+}
+`;
+
+/** Inject the shared ≥44px toggle-halo override once (idempotent). */
+export function ensureToggleHitAreaCss() {
+  if (typeof document === 'undefined') return;
+  if (document.querySelector('style[data-owner="fixd-toggle-halo"]')) return;
+  const style = document.createElement('style');
+  style.dataset.owner = 'fixd-toggle-halo';
+  style.textContent = FIXD_TOGGLE_CSS;
+  document.head.appendChild(style);
+}
 
 /**
  * Human status key for the saved notifications setting (§E3).
@@ -322,6 +363,7 @@ export function createSettingsScreen({ store, ui }) {
     for (const btn of el.querySelectorAll('.seg-btn[data-lang]')) {
       btn.addEventListener('click', () => {
         const chosen = btn.dataset.lang;
+        audio.play('ui.pick'); // V3/FIX-D (E19): segment cue (incl. gate taps)
         if (chosen === 'auto') {
           if (devGate.tap(Date.now())) {
             if (store.get('settings.devUnlocked') === true) {
@@ -346,12 +388,19 @@ export function createSettingsScreen({ store, ui }) {
       ui.showScreen('devPanel');
     });
 
-    el.querySelector('.settings-back').addEventListener('click', () => ui.closeAll());
+    el.querySelector('.settings-back').addEventListener('click', () => {
+      audio.play('ui.close'); // V3/FIX-D (E19)
+      ui.closeAll();
+    });
 
-    el.querySelector('.settings-notif-btn').addEventListener('click', onNotifToggle);
+    el.querySelector('.settings-notif-btn').addEventListener('click', () => {
+      audio.play('ui.tap'); // V3/FIX-D (E19)
+      onNotifToggle();
+    });
 
     const resetBtn = el.querySelector('.settings-reset-btn');
     resetBtn.addEventListener('click', () => {
+      audio.play('ui.tap'); // V3/FIX-D (E19)
       // Double confirm (§G G6): two explicit extra taps, each relabeled.
       resetStep += 1;
       if (resetStep >= 3) {
@@ -421,6 +470,7 @@ export function createSettingsScreen({ store, ui }) {
     mount(el) {
       root = el;
       resetStep = 0;
+      ensureToggleHitAreaCss(); // V3/FIX-D (E9 P1)
       render();
       el.addEventListener('pointerdown', onAnyPointerDown, true); // V3/G33 §B4
       // F3: re-render from LIVE permission state whenever it changes while

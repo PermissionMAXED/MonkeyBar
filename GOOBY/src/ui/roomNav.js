@@ -12,6 +12,7 @@ import { t } from '../data/strings.js';
 import { ROOMS, UNLOCKS } from '../data/constants.js'; // V2/G19: + UNLOCKS
 import { NAV_ORDER } from '../home/roomManager.js'; // V2/G19: 5-room order (§B3)
 import { getStore } from '../core/store.js'; // V2/G19: live level for the padlock
+import audio from '../audio/audio.js'; // V3/FIX-D (E19): arrow/dot tap cues
 
 // V3/G33 (§B3 rem sweep + §C1.4): px → rem ÷16; safe-area offsets moved from
 // raw env() onto the §B9 root vars (--safe-*) so the dev-panel fake-notch
@@ -115,14 +116,20 @@ export function createRoomNav({ onNavigate }) {
       leftBtn.className = 'rn-arrow rn-left';
       leftBtn.textContent = '‹';
       leftBtn.setAttribute('aria-label', t('nav.prevRoom'));
-      leftBtn.addEventListener('click', () => step(-1));
+      leftBtn.addEventListener('click', () => {
+        audio.play('ui.tap'); // V3/FIX-D (E19)
+        step(-1);
+      });
       rootEl.appendChild(leftBtn);
 
       rightBtn = document.createElement('button');
       rightBtn.className = 'rn-arrow rn-right';
       rightBtn.textContent = '›';
       rightBtn.setAttribute('aria-label', t('nav.nextRoom'));
-      rightBtn.addEventListener('click', () => step(1));
+      rightBtn.addEventListener('click', () => {
+        audio.play('ui.tap'); // V3/FIX-D (E19)
+        step(1);
+      });
       rootEl.appendChild(rightBtn);
 
       const dotsEl = document.createElement('div');
@@ -131,7 +138,10 @@ export function createRoomNav({ onNavigate }) {
         const dot = document.createElement('button');
         dot.className = 'rn-dot';
         dot.setAttribute('aria-label', t(`room.${roomId}`));
-        dot.addEventListener('click', () => onNavigate(roomId));
+        dot.addEventListener('click', () => {
+          audio.play('ui.pick'); // V3/FIX-D (E19)
+          onNavigate(roomId);
+        });
         // V2/G19 (§B6): padlock glyph on the garden dot (hidden once unlocked)
         if (roomId === 'garden') {
           const lock = document.createElement('span');

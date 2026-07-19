@@ -54,6 +54,13 @@ const HUD_CSS = `
 .g5-hud-btn.g5-btn-yellow svg{color:#E0A93E;}
 .g5-hud-btn.g5-muted svg{color:rgba(74,59,54,.35);}
 .g5-hud-btn .g5-btn-label{max-width:3.25rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* V3/FIX-D (E18 P1 — §C12.2): at 130 % the 3.375rem (70 px) buttons wrap to
+   THREE rows on a 390-wide portrait and the top row's hit areas overlay
+   Gooby's belly (touches near (188,553) opened Wardrobe instead of petting).
+   Cap the buttons to 2.5rem (52 px at 130 % — still over the real-px 44 px
+   floor) so all 9 fit in two rows and the block stays clear of the pet zone. */
+:root[data-ui-scale="130"] .g5-hud-btn{width:max(44px, 2.5rem);height:max(44px, 2.5rem);border-radius:0.875rem;}
+:root[data-ui-scale="130"] .g5-hud-btn .g5-btn-label{max-width:2.25rem;}
 `;
 
 /**
