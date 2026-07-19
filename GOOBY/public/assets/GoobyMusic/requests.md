@@ -1,34 +1,28 @@
-Hier vom Music Menschen: Information für den Song Agent also du kannst jetzt https://treblo.com/developers/docs nutzen und per API Songs anfragen (maximal 15) wenn du weitere brauchst dann pack die anfrage nach einem weiteren API Key dafür in Requests.md
-Hier ist der API Key für Treblo: sksonauto_kGkQ4eDdviD8GW_XiLsH6cnNe7m_Dnq6GwuJlqGNeL0f5VAK
-
-Damit kannst du selbst Songs und Instrumentals generieren für das was du brauchst.
-
 # 🎵 GoobyMusic — Song-Requests
 
-Hi! Lege deine Songs (MP3 oder OGG, gerne 128-192 kbps) einfach **direkt in diesen Ordner** (`GOOBY/public/assets/GoobyMusic/`).
-Dateiname bitte so: `Kategorie - Titel.mp3` (z. B. `Radio - Sunny Carrots.mp3`). Ich schaue regelmäßig rein, verdrahte alles automatisch ins Spiel (Radio, Now-Playing-UI, Cover-Art generiere ich pro Track).
+## ✅ ANGEKOMMEN (danke!) — Stand: Wave 1
+22 Tracks verdrahtet/in Arbeit: 2× Recap, Rooms (Wohnzimmer/Küche/Garten/Schlafzimmer wach+schlafend/Arcade), Radio (+Level-5/10/15-Locks), Games/Gooby Surfer, Locations/IKEA. Treblo-API-Key erhalten — der Musik-Agent fordert damit bis zu 15 weitere Songs an (Liste unten).
 
-## Was aktuell gebraucht wird
+## 🔄 Wird gerade per Treblo-API angefragt (max 15)
+1. `Locations/City/` — City-Fahren (groovy, entspannt, loopbar)
+2. `Locations/Vet/` — Tierarzt (beruhigend, sanft)
+3. `Games/PurblePlace/` — Backstube (verspielter Küchen-Jazz)
+4. `Games/GoobyWelt/` — staunend/ätherisch (für die Splat-Welt)
+5. `Games/Racing/` — Toy-Rennen (schnell, fröhlich)
+6. `Games/Spooky/` — Geisterjagd (niedlich-gruselig)
+7. `Games/Space/` — Weltraum (weit, träumerisch)
+8. `Games/Harbor/` — Hafen (maritim, entspannt)
+9. `Radio/LockedbyLevel/Level 20/` — Belohnungs-Track L20
+10. `Radio/LockedbyLevel/Level 25/` — Belohnungs-Track L25
+11. `Radio/LockedbyLevel/Level 30/` — Belohnungs-Track L30
+12. `Radio/` — 2-3 weitere freie Radio-Tracks
+13. `Stinger - LevelUp` (2-6 s Fanfare)
+14. `Stinger - Results` (2-4 s Abschluss)
+15. `Rooms/Bathroom/` — Badezimmer (blubberig, sauber)
 
-### 1. Level-Up-Rückblick (WICHTIG — du meintest, du hast schon 1-2 Songs dafür)
-- [ ] `Recap - <Titel>.mp3` — episch/emotional, 60-120 s, klarer Beat (ich synce die Animationen auf den Beat). Gerne 2-3 Varianten.
+## ➕ Falls du NOCH mehr machen willst (manuell, jederzeit)
+- Weitere Radio-Tracks (jede Kategorie), Jahreszeiten-Specials, ein „Geburtstags"-Song
+- **Neuer Treblo-API-Key**, falls die 15 API-Requests verbraucht sind und wir mehr brauchen
 
-### 2. Radio-Tracks (je 1-3 min, loopbar ideal, chillig/cozy)
-- [ ] `Radio - <Titel>.mp3` — Home/Cozy-Vibe (LoFi, warm) — gerne 3-5 Stück
-- [ ] `Radio - <Titel>.mp3` — Garten/Natur-Vibe (akustisch, Vögel-freundlich) — 2-3 Stück
-- [ ] `Radio - <Titel>.mp3` — Arcade/Upbeat (Chiptune-ish, energetisch) — 2-3 Stück
-- [ ] `Radio - <Titel>.mp3` — City/Fahren (groovy, entspannt) — 2-3 Stück
-- [ ] `Radio - <Titel>.mp3` — Nacht/Schlaf (ruhig, Lullaby) — 1-2 Stück
-
-### 3. Minigame-Themes (optional, je ~1-2 min, loopbar)
-- [ ] `Game - Surf.mp3` (schnell, treibend)
-- [ ] `Game - Cake.mp3` (verspielt, Küchen-Jazz)
-- [ ] `Game - Space.mp3` (weit, synthy — darf elektronisch sein, aber „echt" produziert)
-- [ ] `Game - Spooky.mp3` (niedlich-gruselig)
-
-### 4. Stinger/Jingles (2-6 s)
-- [ ] `Stinger - LevelUp.mp3` (Fanfare)
-- [ ] `Stinger - Results.mp3` (kurzer Abschluss)
-
-## Status (von Coordinator gepflegt)
-- Noch keine Dateien angekommen. Sobald Dateien hier liegen: automatische Einbindung in Radio + Cover-Generierung.
+## Konvention
+Einfach in den passenden Unterordner legen — der Musik-Manifest-Scan erkennt alles automatisch. Cover-Arts generiere ich pro Track selbst.
