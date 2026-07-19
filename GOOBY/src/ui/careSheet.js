@@ -24,6 +24,7 @@ const STATUS_FACE = { healthy: '💚', queasy: '🤢', sick: '🤒' };
 const CSS = `
 .g20-care{display:flex;flex-direction:column;gap:0.75rem;}
 .g20-care-title{margin:0;font-size:1.375rem;font-weight:800;color:var(--brown,#4A3B36);}
+.g20-care-hint{margin:-0.25rem 0 0;font-size:0.8125rem;font-weight:700;line-height:1.35;color:var(--brown,#4A3B36);opacity:.72;}
 .g20-care-status{display:flex;align-items:center;gap:0.75rem;background:var(--bg-cream,#FFF6EC);border-radius:1rem;padding:0.75rem 0.875rem;}
 .g20-care-face{font-size:2.125rem;line-height:1;}
 .g20-care-text{font-size:0.9375rem;font-weight:800;color:var(--brown,#4A3B36);}
@@ -46,6 +47,21 @@ function ensureStyles() {
 }
 
 /**
+ * V4/G70 (§C-SYS7.3): the sick-care sheet always exposes exactly three
+ * routes. The first route changes from using owned medicine to opening the
+ * fridge Care row when stock is empty.
+ * @param {number} medicineCount
+ * @returns {ReadonlyArray<'medicine'|'fridge'|'shopTrip'|'vet'>}
+ */
+export function careSheetActions(medicineCount) {
+  return Object.freeze([
+    Number(medicineCount) > 0 ? 'medicine' : 'fridge',
+    'shopTrip',
+    'vet',
+  ]);
+}
+
+/**
  * The care sheet panel module (§E6 UiModule shape). Register under the id
  * 'careSheet' (contract for G23's HUD chip).
  * @param {{store: object, ui: object, audio: object,
@@ -64,10 +80,12 @@ export function createCareSheetPanel({ store, ui, audio, useMedicine }) {
     const meds = store.get('items.medicine') ?? 0;
     const tier = tierOf(store.get('weight.value'));
     const medsLine = meds > 0 ? t('care.medicineOwned', { count: meds }) : t('care.medicineNone');
+    const [medicineAction] = careSheetActions(meds);
 
     el.innerHTML = `
       <div class="g20-care">
         <h2 class="g20-care-title">${t('care.title')}</h2>
+        <p class="g20-care-hint">${t('care.hintShop')}</p>
         <div class="g20-care-status">
           <span class="g20-care-face">${STATUS_FACE[health] ?? STATUS_FACE.healthy}</span>
           <span class="g20-care-text">${t(`care.status.${health}`)}</span>
@@ -75,19 +93,37 @@ export function createCareSheetPanel({ store, ui, audio, useMedicine }) {
         <div class="g20-care-weight">${t('care.weightTier', { tier: t(`weight.tier.${tier}`) })}
           <small>${t('care.weightNote')}</small></div>
         <div class="g20-care-actions">
-          <button class="btn btn-teal g20-care-med">💊 ${t('care.medicine')}
-            <span class="g20-care-sub">${medsLine}</span></button>
-          <button class="btn g20-care-vet">🚗 ${t('care.vet')}
+          ${medicineAction === 'medicine'
+            ? `<button class="btn btn-teal g20-care-med" data-care-action="medicine">💊 ${t('care.medicineUse')}
+                <span class="g20-care-sub">${medsLine}</span></button>`
+            : `<button class="btn btn-teal g70-care-fridge" data-care-action="fridge">🧊 ${t('care.fridgeMedicine')}
+                <span class="g20-care-sub">${t('care.fridgeMedicine.sub')}</span></button>`}
+          <button class="btn g70-care-shop" data-care-action="shopTrip">🛒 ${t('care.shopTrip')}
+            <span class="g20-care-sub">${t('care.shopTrip.sub')}</span></button>
+          <button class="btn g20-care-vet" data-care-action="vet">🏥 ${t('care.vet')}
             <span class="g20-care-sub">${t('care.vetPrice')}</span></button>
         </div>
         <button class="btn btn-ghost g20-care-close">${t('care.close')}</button>
       </div>`;
 
-    el.querySelector('.g20-care-med').addEventListener('click', () => {
+    el.querySelector('.g20-care-med')?.addEventListener('click', () => {
       // The shared flow handles every refusal toast (none left / healthy);
       // on a consumed dose close the sheet so the grimace-then-relief anim
       // on Gooby is visible behind it (§C3.5).
       if (useMedicine()) ui.closePanel('careSheet');
+    });
+    el.querySelector('.g70-care-fridge')?.addEventListener('click', () => {
+      audio.play('ui.tap');
+      ui.closePanel('careSheet');
+      // V4/G70: this is the existing fridge tray, focused on its Care row.
+      ui.openPanel('foodTray', { focusMedicine: true });
+    });
+    el.querySelector('.g70-care-shop').addEventListener('click', () => {
+      audio.play('ui.tap');
+      ui.closePanel('careSheet');
+      // The existing front-door chooser owns drive/surf and launches with the
+      // correct shopTrip/surfTravel mode; do not duplicate its trip wiring.
+      ui.openPanel('shopTripConfirm', { mode: 'shopTrip' });
     });
     el.querySelector('.g20-care-vet').addEventListener('click', () => {
       audio.play('ui.tap');

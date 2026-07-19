@@ -392,6 +392,9 @@ test('all 11 v2-* string modules exist with exact EN/DE key parity', async () =>
     'v2-core', 'v2-garden', 'v2-health', 'v2-city', 'v2-shop', 'v2-progress',
     'v2-games-d', 'v2-games-e', 'v2-ambience', 'v2-audio', 'v2-polish',
   ];
+  // V4/G70 explicitly supersedes these two player-facing sick hints while
+  // preserving the frozen v2 module itself (§C-SYS7 sick-flow clarity).
+  const laterVersionOverrides = new Set(['hud.sickChip', 'toast.tooSick']);
   const seen = new Map(); // key → module (collisions between modules are bugs)
   for (const name of modules) {
     const mod = await import(`../src/data/strings/${name}.js`);
@@ -403,8 +406,10 @@ test('all 11 v2-* string modules exist with exact EN/DE key parity', async () =>
       assert.ok(!seen.has(key), `${key} defined in both ${seen.get(key)} and ${name}`);
       seen.set(key, name);
       // the merged dictionaries carry every module key (spread after v1 §E0.1-1)
-      assert.equal(EN[key], mod.EN[key], `merged EN['${key}']`);
-      assert.equal(DE[key], mod.DE[key], `merged DE['${key}']`);
+      if (!laterVersionOverrides.has(key)) {
+        assert.equal(EN[key], mod.EN[key], `merged EN['${key}']`);
+        assert.equal(DE[key], mod.DE[key], `merged DE['${key}']`);
+      }
     }
   }
   assert.ok(seen.size >= 200, `v2 modules carry ${seen.size} keys (v2-core alone has ~200)`);

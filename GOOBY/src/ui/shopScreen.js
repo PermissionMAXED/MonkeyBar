@@ -167,7 +167,29 @@ const SHOP_FIX_CSS = `
 /* V3/G48: Nutella + Nougatschleuse NEU ribbons; styles.css belongs to G47. */
 .shop-card.g48-new-content{position:relative;overflow:visible;}
 .g48-shop-ribbon{position:absolute;z-index:3;right:-0.3125rem;top:0.3125rem;min-width:2.75rem;padding:0.1875rem 0.4375rem;border-radius:999px;background:var(--pink);color:#fff;font-size:0.625rem;font-weight:900;line-height:1.2;letter-spacing:.04em;box-shadow:0 0.125rem 0 rgba(74,59,54,.16);transform:rotate(7deg);pointer-events:none;}
+/* ── V4/G70 sick-shop focus block (owned): Care tab + medicine highlight. */
+.shop-card.g70-sick-medicine{outline:0.1875rem solid var(--pink);outline-offset:0.125rem;box-shadow:0 0 .75rem rgba(255,123,169,.28);}
+.shop-card.g70-sick-medicine.g70-pulse{animation:g70-shop-medicine 1.15s ease-in-out 3;}
+@keyframes g70-shop-medicine{0%,100%{transform:scale(1);box-shadow:0 0 .75rem rgba(255,123,169,.28)}50%{transform:scale(1.045);box-shadow:0 0 0 .5rem rgba(255,123,169,.18)}}
+/* ── end V4/G70 block. */
 `;
+
+/**
+ * Pure V4/G70 shop-entry decision. Sick Gooby lands on the dedicated Care
+ * tab; the medicine card stays highlighted, while the stronger pulse is a
+ * one-time empty-stock cue.
+ * @param {string|undefined} health
+ * @param {number} medicineCount
+ * @param {boolean} pulseShown
+ */
+export function sickShopFocus(health, medicineCount, pulseShown = false) {
+  const sick = health === 'sick';
+  return Object.freeze({
+    tab: sick ? 'care' : null,
+    highlightMedicine: sick,
+    pulseMedicine: sick && Number(medicineCount) <= 0 && !pulseShown,
+  });
+}
 
 /**
  * Register the shop screen + quick-delivery hooks. Called once from the G11
@@ -223,6 +245,10 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
   let foodFilter = 'all';
   let furnRoom = 'all';
   let selSkin = null;
+  // V4/G70: survives shop remounts for this runtime, so the stronger empty-
+  // medicine animation is shown once; the static sick highlight remains.
+  let medicinePulseShown = false;
+  let sickFocus = sickShopFocus();
   /** @type {{dispose: () => void, setSkin: (id: string|null) => void}|null} */
   let skinStage = null;
 
@@ -410,9 +436,14 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
     row.className = 'shop-grid';
     const level = store.get('level') ?? 1;
 
-    const careCard = ({ emoji, name, price, count, locked, lockLevel, onBuy }) => {
+    const careCard = ({ itemId, emoji, name, price, count, locked, lockLevel, onBuy }) => {
       const card = document.createElement('button');
-      card.className = `shop-card g22-care-card${locked ? ' g22-locked' : ''}`;
+      const medicine = itemId === 'medicine';
+      card.className =
+        `shop-card g22-care-card${locked ? ' g22-locked' : ''}` +
+        `${medicine && sickFocus.highlightMedicine ? ' g70-sick-medicine' : ''}` +
+        `${medicine && sickFocus.pulseMedicine ? ' g70-pulse' : ''}`;
+      if (itemId) card.dataset.careItem = itemId;
       card.innerHTML = `
         ${count > 0 ? `<span class="shop-count">×${count}</span>` : ''}
         <span class="shop-emoji">${emoji}</span>
@@ -443,6 +474,7 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
     };
 
     row.appendChild(careCard({
+      itemId: 'medicine',
       emoji: '💊',
       name: t('shop.item.medicine'),
       price: ITEM_PRICES.medicine,
@@ -450,6 +482,7 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
       onBuy: () => buyItem(store, 'medicine', 1),
     }));
     row.appendChild(careCard({
+      itemId: 'fertilizer',
       emoji: '🌱',
       name: t('shop.item.fertilizer'),
       price: ITEM_PRICES.fertilizer,
@@ -458,6 +491,7 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
     }));
     for (const crop of CROPS) {
       row.appendChild(careCard({
+        itemId: `seed:${crop.id}`,
         emoji: '🌾',
         name: t('shop.seedName', { name: t(crop.nameKey) }),
         price: crop.seedPrice,
@@ -923,6 +957,8 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
   // ------------------------------------------------------------ frame/tabs
   const TABS = [
     ['food', 'shop.tab.food', renderFood],
+    // V4/G70: direct Care surface; sick shop arrivals auto-select this row.
+    ['care', 'shop.tab.care', renderCare],
     ['furniture', 'shop.tab.furniture', renderFurniture],
     ['decor', 'shop.tab.decor', renderDecor],
     ['outfits', 'shop.tab.outfits', renderOutfits],
@@ -944,7 +980,13 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
     mount(el, params = {}) {
       musicDirector.pushContext('shop'); // V3/G32: shop medley overlay (§B2.4)
       mode = params.mode === 'trip' ? 'trip' : 'browse';
-      tab = TABS.some(([id]) => id === params.tab) ? params.tab : 'food';
+      const requestedTab = TABS.some(([id]) => id === params.tab) ? params.tab : 'food';
+      sickFocus = sickShopFocus(
+        store.get('health.state'),
+        store.get('items.medicine') ?? 0,
+        medicinePulseShown
+      );
+      tab = sickFocus.tab ?? requestedTab;
       selFood = null;
       qty = 1;
       foodFilter = 'all'; // V2/G22
@@ -993,6 +1035,12 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
       el.appendChild(wrap);
       bodyEl = wrap.querySelector('.shop-body');
       renderBody();
+      if (sickFocus.pulseMedicine) {
+        // Keep the class on this rendered card, but prevent subsequent
+        // re-renders/remounts from replaying the stronger pulse.
+        medicinePulseShown = true;
+        sickFocus = Object.freeze({ ...sickFocus, pulseMedicine: false });
+      }
 
       // live coin counter + re-render on inventory/decor changes from panels
       const coinsEl = wrap.querySelector('.shop-coins-n');

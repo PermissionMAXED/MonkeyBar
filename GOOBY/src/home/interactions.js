@@ -558,6 +558,10 @@ const CARE_CSS = `
 .tray-care-buy::before{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:max(100%,64px);height:44px;border-radius:999px;}
 .tray-care-buy:disabled{opacity:.45;}
 .tray-care-hint{font-size:10px;font-weight:700;opacity:.55;}
+/* ── V4/G70 sick discoverability block (owned): subtle medicine pulse only. */
+.tray-care-item.g70-sick-medicine{outline:0.1875rem solid rgba(255,123,169,.72);outline-offset:0.125rem;animation:g70-medicine-pulse 1.8s ease-in-out infinite;}
+@keyframes g70-medicine-pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,123,169,0)}50%{box-shadow:0 0 0 .4375rem rgba(255,123,169,.18)}}
+/* ── end V4/G70 block. */
 `;
 
 let careStylesInjected = false;
@@ -1115,7 +1119,7 @@ function bellyIconSvg(color) {
 /** ui panel module for the food tray (registered in registerCareUi). */
 function createFoodTrayPanel() {
   return {
-    mount(el) {
+    mount(el, params = {}) {
       const store = core?.store ?? active?.store;
       const inv = store?.get('inventory') ?? {};
       const items = invList(inv);
@@ -1144,7 +1148,7 @@ function createFoodTrayPanel() {
         });
         grid.appendChild(btn);
       }
-      mountCareRow(el, store); // V2/G20
+      mountCareRow(el, store, { focusMedicine: params.focusMedicine === true }); // V2/G20 + V4/G70
     },
     unmount() {},
   };
@@ -1156,8 +1160,9 @@ function createFoodTrayPanel() {
  * only (using it is the garden's watering-can-style drag, G19).
  * @param {HTMLElement} el tray panel root
  * @param {object} store
+ * @param {{focusMedicine?: boolean}} [opts] V4/G70 care-sheet deep link
  */
-function mountCareRow(el, store) {
+function mountCareRow(el, store, opts = {}) {
   if (!store) return;
   const wrap = document.createElement('div');
   wrap.innerHTML = `<h3 class="tray-care-title">${t('tray.careTitle')}</h3><div class="tray-care-row"></div>`;
@@ -1166,7 +1171,11 @@ function mountCareRow(el, store) {
   const renderItem = (itemId, emoji, draggable, hint) => {
     const count = store.get(`items.${itemId}`) ?? 0;
     const item = document.createElement('div');
-    item.className = `tray-care-item${draggable && count > 0 ? ' g20-drag' : ''}`;
+    const sickMedicine = itemId === 'medicine' && store.get('health.state') === 'sick';
+    item.className =
+      `tray-care-item${draggable && count > 0 ? ' g20-drag' : ''}` +
+      `${sickMedicine ? ' g70-sick-medicine' : ''}`;
+    item.dataset.careItem = itemId;
     item.innerHTML = `
       <span class="tray-count">×${count}</span>
       <span class="tray-emoji">${emoji}</span>
@@ -1192,6 +1201,13 @@ function mountCareRow(el, store) {
       });
     }
     row.appendChild(item);
+    if (itemId === 'medicine' && opts.focusMedicine) {
+      item.tabIndex = -1;
+      requestAnimationFrame(() => {
+        item.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+        item.focus?.({ preventScroll: true });
+      });
+    }
   };
 
   renderItem('medicine', '💊', true, null);
@@ -1405,7 +1421,7 @@ function onHealthEvent(s, ev) {
     ui.toast('health.becameQueasy');
     audio.play('gooby.refuse');
   } else if (ev === 'becameSick') {
-    ui.toast('health.becameSick');
+    ui.toast('toast.sickNow'); // V4/G70 §C-SYS7.3: medicine + shop + vet options
     audio.play('gooby.squeakDizzy');
   } else if (ev === 'recovered') {
     ui.toast('health.recovered');
