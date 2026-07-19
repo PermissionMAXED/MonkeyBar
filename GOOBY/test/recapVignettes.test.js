@@ -5,7 +5,7 @@
 // vignettes may only dress from existing kits — no new 3D assets).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -217,4 +217,52 @@ test('outfit continuity: the pumpkin outfit GLB rides the preload list', () => {
 test('perf gate constant: team budget 150 ≤ plan gate 250 (§B5.4)', () => {
   assert.equal(DRAW_CALL_BUDGET, 150);
   assert.ok(DRAW_CALL_BUDGET <= 250);
+});
+
+// ---------------------------------------------------------------------------
+// Runtime registry integrity (source pins — vignettes.js imports three.js and
+// the Gooby rig, so node pins the WIRING textually instead of importing it;
+// same convention as the other scene-side suites)
+// ---------------------------------------------------------------------------
+
+const vignettesSrc = readFileSync(
+  fileURLToPath(new URL('../src/recap/vignettes.js', import.meta.url)), 'utf8'
+);
+
+test('vignettes.js registry: every biome id wires a named builder (G64 contract)', () => {
+  // one buildX function per biome, keyed in the frozen BUILDERS map
+  const builders = {
+    meadow: 'buildMeadow', city: 'buildCity', harbor: 'buildHarbor',
+    space: 'buildSpace', spookGarden: 'buildSpookGarden', bakery: 'buildBakery',
+    nightSky: 'buildNightSky', toyRoom: 'buildToyRoom',
+  };
+  assert.deepEqual(Object.keys(builders), [...VIGNETTE_IDS], 'pin covers the id order');
+  const block = vignettesSrc.match(/const BUILDERS = Object\.freeze\(\{([^}]+)\}\)/);
+  assert.ok(block, 'frozen BUILDERS map present');
+  for (const [id, fn] of Object.entries(builders)) {
+    assert.match(vignettesSrc, new RegExp(`function ${fn}\\(stage\\)`), `${fn}(stage) defined`);
+    assert.match(block[1], new RegExp(`${id}: ${fn},`), `BUILDERS.${id} → ${fn}`);
+  }
+});
+
+test('vignettes.js exports the stable G64 registry API surface', () => {
+  for (const name of ['buildVignette', 'VIGNETTES', 'preloadBackdrops', 'backdropStatus']) {
+    assert.match(vignettesSrc, new RegExp(`export (function |const )?${name}`), `export ${name}`);
+  }
+  // re-exported pure-side names ride along for one-import consumers
+  assert.match(vignettesSrc, /export \{ VIGNETTE_IDS, VIGNETTE_SPECS, DRAW_CALL_BUDGET \};/);
+  // VIGNETTES registry is generated from VIGNETTE_IDS (no hand-typed drift)
+  assert.match(vignettesSrc, /VIGNETTE_IDS\.map\(\(id\) => \[/);
+});
+
+test('dev harness surface: ?recappreview= param wired + documented', () => {
+  const harnessSrc = readFileSync(
+    fileURLToPath(new URL('../src/dev/harness.js', import.meta.url)), 'utf8'
+  );
+  assert.match(harnessSrc, /q\.get\('recappreview'\)/, 'harness reads the param');
+  assert.match(harnessSrc, /recap\/vignettePreview\.js/, 'routes into the preview scene');
+  const paramsSrc = readFileSync(
+    fileURLToPath(new URL('../src/data/harnessParams.js', import.meta.url)), 'utf8'
+  );
+  assert.match(paramsSrc, /param: 'recappreview'/, 'dev-panel cheat sheet row present');
 });
