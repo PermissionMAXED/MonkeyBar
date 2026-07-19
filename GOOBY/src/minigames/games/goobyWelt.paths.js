@@ -3,11 +3,14 @@
 // test/goobyWelt.test.js validates every §G6.5-3 rule against this file.
 //
 // Authoring provenance (§G6.5 methodology): routes were designed from the D2
-// feasibility proof poses (`/workspace/asset-staging/splats/REPORT.md`,
-// throwaway/main.js camera/target per scene), generated parametrically,
-// validated by goobyWelt.logic.js `validateScene`, then tuned with the
-// `?minigame=goobyWelt&scene=<id>&flycam=1` harness route over CDP
-// (screenshot pass at fixed spline t-values — see the V4/G66 report).
+// feasibility proof poses (`/workspace/asset-staging/splats/REPORT.md`),
+// generated parametrically in the CORRECTED frame, validated by
+// goobyWelt.logic.js `validateScene`, then tuned against an OCCUPANCY FIELD
+// decoded from the committed compressed PLYs (Node-side, corrected-frame
+// point cloud): spline centre must be splat-free, corridor extremes may only
+// brush foliage/edge clouds, every pickup sphere sits in open air. Final
+// visual pass over the `?minigame=goobyWelt&scene=<id>` harness via CDP
+// (screenshots at fixed spline t-values — see the V4/G66 report).
 //
 // TEAM-WELT COORDINATION (G65, same wave): G65's `src/welt/splatViewer.js`
 // owns viewer creation (`initViewer(sceneId, { quality })` → Promise) and its
@@ -21,10 +24,14 @@
 // framework-standard). goobyWelt.js applies it to the viewer object unless
 // the G65 handle reports `orientationApplied: true`.
 //
-// Frames: 'windmill' PLY is already Y-up (identity quaternion). 'townsquare'
-// (Ludlow) needs the recipe's mirrored-Y correction — rotX(pi), quaternion
-// [1, 0, 0, 0], i.e. raw (x, y, z) → corrected (x, −y, −z); all data below
-// is authored in the CORRECTED frame.
+// Frames: BOTH PLYs are Y-down after the SOG→PLY conversion — the recipe's
+// mirrored-Y correction is rotX(pi), quaternion [1, 0, 0, 0], i.e. raw
+// (x, y, z) → corrected (x, −y, −z); all data below is authored in the
+// CORRECTED frame. (V4/G65 reconciliation, §G6.3: the throwaway's „windmill
+// already Y-up" claim only held for its top-down proof pose — ground-level
+// §G6.5 CDP probes rendered the tower upside-down under identity, so the
+// windmill row carries the same correction; evidence /tmp/gooby-v4-g65,
+// math note in src/welt/weltScenes.js header.)
 
 /** Recursively freeze plain data (arrays/objects of numbers). */
 function deepFreeze(v) {
@@ -56,15 +63,16 @@ export const WELT_SCENE_IDS = Object.freeze(['windmill', 'townsquare']);
 /** @type {Readonly<Record<string, WeltSceneData>>} */
 export const WELT_SCENES = deepFreeze({
   // ── „S Windmill in Golden Gate Park" — azadbal, CC BY 4.0 (§G6.2) ──
-  // Route: approach over the meadow from the south-east, one wide clockwise
-  // loop around the mill at stroller height, then a tighter CLIMBING arc up
-  // past the sails, drifting out over the park to the finish gate. ≈ 175 m
-  // ≈ 109 s at 1.6 m/s.
+  // Route (corrected frame; mill trunk at x −0.2, z −0.4, canopy tops ≈ y 3
+  // on the meadow ring): approach over the SE meadow, one wide counter-
+  // clockwise loop around the mill (r ≈ 15 m, climbing 3.1 → 4.4), a tighter
+  // CLIMBING spiral in past the sails (r → 9.9, y → 4.8), then out ESE over
+  // the open low meadow to the finish. ≈ 172 m ≈ 108 s at 1.6 m/s.
   windmill: {
     id: 'windmill',
     titleKey: 'mg.welt.scene.windmill',
     ply: 'windmill-golden-gate-mobile.compressed.ply',
-    orientation: [0, 0, 0, 1],
+    orientation: [1, 0, 0, 0], // V4/G65: Y-down source like Ludlow — A/B render proof, header note (§G6.3)
     ambient: {
       sky: ['#AFD8F2', '#EAF6E4'],
       hemi: ['#DFF0FF', '#7FA868', 1.05],
@@ -72,92 +80,99 @@ export const WELT_SCENES = deepFreeze({
       fallbackGround: '#7FBF6A',
     },
     waypoints: [
-      [19.05, 5.3, 20.44],
-      [18.21, 5.05, 13.82],
-      [16.68, 4.85, 8.63],
-      [14.47, 4.7, 3.46],
-      [13.89, 5.06, -3.71],
-      [10.14, 5.34, -9.66],
-      [4.21, 5.49, -13.14],
-      [-2.53, 5.48, -13.5],
-      [-8.6, 5.32, -10.8],
-      [-12.74, 5.05, -5.68],
-      [-14.1, 4.75, 0.74],
-      [-12.4, 4.48, 7.1],
-      [-7.96, 4.32, 12.04],
-      [-1.66, 4.31, 14.45],
-      [5.18, 4.46, 13.69],
-      [11.02, 4.74, 9.78],
-      [14.47, 5.1, 3.46],
-      [12.96, 6.33, -3.91],
-      [8.34, 6.45, -9.08],
-      [2.31, 6.58, -11.01],
-      [-3.28, 6.7, -9.74],
-      [-7.25, 6.83, -6.43],
-      [-9.67, 6.95, -2.18],
-      [-9.69, 7.08, 2.7],
-      [-7.31, 7.2, 6.97],
-      [-6.13, 6.9, 13.18],
-      [-1.7, 6.4, 18.85],
-      [4.3, 5.9, 22.41],
+      [13.72, 3.1, 9.71],
+      [8.86, 3.15, 12.54],
+      [2.1, 3.57, 15.09],
+      [-5.02, 3.98, 14.36],
+      [-11.01, 4.36, 10.55],
+      [-14.63, 4.49, 4.52],
+      [-15.17, 4.45, -2.42],
+      [-12.58, 4.39, -8.82],
+      [-7.44, 4.31, -13.34],
+      [-0.89, 4.25, -15.08],
+      [5.68, 4.21, -13.71],
+      [10.9, 4.2, -9.59],
+      [13.71, 4.23, -3.63],
+      [13.55, 4.28, 2.89],
+      [10.52, 4.35, 8.6],
+      [4.55, 4.53, 12.65],
+      [-2.56, 4.56, 12.97],
+      [-8.63, 4.59, 9.65],
+      [-12, 4.62, 3.89],
+      [-11.97, 4.65, -2.48],
+      [-8.89, 4.68, -7.69],
+      [-3.89, 4.71, -10.54],
+      [1.59, 4.74, -10.57],
+      [6.24, 4.77, -8.07],
+      [9.1, 4.8, -3.79],
+      [11.5, 4.35, -5.4],
+      [15.2, 3.8, -3.6],
+      [18.2, 3.35, -1.4],
+      [20.3, 3.05, 1.2],
+      [21.1, 2.9, 3.9],
     ],
     corridor: [
       2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5,
-      2.5, 2.5, 2, 2, 2, 2, 2, 2, 2, 2.5, 2.5, 2.5, 2.5,
+      2, 2, 2, 2, 2, 2, 2, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5,
     ],
     stars: [
       { s: 8, ox: 0.7, oy: -0.2 },
-      { s: 13.88, ox: 1.74, oy: 0.97 },
-      { s: 19.77, ox: 1.74, oy: 1.27 },
-      { s: 25.65, ox: 0.7, oy: 0.48 },
-      { s: 31.53, ox: -0.7, oy: -0.2 },
-      { s: 37.41, ox: -1.55, oy: 0.73 },
-      { s: 43.3, ox: -1.9, oy: 1.26 },
-      { s: 49.18, ox: -1.55, oy: 1.16 },
-      { s: 55.06, ox: -0.7, oy: 0.48 },
-      { s: 60.95, ox: 0.7, oy: 1.3 },
-      { s: 66.83, ox: 1.55, oy: 0.93 },
-      { s: 72.71, ox: 1.9, oy: 0.55 },
-      { s: 78.6, ox: 1.55, oy: 0.18 },
-      { s: 84.48, ox: 0.7, oy: -0.2 },
-      { s: 90.36, ox: -0.7, oy: -0.2 },
-      { s: 96.24, ox: -1.55, oy: 0.73 },
-      { s: 102.13, ox: -1.9, oy: 1.26 },
-      { s: 108.01, ox: -1.55, oy: 1.16 },
-      { s: 113.89, ox: -0.7, oy: 0.48 },
-      { s: 118.48, ox: -0.56, oy: -0.2 },
-      { s: 124.36, ox: -1.39, oy: 0.97 },
-      { s: 132.84, ox: 1.74, oy: 1.27 },
-      { s: 137.43, ox: 0.7, oy: 0.48 },
-      { s: 143.31, ox: -0.7, oy: 1.3 },
-      { s: 149.19, ox: -1.55, oy: 0.93 },
-      { s: 155.07, ox: -1.9, oy: 0.55 },
-      { s: 160.96, ox: -1.55, oy: 0.18 },
-      { s: 166.84, ox: -0.7, oy: -0.2 },
+      { s: 13.9, ox: 1.74, oy: 0.97 },
+      { s: 19.8, ox: 1.74, oy: 1.27 },
+      { s: 25.69, ox: 0.7, oy: 0.48 },
+      { s: 31.59, ox: -0.7, oy: -0.2 },
+      { s: 37.49, ox: -1.55, oy: 0.73 },
+      { s: 43.39, ox: -1.9, oy: 1.26 },
+      { s: 49.28, ox: -1.55, oy: 1.16 },
+      { s: 55.18, ox: -0.7, oy: 0.48 },
+      { s: 61.08, ox: 0.7, oy: 1.3 },
+      { s: 66.98, ox: -1.24, oy: 0.93 },
+      { s: 72.87, ox: 1.9, oy: 0.55 },
+      { s: 78.77, ox: 1.55, oy: 0.18 },
+      { s: 84.67, ox: 0.7, oy: -0.2 },
+      { s: 90.57, ox: -0.7, oy: -0.2 },
+      { s: 96.46, ox: -1.55, oy: 0.73 },
+      { s: 102.36, ox: -1.9, oy: 1.26 },
+      { s: 108.26, ox: -1.55, oy: 1.16 },
+      { s: 114.16, ox: -0.7, oy: 0.48 },
+      { s: 120.06, ox: 0.7, oy: -0.2 },
+      { s: 125.95, ox: 1.74, oy: 0.97 },
+      { s: 131.85, ox: 1.74, oy: 1.27 },
+      { s: 137.75, ox: 0.7, oy: 0.48 },
+      { s: 143.65, ox: -0.7, oy: 1.3 },
+      { s: 149.54, ox: -1.55, oy: 0.93 },
+      { s: 155.44, ox: 1.52, oy: 0.55 },
+      { s: 163.94, ox: -1.55, oy: 0.18 },
+      { s: 167.24, ox: -0.7, oy: -0.2 },
     ],
-    // Discovery spurs (§G6.4): full-lateral reaches behind the mill + two
-    // full-vertical floats over the meadow.
+    // Discovery spurs (§G6.4): full-lateral reaches over the meadow edge, a
+    // full-vertical float, an inward reach toward the mill, one behind the
+    // sails on the inner spiral, and a low meadow dive on the exit.
     carrots: [
-      { s: 22, ox: 2.4, oy: 0.3 },
-      { s: 52, ox: -2.4, oy: 0.2 },
-      { s: 80, ox: 0.2, oy: 1.7 },
-      { s: 104, ox: 1.9, oy: -0.8 },
-      { s: 134, ox: -0.3, oy: 1.7 },
-      { s: 158.84, ox: -2.3, oy: 1 },
+      { s: 24, ox: -2.4, oy: 0.3 },
+      { s: 56, ox: -2.3, oy: 0.6 },
+      { s: 84, ox: 0.2, oy: 1.6 },
+      { s: 112, ox: 2, oy: 0.4 },
+      { s: 142, ox: 1.9, oy: 0.9 },
+      { s: 160.24, ox: -2.3, oy: -0.8 },
     ],
-    // Landmarks: first full mill view on the approach, the meadow panorama
-    // across the loop, the sails up close on the climbing arc.
+    // Landmarks: first full mill view on the east loop, the NW meadow
+    // panorama, the sails up close at the end of the climbing spiral.
     fotoSpots: [
       { s: 30, ox: 0, oy: 0.6 },
       { s: 88, ox: 0, oy: 0.9 },
-      { s: 150, ox: 0, oy: 1.1 },
+      { s: 147.24, ox: 0, oy: 0.8 },
     ],
   },
 
   // ── „Ludlow - Quality Square" — ijenko, CC BY 4.0 (§G6.2) ──
-  // Route: four weaving passes along the cobbled lane — stroller height out,
-  // window height back, chimney height out again — settling into the open
-  // square for the finish. Corrected frame (rotX(pi)). ≈ 168 m ≈ 105 s.
+  // Route (corrected frame): the „walk into another world" reveal down the
+  // narrow alley (x ≈ 18.3, walls at ~16.9/~19.6), through the arch doorway
+  // at z ≈ 0, a low westward cruise along the clean z ≈ −3.1 plaza lane,
+  // then a RISING STADIUM HELIX — 2.7 laps around the square on straight
+  // rails z −6.15/−1.65 with r 2.25 semicircle caps, y 4.2 → 6.8 (interior
+  // open to y 6.5+) — and a descending west sweep to a mid-square finish.
+  // ≈ 174 m ≈ 109 s at 1.6 m/s.
   townsquare: {
     id: 'townsquare',
     titleKey: 'mg.welt.scene.townsquare',
@@ -170,91 +185,97 @@ export const WELT_SCENES = deepFreeze({
       fallbackGround: '#9A8D7F',
     },
     waypoints: [
-      [13.5, 1, -1.2],
-      [8.67, 1.15, -0.42],
-      [3.83, 1.26, -0.42],
-      [-1, 1.3, -1.2],
-      [-5.83, 1.26, -1.98],
-      [-10.67, 1.15, -1.98],
-      [-15.5, 1, -1.2],
-      [-18.2, 1.7, 1.8],
-      [-19.1, 1.95, 4.8],
-      [-17.3, 2.1, 7.8],
-      [-10.67, 2.75, 2.75],
-      [-5.83, 2.86, 1.95],
-      [-1, 2.9, 1.2],
-      [3.83, 2.86, 1.25],
-      [8.67, 2.75, 2.05],
-      [13.5, 2.6, 2.8],
-      [16.2, 3.8, -1],
-      [17.1, 3.6, -4],
-      [15.3, 3.4, -7],
-      [8.67, 4.55, -1.09],
-      [3.83, 4.66, -1.82],
-      [-1, 4.7, -1.73],
-      [-5.83, 4.66, -0.91],
-      [-10.67, 4.55, -0.18],
-      [-15.5, 4.4, -0.27],
-      [-18.8, 3.05, -4.3],
-      [-19.7, 2.85, -7.6],
-      [-17.3, 2.75, -10.6],
-      [-10.28, 1.68, 1.31],
-      [-5.06, 1.79, 1.79],
-      [0.16, 1.79, 2.84],
-      [5.38, 1.68, 3],
-      [10.6, 1.5, 2.06],
+      [18.4, 1.5, 14.6],
+      [18.35, 1.6, 10.9],
+      [18.25, 1.75, 7.1],
+      [18.15, 1.95, 3.4],
+      [18.3, 2.3, 1.7],
+      [18.1, 2.65, 0.4],
+      [17, 2.95, -1],
+      [15.4, 3.2, -2],
+      [9.4, 3.35, -3.1],
+      [2.2, 3.5, -3.15],
+      [-4.82, 4.2, -2.45],
+      [-2.74, 4.32, -6.15],
+      [2.73, 4.45, -6.15],
+      [8.2, 4.57, -6.15],
+      [13.15, 4.7, -4.83],
+      [10.13, 4.82, -1.65],
+      [4.66, 4.94, -1.65],
+      [-0.81, 5.07, -1.65],
+      [-5.32, 5.19, -3.55],
+      [-1.52, 5.31, -6.15],
+      [3.95, 5.44, -6.15],
+      [9.42, 5.56, -6.15],
+      [13.34, 5.69, -3.65],
+      [8.91, 5.81, -1.65],
+      [3.44, 5.93, -1.65],
+      [-2.03, 6.06, -1.65],
+      [-5.19, 6.18, -4.74],
+      [-0.31, 6.3, -6.15],
+      [5.16, 6.43, -6.15],
+      [10.63, 6.55, -6.15],
+      [12.89, 6.68, -2.53],
+      [7.7, 6.8, -1.65],
+      [-0.6, 6.3, -2.4],
+      [-4.4, 5.5, -3.6],
+      [-4.2, 4.8, -5.3],
+      [0.2, 4.3, -5.7],
+      [4.6, 3.9, -5],
+      [7.4, 3.6, -3.8],
     ],
     corridor: [
-      1.8, 1.8, 1.8, 1.8, 1.8, 2.2, 2.2, 2.2, 2.2, 2.2, 1.8, 1.8, 1.8, 1.8,
-      2.2, 2.2, 2.2, 2.2, 2.2, 1.8, 1.8, 1.8, 1.8, 2.2, 2.2, 2.2, 2.2, 2.2,
-      1.8, 1.8, 1.8, 1.8,
+      1.2, 1.2, 1.2, 1.2, 1.2, 1.3, 1.3, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6,
+      1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6,
+      1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6,
     ],
     stars: [
-      { s: 7, ox: 0.55, oy: -0.2 },
-      { s: 12.68, ox: 1.5, oy: 0.97 },
-      { s: 18.36, ox: 1.5, oy: 1.27 },
-      { s: 24.04, ox: 0.55, oy: 0.48 },
-      { s: 29.72, ox: -0.55, oy: -0.2 },
-      { s: 35.4, ox: -1.33, oy: 0.73 },
-      { s: 41.08, ox: 1.32, oy: 1.26 },
-      { s: 46.76, ox: -1.33, oy: 1.16 },
-      { s: 52.44, ox: -0.55, oy: 0.48 },
-      { s: 58.12, ox: 0.55, oy: 1.3 },
-      { s: 63.8, ox: 1.33, oy: 0.93 },
-      { s: 69.47, ox: 1.65, oy: 0.55 },
-      { s: 75.15, ox: 1.33, oy: 0.18 },
-      { s: 80.83, ox: 0.55, oy: -0.2 },
-      { s: 86.51, ox: -0.55, oy: -0.2 },
-      { s: 92.19, ox: -1.33, oy: 0.73 },
-      { s: 97.87, ox: -1.65, oy: 1.26 },
-      { s: 103.55, ox: -1.33, oy: 1.16 },
-      { s: 109.23, ox: -0.55, oy: 0.48 },
-      { s: 114.91, ox: 0.55, oy: -0.2 },
-      { s: 120.59, ox: 1.5, oy: 0.97 },
-      { s: 126.27, ox: 1.5, oy: 1.27 },
-      { s: 131.95, ox: 0.55, oy: 0.48 },
-      { s: 137.63, ox: -0.55, oy: 1.3 },
-      { s: 142.01, ox: 1.06, oy: 0.93 },
-      { s: 148.99, ox: 1.32, oy: 0.55 },
-      { s: 154.67, ox: -1.33, oy: 0.18 },
-      { s: 159.05, ox: -0.55, oy: -0.2 },
+      { s: 6, ox: 0.5, oy: -0.2 },
+      { s: 11.53, ox: 1.2, oy: 0.97 },
+      { s: 17.06, ox: 1.24, oy: 1.27 },
+      { s: 22.59, ox: 0.5, oy: -0.48 },
+      { s: 28.12, ox: -0.5, oy: -0.2 },
+      { s: 33.65, ox: -1.1, oy: -0.73 },
+      { s: 39.18, ox: -1.35, oy: 1.26 },
+      { s: 44.71, ox: -1.1, oy: -0.9 },
+      { s: 51.54, ox: -0.5, oy: 0.48 },
+      { s: 55.77, ox: 0.5, oy: -0.9 },
+      { s: 61.3, ox: 1.1, oy: 0.93 },
+      { s: 66.83, ox: 1.35, oy: 0.05 },
+      { s: 72.36, ox: -0.88, oy: 0.18 },
+      { s: 77.89, ox: 0.5, oy: -0.2 },
+      { s: 83.42, ox: -0.5, oy: -0.2 },
+      { s: 88.95, ox: -1.1, oy: 0.73 },
+      { s: 94.48, ox: -1.35, oy: -0.9 },
+      { s: 101.31, ox: -1.1, oy: 1.16 },
+      { s: 105.54, ox: -0.5, oy: 0.48 },
+      { s: 111.07, ox: 0.5, oy: 0.7 },
+      { s: 116.6, ox: -0.99, oy: 0.97 },
+      { s: 122.13, ox: 1.24, oy: 1.27 },
+      { s: 126.36, ox: 0.5, oy: 0.48 },
+      { s: 133.19, ox: -0.5, oy: 1.3 },
+      { s: 138.72, ox: -1.1, oy: 0.93 },
+      { s: 144.25, ox: -1.35, oy: 1.45 },
+      { s: 148.48, ox: -1.1, oy: 0.18 },
+      { s: 155.31, ox: 0.4, oy: -0.2 },
     ],
-    // Discovery spurs: under the archway eaves, up at the window boxes,
-    // low over the cobbles, high at the chimney line.
+    // Discovery spurs: up at the archway lintel, low over the cobbles on the
+    // west cruise, outward on the first helix lap, up at the upper-floor
+    // windows, along the chimney line, and a low cobble dive on the tail.
     carrots: [
-      { s: 20, ox: -1.7, oy: 0.2 },
-      { s: 48, ox: 1.6, oy: 1.5 },
-      { s: 74, ox: -1.6, oy: -0.7 },
-      { s: 100, ox: 1.7, oy: 1.6 },
-      { s: 128, ox: -1.7, oy: 0.4 },
-      { s: 154.35, ox: 1.6, oy: 1.4 },
+      { s: 7, ox: 0.1, oy: 1.55 },
+      { s: 34, ox: -1.4, oy: -0.5 },
+      { s: 66, ox: 1.4, oy: 0.4 },
+      { s: 100, ox: -1.5, oy: 1.2 },
+      { s: 132, ox: 1.5, oy: 0.9 },
+      { s: 160, ox: -1.4, oy: -0.6 },
     ],
-    // Landmarks: the lane vista, the upper-floor facades, the square from
-    // rooftop height on the last pass.
+    // Landmarks: the square reveal just past the arch, the mid-square facade
+    // panorama, the square from rooftop height on the top lap.
     fotoSpots: [
-      { s: 28, ox: 0, oy: 0.7 },
-      { s: 84, ox: 0, oy: 1.2 },
-      { s: 142.35, ox: 0, oy: 0.6 },
+      { s: 16, ox: 0, oy: 0.5 },
+      { s: 82, ox: 0, oy: 0.8 },
+      { s: 150, ox: 0, oy: 0.6 },
     ],
   },
 });
