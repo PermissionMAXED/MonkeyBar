@@ -1,3 +1,6 @@
+NEUER API KEY DU KANNST WEITERE MACHEN sksonauto_V7u6swG0UuFZT9NnRPK8tkHnpjdvwpM2kRcfYGHRxqGG067I 
+Denk dran die Prompt stärker höher zustellen als nur 1 und allgemein die parameter die es gibt auch zunutzen! und nutze model v3 
+
 # 🎵 GoobyMusic — Song-Requests
 
 ## ✅ ANGEKOMMEN (danke!) — Stand: Wave 1
