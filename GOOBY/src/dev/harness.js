@@ -26,6 +26,9 @@
 //                            toggles for this session
 //   ?recappreview=<biome>    V4/G63 (§C-SYS2.3): standalone recap-vignette
 //                            preview (biome id or 1..8) + __recapPreview probe
+//   ?weltpreview=windmill|townsquare   V4/G65 (§G6): full-screen splat-scene
+//                            preview through welt/splatViewer.js (+ optional
+//                            &quality=high|low override of the saved setting)
 //   ?minigame=goobyWelt&scene=<id>&flycam=1   V4/G66 (§G6.5-1): welt path-
 //                            authoring flycam (P dumps {pos, look}); &scene=
 //                            alone pins the splat scene, &quality=low forces
@@ -155,6 +158,28 @@ export async function postBoot({ store, ui, sceneManager, framework }) {
   }
   const difficulty = q.get('difficulty') ?? undefined;
   // ---- end V4/G56 append ----
+
+  // ---- V4/G65: ?weltpreview=<sceneId> (§G6/§E9, marked append) ----
+  // Full-screen splat preview through welt/splatViewer.js — the §E block-G65
+  // evidence surface (both scenes, load/dispose cycles, quality toggle over
+  // window.__weltPreview). Lazy import keeps gaussian-splats-3d out of boot.
+  const weltpreview = q.get('weltpreview');
+  if (weltpreview) {
+    try {
+      const welt = await import('../welt/weltPreview.js');
+      const target = welt.registerWeltPreviewScenes(sceneManager, weltpreview);
+      if (target) {
+        await sceneManager.switchTo(target, { quality: q.get('quality') ?? undefined });
+        return true;
+      }
+      console.warn(`[harness] unknown welt scene '${weltpreview}'`);
+    } catch (err) {
+      console.error('[harness] welt preview failed:', err);
+    }
+    await sceneManager.switchTo('home');
+    return true;
+  }
+  // ---- end V4/G65 append ----
 
   // ---- V4/G66: goobyWelt authoring route (§G6.5-1, marked append) ----
   // ?minigame=goobyWelt&scene=<windmill|townsquare>[&flycam=1][&quality=low]

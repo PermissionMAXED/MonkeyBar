@@ -52,6 +52,7 @@ export const HARNESS_PARAM_GROUPS = Object.freeze([
       Object.freeze({ param: 'open', example: '?open=settings', en: 'open a screen (shop|wardrobe|achievements|arcade|settings|questBoard|album|profile|devPanel)', de: 'Screen öffnen (shop|wardrobe|achievements|arcade|settings|questBoard|album|profile|devPanel)' }),
       Object.freeze({ param: 'travel', example: '?travel=surf', en: 'direct shop trip via surf|drive', de: 'Einkaufsfahrt direkt via surf|drive' }),
       Object.freeze({ param: 'recappreview', example: '?recappreview=meadow', en: 'standalone recap-vignette preview (biome id or 1..8) — V4/G63', de: 'Recap-Vignette einzeln rendern (Biome-Id oder 1..8) — V4/G63' }), // V4/G63 one-liner
+      Object.freeze({ param: 'weltpreview', example: '?weltpreview=windmill', en: 'full-screen splat-scene preview (windmill|townsquare, + &quality=low) — V4/G65', de: 'Splat-Szenen-Vorschau in Vollbild (windmill|townsquare, + &quality=low) — V4/G65' }), // V4/G65 one-liner
     ]),
   }),
   Object.freeze({

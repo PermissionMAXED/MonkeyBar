@@ -69,7 +69,11 @@ const modifierEngineModules = import.meta.glob('../systems/modifierEngine.js');
 const recapPlaybackModules = import.meta.glob(['./recapOverlay.js', '../systems/recapScene.js', '../scenes/recapScene.js']);
 const radioEngineModules = import.meta.glob(['../audio/radio.js', '../audio/radioPlayer.js', '../systems/radio.js']);
 const musicManifestModules = import.meta.glob('../data/musicManifest.json');
-const splatRegistryModules = import.meta.glob(['../data/splatScenes.js', '../systems/splatScenes.js']);
+// V4/G65: the wave-2 welt registry (welt/weltScenes.js) joins the plan-B
+// probe list; the preview-scene loader stays a lazy glob so the splat lib
+// never enters the devPanel chunk.
+const splatRegistryModules = import.meta.glob(['../data/splatScenes.js', '../systems/splatScenes.js', '../welt/weltScenes.js']);
+const weltPreviewModules = import.meta.glob('../welt/weltPreview.js');
 
 /** §C-SYS4.2 type → plays fallback (used only when G54's engine exports no
  *  table of its own; the card stays disabled while the engine is absent). */
@@ -331,7 +335,8 @@ export function mountDevPanel(el, deps) {
     for (const load of Object.values(splatRegistryModules)) {
       try {
         const mod = await load();
-        const rows = mod.SPLAT_SCENES ?? mod.default ?? null;
+        // V4/G65: + WELT_SCENES (the shipped registry's export name).
+        const rows = mod.WELT_SCENES ?? mod.SPLAT_SCENES ?? mod.default ?? null;
         if (Array.isArray(rows) && rows.length > 0) splatScenes = rows;
       } catch { /* wave-2 registry absent */ }
     }
@@ -586,7 +591,7 @@ export function mountDevPanel(el, deps) {
           </div>
           <div class="g33-dev-card-desc">${tx('dev.jump.splat')}</div>
           ${splatScenes
-            ? `<div class="g58-dev-chips">${splatScenes.map((s) => jumpChip('jumpSplat', s.id ?? String(s), deps.sceneManager?.has?.(s.id ?? String(s)) === true)).join('')}</div>`
+            ? `<div class="g58-dev-chips">${splatScenes.map((s) => jumpChip('jumpSplat', s.id ?? String(s), weltPreviewModules['../welt/weltPreview.js'] != null)).join('')}</div>`
             : `<p class="g33-dev-card-desc">${tx('dev.jump.splatMissing')}</p>`}
         </div>
 
@@ -1436,18 +1441,41 @@ export function mountDevPanel(el, deps) {
       }
     });
 
-    // card 17 — jump list + splat teleport.
-    for (const btn of el.querySelectorAll('[data-act="jumpScene"], [data-act="jumpSplat"]')) {
+    // card 17 — jump list.
+    for (const btn of el.querySelectorAll('[data-act="jumpScene"]')) {
       btn.addEventListener('click', () => {
         const id = btn.dataset.id ?? '';
         const sm = deps.sceneManager;
         if (!sm?.has?.(id) || sm.isSwitching?.()) return;
         audio.play('ui.tap');
-        if (btn.dataset.act === 'jumpSplat') setOverlay(deps, true); // fps/draw readout
         ui.closeAll();
         sm.switchTo(id);
       });
     }
+    // V4/G65 — card-17 splat teleport (G58's stub, wired): lazy-import the
+    // welt preview (keeps gaussian-splats-3d out of this chunk), register the
+    // §E1 preview scenes on demand, then switch full-screen with the fps/draw
+    // overlay on. Uses settings.goobyWeltQuality via the preview's enter().
+    for (const btn of el.querySelectorAll('[data-act="jumpSplat"]')) {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.id ?? '';
+        const sm = deps.sceneManager;
+        const load = weltPreviewModules['../welt/weltPreview.js'];
+        if (!load || !sm || sm.isSwitching?.()) return;
+        audio.play('ui.tap');
+        try {
+          const welt = await load();
+          const target = welt.registerWeltPreviewScenes(sm, id);
+          if (!target) return;
+          setOverlay(deps, true); // fps/draw readout
+          ui.closeAll();
+          sm.switchTo(target);
+        } catch (err) {
+          console.error('[devPanel] splat teleport failed:', err);
+        }
+      });
+    }
+    // ---- end V4/G65 splat teleport ----
     for (const btn of el.querySelectorAll('[data-act="jumpScreen"]')) {
       btn.addEventListener('click', () => {
         audio.play('ui.tap');
