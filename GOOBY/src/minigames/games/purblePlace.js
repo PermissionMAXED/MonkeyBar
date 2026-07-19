@@ -944,10 +944,25 @@ export default {
     npc.t = 0;
   },
 
+  /** V3/FIX-E P1-2 (E10): free a removed NPC's per-clone GPU/JS resources.
+   * Every getSkinnedModel clone owns its OWN Skeleton (SkeletonUtils re-bind,
+   * §B6) whose lazily-created 16×16 float boneTexture leaked on removal —
+   * +6 GL textures per launch/quit, unbounded across a session. skeleton
+   * .dispose() frees exactly that per-clone texture; geometries/materials
+   * stay SHARED cache masters (isCachedResource) and are never touched.
+   * uncacheRoot drops the mixer's cached actions/property bindings. */
+  disposeNpcResources(npc) {
+    npc.mixer.stopAllAction();
+    npc.mixer.uncacheRoot(npc.model);
+    npc.model.traverse((obj) => {
+      if (obj.isSkinnedMesh && obj.skeleton) obj.skeleton.dispose();
+    });
+  },
+
   removeNpc(npc) {
     this.releaseAnim(npc);
-    npc.mixer.stopAllAction();
     this.ctx.scene.remove(npc.model);
+    this.disposeNpcResources(npc);
     const i = this.exitingNpcs?.indexOf(npc) ?? -1;
     if (i >= 0) this.exitingNpcs.splice(i, 1);
   },
@@ -1294,8 +1309,8 @@ export default {
     this.controlsEl?.remove();
     this.ticketEls?.clear();
     for (const npc of [...(this.npcs?.values() ?? []), ...(this.exitingNpcs ?? [])]) {
-      npc.mixer.stopAllAction();
       this.ctx?.scene?.remove(npc.model);
+      this.disposeNpcResources(npc); // V3/FIX-E P1-2: free skeleton boneTextures
     }
     this.npcs?.clear();
     this.exitingNpcs = [];

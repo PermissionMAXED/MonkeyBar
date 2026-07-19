@@ -14,6 +14,11 @@
  * The frozen PACK_FORMATS table maps slug → { root, ext }; every slug not
  * listed resolves exactly as before (kenney/glb).
  *
+ * V3/FIX-E (E10): external model textures (the shared KayKit pack atlases)
+ * are deduped through a URL-keyed cache registered as a LoadingManager
+ * handler — every .gltf of a pack shares ONE Texture/Source/GPU upload, and
+ * the shared masters are isCachedResource-owned so sweeps never dispose them.
+ *
  * Asset key format everywhere in the game: `'<slug>/<file-no-ext>'`,
  * e.g. `'food-kit/carrot'`, `'kaykit-restaurant/oven'`,
  * `'kaykit-characters/Knight'`, audio `'ui-audio/switch1'`.
@@ -68,19 +73,71 @@ const modelCache = new Map();
 /** In-flight/settled load promises so concurrent preloads coalesce. */
 const loadPromises = new Map();
 
+// ── V3/FIX-E P1-1 (E10): URL-keyed shared texture cache ─────────────────────
+// KayKit `.gltf` packs (§B6) reference ONE shared atlas per pack
+// (`<pack>_texture.png`), but a plain GLTFLoader fetches + decodes that image
+// once PER MODEL (purblePlace: 19 fetches, 27 GPU copies ≈ 112 MB vs the
+// 64 MB §A2.3 texture budget). GLTFLoader consults
+// `manager.getHandler(<image uri>)` before falling back to its internal
+// texture loader, so a caching handler registered on the loading manager
+// makes every model of a pack share the SAME Texture instance: one fetch +
+// decode, one Source → one GPU upload. Embedded images (GLB bufferViews,
+// data: URIs) never reach getHandler and keep the stock path.
+
+/** In-flight/settled shared-texture promises: resolved URL → Promise<Texture>. */
+const texturePromises = new Map();
+/** Loads the actual image (swappable test seam — see _setTextureLoaderForTests). */
+let textureLoader = new THREE.TextureLoader();
+
+/** LoadingManager handler: serves one shared, cache-owned Texture per URL. */
+const cachingTextureHandler = {
+  load(url, onLoad, onProgress, onError) {
+    let p = texturePromises.get(url);
+    if (!p) {
+      p = new Promise((resolve, reject) => {
+        textureLoader.load(url, resolve, undefined, reject);
+      }).then(
+        (tex) => {
+          // The shared master is permanent — consumers/sweeps must never
+          // dispose it (extends the V2/FIX-F P2-3 ownership guard).
+          cachedResources.add(tex);
+          if (tex.source) cachedResources.add(tex.source);
+          return tex;
+        },
+        (err) => {
+          // Evict the rejected promise so a later model load retries the
+          // fetch (mirrors the model-promise eviction in loadModel).
+          if (texturePromises.get(url) === p) texturePromises.delete(url);
+          throw err;
+        }
+      );
+      texturePromises.set(url, p);
+    }
+    p.then(onLoad, onError ?? (() => {}));
+  },
+};
+
+// GLTFLoader matches handlers against the RAW image uri from the glTF JSON
+// (e.g. 'restaurantbits_texture.png'); the handler then receives the
+// resolved URL — per-pack cache keys stay distinct. Registered on the
+// default manager (shared by every GLTFLoader this module creates).
+THREE.DefaultLoadingManager.addHandler(/\.(png|jpe?g)$/i, cachingTextureHandler);
+
 // ── V2/FIX-F P2-3 (E17): cache ownership registry ───────────────────────────
-// Geometries/materials of cache MASTERS. getModel clones SHARE these objects
-// (Object3D.clone() semantics), so scene dispose sweeps (minigame framework)
-// can consult isCachedResource to skip them — disposing a shared master forces
-// a GPU re-upload + shader recompile on the next scene that uses the model.
+// Geometries/materials/textures of cache MASTERS. getModel clones SHARE these
+// objects (Object3D.clone() semantics), so scene dispose sweeps (minigame
+// framework) can consult isCachedResource to skip them — disposing a shared
+// master forces a GPU re-upload + shader recompile on the next scene that
+// uses the model. V3/FIX-E (E10): also holds the shared pack textures + their
+// Sources — disposing one of those would break EVERY model of the pack.
 /** @type {WeakSet<object>} */
 const cachedResources = new WeakSet();
 
 /**
- * Whether a geometry/material belongs to (is shared with) the permanent asset
- * cache. Scene dispose sweeps must SKIP these — mirror `roomManager`'s
- * `disposeIfOwned` pattern (V2/FIX-F P2-3).
- * @param {object|null|undefined} resource a THREE geometry or material
+ * Whether a geometry/material/texture belongs to (is shared with) the
+ * permanent asset cache. Scene dispose sweeps must SKIP these — mirror
+ * `roomManager`'s `disposeIfOwned` pattern (V2/FIX-F P2-3).
+ * @param {object|null|undefined} resource a THREE geometry, material or texture
  * @returns {boolean}
  */
 export function isCachedResource(resource) {
@@ -97,14 +154,28 @@ export function isCachedResource(resource) {
  *     itself (e.g. the golden skin's 0.25 metalness) are never touched.
  *   · V2/FIX-F P2-3: register master geometries/materials in the ownership
  *     WeakSet (see isCachedResource).
+ *   · V3/FIX-E (E10): register the materials' textures (+ their Sources) too —
+ *     the KayKit pack atlases are SHARED across every model of a pack via the
+ *     caching texture handler, and GLB-embedded textures are shared by all
+ *     clones of their master; a dispose sweep must never free either kind.
  * @param {object} sceneRoot the gltf.scene master
  */
+const MATERIAL_TEXTURE_SLOTS = [
+  'map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap',
+  'bumpMap', 'alphaMap', 'lightMap', 'envMap', 'specularMap',
+];
 function normalizeLoadedScene(sceneRoot) {
   sceneRoot.traverse?.((obj) => {
     if (obj.geometry) cachedResources.add(obj.geometry);
     const mats = Array.isArray(obj.material) ? obj.material : obj.material ? [obj.material] : [];
     for (const mat of mats) {
       cachedResources.add(mat);
+      for (const slot of MATERIAL_TEXTURE_SLOTS) {
+        const tex = mat[slot];
+        if (!tex) continue;
+        cachedResources.add(tex); // V3/FIX-E: master textures are cache-owned
+        if (tex.source) cachedResources.add(tex.source);
+      }
       if (mat.userData?.goobyMetalnessNormalized) continue;
       if (mat.userData) mat.userData.goobyMetalnessNormalized = true;
       if (mat.metalness === 1) mat.metalness = 0;
@@ -121,6 +192,19 @@ function normalizeLoadedScene(sceneRoot) {
  */
 export function _setLoaderForTests(l) {
   loader = l ?? new GLTFLoader();
+}
+
+/**
+ * Test seam: swap the shared-texture image loader (must expose
+ * `load(url, onLoad, onProgress, onError)`) and reset the URL-keyed texture
+ * cache. Used by `test/assets.test.js` to verify the V3/FIX-E dedupe without
+ * network/Image decode; production code never calls this.
+ * @param {{load: Function}|null} l replacement loader, or null to restore
+ *   the real TextureLoader
+ */
+export function _setTextureLoaderForTests(l) {
+  textureLoader = l ?? new THREE.TextureLoader();
+  texturePromises.clear();
 }
 
 /**

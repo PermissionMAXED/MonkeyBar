@@ -855,6 +855,107 @@ test('V3 §B6: getSkinnedModel cache miss — placeholder + background retry, no
   );
 });
 
+// ---------------------------------------------------------------------------
+// V3/FIX-E P1-1 (eval E10): KayKit packs share ONE atlas texture per pack
+// (<pack>_texture.png) across every .gltf model, but a plain GLTFLoader
+// decoded it once PER MODEL (19 fetches / 27 Sources ≈ 112 MB in purblePlace
+// vs the 64 MB §A2.3 cap). assets.js now registers a URL-keyed caching
+// texture handler on the GLTFLoader's LoadingManager (GLTFLoader consults
+// manager.getHandler(imageUri) before its internal texture loader), so every
+// model of a pack shares the SAME Texture instance — ONE fetch+decode, ONE
+// Source, ONE GPU upload — and the shared texture is cache-owned
+// (isCachedResource) so dispose sweeps must skip it.
+// ---------------------------------------------------------------------------
+
+test('V3/FIX-E P1-1: pack textures load ONCE per URL — all models share one cache-owned Texture', async (t) => {
+  const assets = await import('../src/core/assets.js');
+  const THREE = await import('three');
+  t.after(() => assets._setTextureLoaderForTests(null));
+
+  let loads = 0;
+  assets._setTextureLoaderForTests({
+    load(url, onLoad) {
+      loads += 1;
+      const tex = new THREE.Texture();
+      tex.name = url;
+      setTimeout(() => onLoad(tex), 0);
+    },
+  });
+
+  // the wiring GLTFLoader consults for external image URIs (§B6 .gltf packs)
+  const handler = THREE.DefaultLoadingManager.getHandler('restaurantbits_texture.png');
+  assert.ok(handler, 'caching texture handler registered on the loading manager');
+  const load = (url) => new Promise((res, rej) => handler.load(url, res, undefined, rej));
+
+  // two CONCURRENT loads of the same URL (two .gltf models of one pack)
+  // coalesce onto one in-flight fetch and deliver the SAME Texture instance
+  const url = '/assets/kaykit/kaykit-restaurant/restaurantbits_texture.png';
+  const [first, second] = await Promise.all([load(url), load(url)]);
+  assert.equal(loads, 1, 'one fetch+decode per URL per session');
+  assert.equal(first, second, 'models share the SAME Texture (one Source, one GPU upload)');
+  const third = await load(url);
+  assert.equal(loads, 1, 'later models keep hitting the cache');
+  assert.equal(third, first);
+
+  // the shared master must never be disposed by consumers — dispose sweeps
+  // consult isCachedResource (V2/FIX-F P2-3 guard, extended to textures)
+  assert.equal(assets.isCachedResource(first), true, 'shared texture is cache-owned');
+  assert.equal(assets.isCachedResource(first.source), true, 'its Source is cache-owned too');
+
+  // a different pack's texture is a separate cache entry
+  const other = await load('/assets/kaykit/kaykit-city/citybits_texture.png');
+  assert.equal(loads, 2);
+  assert.notEqual(other, first);
+});
+
+test('V3/FIX-E P1-1: failed texture loads are evicted and retried', async (t) => {
+  const assets = await import('../src/core/assets.js');
+  const THREE = await import('three');
+  t.after(() => assets._setTextureLoaderForTests(null));
+
+  let loads = 0;
+  const tex = new THREE.Texture();
+  assets._setTextureLoaderForTests({
+    load(url, onLoad, onProgress, onError) {
+      loads += 1;
+      if (loads === 1) setTimeout(() => onError(new Error('boom: texture 404')), 0);
+      else setTimeout(() => onLoad(tex), 0);
+    },
+  });
+
+  const handler = THREE.DefaultLoadingManager.getHandler('halloweenbits_texture.png');
+  const load = (url) => new Promise((res, rej) => handler.load(url, res, undefined, rej));
+  const url = '/assets/kaykit/kaykit-halloween/halloweenbits_texture.png';
+  await assert.rejects(load(url), /texture 404/);
+  // the poisoned promise was evicted → a later model's load retries fresh
+  assert.equal(await load(url), tex);
+  assert.equal(loads, 2);
+  // …and the recovered texture is cached + owned like any other master
+  assert.equal(await load(url), tex);
+  assert.equal(loads, 2);
+  assert.equal(assets.isCachedResource(tex), true);
+});
+
+test('V3/FIX-E P1-1: loaded scene textures register in the isCachedResource guard', async (t) => {
+  const assets = await import('../src/core/assets.js');
+  const THREE = await import('three');
+  t.after(() => assets._setLoaderForTests(null));
+
+  // GLB-embedded textures (kaykit-characters, kenney colormaps) arrive on the
+  // parsed scene's materials — normalizeLoadedScene must own-register them so
+  // texture dispose sweeps skip masters exactly like geometries/materials.
+  const map = new THREE.Texture();
+  const scene = new THREE.Group();
+  scene.add(new THREE.Mesh(
+    new THREE.BoxGeometry(),
+    new THREE.MeshStandardMaterial({ map })
+  ));
+  assets._setLoaderForTests({ loadAsync: () => Promise.resolve({ scene }) });
+  await assets.preload(['kaykit-restaurant/__fixe-texguard-test']);
+  assert.equal(assets.isCachedResource(map), true, 'material map registered');
+  assert.equal(assets.isCachedResource(map.source), true, 'map Source registered');
+});
+
 test('assets cache: concurrent callers share one rejection, then recover', async (t) => {
   const assets = await import('../src/core/assets.js');
   t.after(() => assets._setLoaderForTests(null));
