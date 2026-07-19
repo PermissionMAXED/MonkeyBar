@@ -51,6 +51,7 @@ import { createStore } from '../src/core/store.js';
 const ROOM_DEFS = [KITCHEN, LIVING, BATHROOM, BEDROOM];
 const ASSET_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'assets', 'kenney');
 const KAYKIT_ASSET_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'assets', 'kaykit');
+const ITCH_ASSET_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'assets', 'itch');
 
 /** isolated store per test (autosave off — no timers keep node alive) */
 const makeStore = () => createStore(defaultState(), { autosave: false });
@@ -193,12 +194,18 @@ test('every non-procedural entry (incl. set + cluster pieces) has its GLB on dis
     if (e.procedural) continue;
     // V2/G22: glb keys are pack-qualified (garden pieces live outside
     // furniture-kit); multi-piece sets stay furniture-kit names
-    if (e.pieces) for (const name of e.pieces) files.add(`furniture-kit/${name}.glb`);
-    else files.add(`${e.glb}.glb`);
-    for (const piece of e.cluster ?? []) files.add(`${piece.glb}.glb`);
+    if (e.pieces) {
+      for (const name of e.pieces) files.add(join(ASSET_DIR, `furniture-kit/${name}.glb`));
+    } else if (e.glb === 'pleasant-picnic/radio') {
+      // V4/G52: Tiny Treats radio is a shared-texture glTF under the itch root.
+      files.add(join(ITCH_ASSET_DIR, `${e.glb}.gltf`));
+    } else {
+      files.add(join(ASSET_DIR, `${e.glb}.glb`));
+    }
+    for (const piece of e.cluster ?? []) files.add(join(ASSET_DIR, `${piece.glb}.glb`));
   }
-  for (const rel of files) {
-    assert.ok(existsSync(join(ASSET_DIR, rel)), `missing GLB: ${rel}`);
+  for (const file of files) {
+    assert.ok(existsSync(file), `missing model: ${file}`);
   }
 });
 
@@ -395,16 +402,16 @@ test('§A3 catalog counts: +30 new furniture buyables, wallpapers 10, floors 7',
   //   + 4 V2/FIX-C §C6 set-reward decos
   assert.equal(FURNITURE.length, 78);
   // §A3 "+30 new buyables": v1 ships 23 non-default furniture buyables;
-  // 2.0 adds 23 indoor + 7 buyable garden pieces = 53 total (rewards are
-  // price 0 and never counted as buyables)
+  // V4/G52 repurposes the old 90c radio as the free gifted radio, so the
+  // historical 53 buyables become 52 without adding/removing a catalog id.
   const buyables = FURNITURE.filter((e) => !e.default && e.price > 0);
-  assert.equal(buyables.length, 53);
+  assert.equal(buyables.length, 52);
   assert.equal(WALLPAPERS.length, 10); // §C8.2: 6 → 10
   assert.equal(FLOORS.length, 7); // §C8.2: 4 → 7
   // every free entry is a slot default OR a §C6 set reward; every
   // non-free entry is a plain buyable (V2/FIX-C extends the v1 invariant)
   for (const e of FURNITURE) {
-    assert.equal(e.price === 0, !!(e.default || e.reward), e.id);
+    assert.equal(e.price === 0, !!(e.default || e.reward || e.giftV4), e.id);
     assert.ok(!(e.default && e.reward), `${e.id} cannot be both default and reward`);
   }
 });
@@ -416,7 +423,7 @@ test('§C8.1 indoor additions: binding prices, slots and rooms', () => {
     tableCoffee: ['sideboard', 'living', 140],
     tableCoffeeGlass: ['sideboard', 'living', 200],
     cabinetTelevision: ['sideboard', 'living', 160],
-    radio: ['sideboard', 'living', 90],
+    radio: ['sideboard', 'living', 0],
     speaker: ['sideboard', 'living', 110],
     ceilingFan: ['ceilingFan', 'living', 150],
     'proc:artSkyline': ['wallArt', 'living', 140],
@@ -443,7 +450,12 @@ test('§C8.1 indoor additions: binding prices, slots and rooms', () => {
     assert.equal(e.slot, slot, `${id} slot`);
     assert.ok(e.rooms.includes(room), `${id} rooms`);
     assert.equal(e.price, price, `${id} price (§C8.1 binding)`);
-    assert.equal(e.default, undefined, `${id} is a buyable`);
+    if (id === 'radio') {
+      assert.equal(e.giftV4, true, 'radio is the V4 gift');
+      assert.equal(e.glb, 'pleasant-picnic/radio', 'radio uses the Tiny Treats model');
+    } else {
+      assert.equal(e.default, undefined, `${id} is a buyable`);
+    }
   }
   // the fan hangs from the ceiling anchor (decor.js mount handling)
   assert.equal(FURNITURE_BY_ID.ceilingFan.mount, 'ceiling');

@@ -2298,3 +2298,551 @@
 }
 
 /* ---------- end V3/FIX-C ---------- */
+
+/* ===================== V4/G52: Radio UI (§C-SYS1.3–1.8) ================== */
+
+.screen-radio,
+.screen-trackSettings {
+  justify-content: flex-start;
+  overflow: hidden;
+}
+
+.g52-radio {
+  width: min(100%, 27rem);
+  height: 100%;
+  min-height: 0;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+  padding: 0.125rem 0.125rem max(0.75rem, var(--safe-bottom));
+}
+
+.panel-radioPanel,
+.panel-trackSettings {
+  height: min(48rem, calc(100vh - max(1rem, var(--safe-top))));
+  max-height: calc(100vh - max(1rem, var(--safe-top)));
+  overflow: hidden;
+}
+
+.panel-radioPanel .g52-radio,
+.panel-trackSettings .g52-radio {
+  width: 100%;
+}
+
+.g52-radio-head {
+  display: grid;
+  grid-template-columns: max(44px, 3.25rem) minmax(0, 1fr);
+  align-items: center;
+  gap: 0.625rem;
+  flex: none;
+}
+
+.g52-radio-head h1 {
+  margin: 0;
+  font-size: clamp(1.25rem, 7vw, 1.875rem);
+  line-height: 1.05;
+}
+
+.g52-radio-head p {
+  margin: 0.1875rem 0 0;
+  color: rgba(74, 59, 54, 0.68);
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+
+.g52-radio-loading {
+  min-height: 14rem;
+  display: grid;
+  place-items: center;
+  font-size: 4rem;
+  animation: g52-radio-tune 1.4s ease-in-out infinite;
+}
+
+@keyframes g52-radio-tune {
+  50% { transform: rotate(-6deg) scale(1.06); }
+}
+
+.g52-now-card {
+  display: grid;
+  grid-template-columns: 5rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+  flex: none;
+  min-width: 0;
+  background:
+    radial-gradient(circle at 90% 12%, rgba(255, 209, 102, 0.45), transparent 42%),
+    linear-gradient(135deg, #fff, #fff1f7);
+}
+
+.g52-now-card > img {
+  width: 5rem;
+  height: 5rem;
+  border-radius: 0.875rem;
+  object-fit: cover;
+  box-shadow: 0 5px 16px rgba(74, 59, 54, 0.18);
+}
+
+.g52-now-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1875rem;
+}
+
+.g52-now-copy > span {
+  color: var(--pink-dark);
+  font-size: 0.6875rem;
+  font-weight: 900;
+  letter-spacing: 0.0625rem;
+  text-transform: uppercase;
+}
+
+.g52-now-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 1.125rem;
+  line-height: 1.15;
+}
+
+.g52-now-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(74, 59, 54, 0.68);
+  font-size: 0.6875rem;
+}
+
+.g52-transport {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  flex: none;
+}
+
+.g52-transport-btn {
+  width: max(44px, 3rem);
+  height: max(44px, 3rem);
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--brown);
+  font: 900 1.125rem/1 system-ui, sans-serif;
+  box-shadow: var(--shadow-soft);
+  cursor: pointer;
+  transition: transform 90ms ease, background 180ms ease;
+}
+
+.g52-transport-btn:active {
+  transform: scale(0.93);
+}
+
+.g52-transport-btn.g52-play {
+  width: max(56px, 3.5rem);
+  height: max(56px, 3.5rem);
+  background: var(--pink);
+  color: var(--white);
+  font-size: 1.375rem;
+}
+
+.g52-transport-btn.g52-on {
+  background: #dff8f3;
+  color: var(--teal-dark);
+}
+
+.g52-section-title {
+  flex: none;
+  margin-top: 0.125rem;
+  font-size: 0.75rem;
+  font-weight: 900;
+  letter-spacing: 0.05rem;
+  text-transform: uppercase;
+  color: rgba(74, 59, 54, 0.7);
+}
+
+.g52-stations {
+  display: flex;
+  gap: 0.625rem;
+  flex: none;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  padding: 0.125rem 0.125rem 0.5rem;
+}
+
+.g52-stations::-webkit-scrollbar {
+  display: none;
+}
+
+.g52-station {
+  position: relative;
+  flex: 0 0 6.75rem;
+  min-height: max(44px, 7.75rem);
+  scroll-snap-align: start;
+  display: grid;
+  grid-template-rows: 4.75rem auto auto;
+  gap: 0.1875rem;
+  padding: 0.375rem;
+  border: 0.1875rem solid transparent;
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--brown);
+  box-shadow: 0 4px 14px rgba(74, 59, 54, 0.11);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.g52-station.g52-active {
+  border-color: var(--pink);
+  background: #fff4f8;
+}
+
+.g52-station.g52-locked {
+  filter: saturate(0.55);
+}
+
+.g52-station img {
+  width: 100%;
+  height: 4.75rem;
+  border-radius: 0.6875rem;
+  object-fit: cover;
+}
+
+.g52-station > span,
+.g52-station > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.g52-station > span {
+  font-size: 0.75rem;
+  font-weight: 900;
+}
+
+.g52-station > small {
+  color: rgba(74, 59, 54, 0.68);
+  font-size: 0.5625rem;
+  font-weight: 800;
+}
+
+.g52-replace {
+  min-height: max(44px, 3.25rem);
+  padding: 0.25rem 0.375rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex: none;
+  font-size: 0.8125rem;
+  font-weight: 800;
+}
+
+.g52-toggle,
+.g52-track-toggle {
+  position: relative;
+  flex: none;
+  width: max(44px, 3.125rem);
+  height: max(44px, 2.5rem);
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: #d8d1ce;
+  cursor: pointer;
+}
+
+.g52-toggle span,
+.g52-track-toggle span {
+  position: absolute;
+  top: 50%;
+  left: 0.25rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  background: var(--white);
+  box-shadow: 0 2px 7px rgba(74, 59, 54, 0.25);
+  transform: translateY(-50%);
+  transition: left 160ms ease;
+}
+
+.g52-toggle.g52-on,
+.g52-track-toggle.g52-on {
+  background: var(--teal);
+}
+
+.g52-toggle.g52-on span,
+.g52-track-toggle.g52-on span {
+  left: calc(100% - 1.75rem);
+}
+
+.g52-track-settings-link {
+  width: 100%;
+  min-height: max(44px, 3.5rem);
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex: none;
+  border: 0;
+  color: var(--brown);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.g52-track-settings-link > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.g52-track-settings-link strong,
+.g52-track-settings-link small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.g52-track-settings-link strong {
+  font-size: 0.8125rem;
+}
+
+.g52-track-settings-link small {
+  color: rgba(74, 59, 54, 0.62);
+  font-size: 0.6875rem;
+}
+
+.g52-track-settings-link b {
+  flex: none;
+  color: var(--pink-dark);
+  font-size: 1.75rem;
+  line-height: 1;
+}
+
+.g52-track-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: none;
+  min-width: 0;
+}
+
+.g52-track {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr) max(44px, 3.125rem);
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 0.375rem 0.5rem;
+  min-width: 0;
+  padding: 0.5rem;
+  border: 1px solid rgba(74, 59, 54, 0.1);
+  border-radius: 0.875rem;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 3px 10px rgba(74, 59, 54, 0.08);
+}
+
+.g52-track-off {
+  opacity: 0.64;
+}
+
+.g52-track-locked {
+  background: rgba(239, 235, 233, 0.92);
+}
+
+.g52-track > img {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.5rem;
+  object-fit: cover;
+}
+
+.g52-track-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.g52-track-copy strong,
+.g52-track-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.g52-track-copy strong {
+  font-size: 0.8125rem;
+}
+
+.g52-track-copy small {
+  color: rgba(74, 59, 54, 0.62);
+  font-size: 0.625rem;
+}
+
+.g52-track-volume {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(4.5rem, 1fr) 2.75rem max(44px, 2.75rem);
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.g52-track-volume input {
+  min-width: 0;
+  width: 100%;
+  height: max(44px, 2.75rem);
+}
+
+.g52-track-volume output {
+  font-size: 0.6875rem;
+  font-weight: 900;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.g52-preview {
+  width: max(44px, 2.75rem);
+  height: max(44px, 2.75rem);
+  border: none;
+  border-radius: 999px;
+  background: #fff0c6;
+  color: #8a6425;
+  font: 900 0.875rem/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.g52-track button:disabled,
+.g52-track input:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.g52-more {
+  width: 100%;
+  flex: none;
+  font-size: 0.8125rem;
+}
+
+.g52-local-toast {
+  position: fixed;
+  left: 50%;
+  bottom: max(5rem, calc(var(--safe-bottom) + 4.25rem));
+  z-index: 550;
+  max-width: calc(100vw - max(2rem, calc(var(--safe-left) + var(--safe-right))));
+  padding: 0.625rem 1rem;
+  border-radius: 999px;
+  background: var(--brown);
+  color: var(--white);
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-align: center;
+  transform: translateX(-50%);
+  box-shadow: var(--shadow-soft);
+}
+
+/* Fixed 18rem × 3.5rem (288×56 at 100%) chip. Width contracts on a narrow
+   320px viewport at 130%, and the bottom offset clears the two-row home HUD. */
+.g52-now-chip {
+  position: fixed;
+  left: 50%;
+  bottom: max(12rem, calc(var(--safe-bottom) + 11.5rem));
+  z-index: 85;
+  width: min(18rem, calc(100vw - max(1rem, calc(var(--safe-left) + var(--safe-right)))));
+  min-height: 3.5rem;
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr) 1.5rem;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid rgba(74, 59, 54, 0.12);
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--brown);
+  font-family: inherit;
+  text-align: left;
+  box-shadow: 0 10px 30px rgba(74, 59, 54, 0.24);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 1.5rem);
+  transition: transform 250ms ease, opacity 250ms ease;
+}
+
+.g52-now-chip.g52-chip-show {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0);
+}
+
+.g52-now-chip > img {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.5rem;
+  object-fit: cover;
+}
+
+.g52-chip-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.g52-chip-copy strong,
+.g52-chip-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.g52-chip-copy strong {
+  font-size: 0.8125rem;
+}
+
+.g52-chip-copy small {
+  color: rgba(74, 59, 54, 0.62);
+  font-size: 0.625rem;
+}
+
+.g52-chip-eq {
+  height: 1.5rem;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 0.125rem;
+}
+
+.g52-chip-eq i {
+  width: 0.1875rem;
+  height: 45%;
+  border-radius: 999px;
+  background: var(--pink);
+  animation: g52-eq 0.75s ease-in-out infinite alternate;
+}
+
+.g52-chip-eq i:nth-child(2) {
+  height: 85%;
+  animation-delay: -0.3s;
+}
+
+.g52-chip-eq i:nth-child(3) {
+  height: 62%;
+  animation-delay: -0.55s;
+}
+
+@keyframes g52-eq {
+  to { height: 100%; }
+}
+
+/* =============================== end V4/G52 =============================== */

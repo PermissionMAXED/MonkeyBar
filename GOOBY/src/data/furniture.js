@@ -33,6 +33,7 @@
  *                                 reward-only slots so the shop never lists
  *                                 them as 0c purchases); ownership lands via
  *                                 claimSet → furniture.owned
+ * @property {boolean} [giftV4]    V4/G52: free 4.0 gift; G53 grants/places it
  * @property {'ceiling'} [mount]   V2/G22: hang from the slot anchor instead of
  *                                 grounding on it (ceiling fan — PLAN2 §C8.1)
  * @property {readonly {glb: string, at: readonly number[], rotY?: number,
@@ -132,7 +133,12 @@ export const FURNITURE = F([
   furn({ id: 'tableCoffee', slot: 'sideboard', rooms: ['living'], price: 140 }),
   furn({ id: 'tableCoffeeGlass', slot: 'sideboard', rooms: ['living'], price: 200 }),
   furn({ id: 'cabinetTelevision', slot: 'sideboard', rooms: ['living'], price: 160 }),
-  furn({ id: 'radio', slot: 'sideboard', rooms: ['living'], price: 90 }),
+  // V4/G52 (§C-SYS1.4): repurpose the existing id so old saves keep ownership;
+  // G53 grants it as a free 4.0 gift and places `living:shelf1`.
+  furn({
+    id: 'radio', slot: 'sideboard', rooms: ['living'], price: 0,
+    glb: 'pleasant-picnic/radio', giftV4: true,
+  }),
   furn({ id: 'speaker', slot: 'sideboard', rooms: ['living'], price: 110 }),
   // hangs from the ceiling anchor instead of grounding on it
   furn({ id: 'ceilingFan', slot: 'ceilingFan', rooms: ['living'], price: 150, mount: 'ceiling' }),

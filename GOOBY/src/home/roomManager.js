@@ -171,6 +171,8 @@ export const HOME_ASSET_KEYS = Object.freeze([
     // V2/G19 (§C2.3): crop growth-stage models (already pack-qualified) so
     // gardenInteractions can getModel() them without a per-room preload
     ...CROPS.flatMap((c) => c.stageModels),
+    // V4/G52 (§C-SYS1.4): gifted living-room radio fixture.
+    'pleasant-picnic/radio',
   ]),
 ]);
 
@@ -787,6 +789,112 @@ export function createRoomManager({ scene, camera, assets, store }) {
     rooms.set(def.id, record);
   }
 
+  // ---- V4/G52: pleasant-picnic radio furniture (§C-SYS1.4) ----------------
+  // G53 owns the migration/default placement key (`living:shelf1`). The v2
+  // catalog already had id `radio` in `living:sideboard`, so honor either
+  // placement while avoiding a duplicate fixture for an upgraded old save.
+  let radioFixture = null;
+  let radioNoteTexture = null;
+  let radioFxTime = 0;
+  let nextRadioNotesAt = 0;
+  const radioNotes = [];
+  const placed = store?.get?.('furniture.placed') ?? {};
+  const radioPlaced =
+    placed['living:shelf1'] === 'radio' || placed['living:sideboard'] === 'radio';
+  if (radioPlaced) {
+    const living = rooms.get(LIVING.id);
+    radioFixture = new THREE.Group();
+    radioFixture.name = 'v4-radio-fixture';
+    // The left end of the media-cabinet shelf stays visible in portrait and
+    // keeps the radio clear of Gooby, the plant, and the TV tap target.
+    radioFixture.position.set(-0.15, 0.52, -1.2);
+    const radioModel = assets.getModel('pleasant-picnic/radio');
+    radioModel.scale.setScalar(0.5);
+    groundAndCenter(radioModel);
+    radioFixture.add(radioModel);
+    living?.group.add(radioFixture);
+    addAnchor(
+      LIVING.id,
+      'radio',
+      new THREE.Vector3(roomCenterX(LIVING.id) - 0.15, 0.52, -1.2)
+    );
+
+    const radioHit = new THREE.Mesh(
+      track.geo(new THREE.BoxGeometry(0.62, 0.54, 0.44)),
+      hitMat
+    );
+    radioHit.name = 'hit-radio';
+    radioHit.visible = false;
+    radioHit.position.set(roomCenterX(LIVING.id) - 0.15, 0.79, -1.2);
+    radioHit.userData.interact = 'radio';
+    radioHit.userData.roomId = LIVING.id;
+    homeGroup.add(radioHit);
+    hitboxes.push(radioHit);
+
+    // Four pooled sprites: each 4 s burst activates exactly two. No runtime
+    // allocations, and one shared note texture keeps this to tiny draw cost.
+    const noteCanvas = document.createElement('canvas');
+    noteCanvas.width = noteCanvas.height = 64;
+    const noteCtx = noteCanvas.getContext('2d');
+    noteCtx.fillStyle = '#FF7BA9';
+    noteCtx.font = '900 48px system-ui, sans-serif';
+    noteCtx.textAlign = 'center';
+    noteCtx.textBaseline = 'middle';
+    noteCtx.fillText('♫', 32, 32);
+    radioNoteTexture = new THREE.CanvasTexture(noteCanvas);
+    for (let i = 0; i < 4; i += 1) {
+      const material = track.mat(new THREE.SpriteMaterial({
+        map: radioNoteTexture,
+        transparent: true,
+        depthWrite: false,
+      }));
+      const sprite = new THREE.Sprite(material);
+      sprite.name = `radio-note-${i}`;
+      sprite.visible = false;
+      sprite.scale.setScalar(0.22);
+      sprite.userData.age = 0;
+      radioFixture.add(sprite);
+      radioNotes.push(sprite);
+    }
+
+    const emitRadioNotes = () => {
+      const free = radioNotes.filter((note) => !note.visible).slice(0, 2);
+      free.forEach((note, i) => {
+        note.visible = true;
+        note.userData.age = 0;
+        note.position.set(i === 0 ? -0.12 : 0.13, 0.36 + i * 0.06, 0.05);
+        note.material.opacity = 1;
+      });
+    };
+
+    updateHooks.add((dt) => {
+      if (!radioFixture) return;
+      const playing = store?.get?.('radio.playing') === true;
+      radioFxTime += dt;
+      if (playing) {
+        // 0.5 Hz; phase-shifted to range exactly 1.00 → 1.03.
+        const pulse = 1.015 + Math.sin(radioFxTime * Math.PI - Math.PI / 2) * 0.015;
+        radioFixture.scale.setScalar(pulse);
+        if (radioFxTime >= nextRadioNotesAt) {
+          emitRadioNotes();
+          nextRadioNotesAt = radioFxTime + 4;
+        }
+      } else {
+        radioFixture.scale.setScalar(1);
+        nextRadioNotesAt = radioFxTime;
+      }
+      for (const note of radioNotes) {
+        if (!note.visible) continue;
+        note.userData.age += dt;
+        note.position.y += dt * 0.16;
+        note.position.x += Math.sin(note.userData.age * 5 + note.id) * dt * 0.035;
+        note.material.opacity = Math.max(0, 1 - note.userData.age / 2.2);
+        if (note.userData.age >= 2.2 || !playing) note.visible = false;
+      }
+    });
+  }
+  // ---- end V4/G52 radio furniture ------------------------------------------
+
   // wallpaper/floor: saved decor or the free defaults (§C5.2)
   for (const def of ROOM_DEFS) {
     if (def.outdoor) continue; // V2/G19 (§B3): garden has no wallpaper/floor decor
@@ -1125,6 +1233,11 @@ export function createRoomManager({ scene, camera, assets, store }) {
       return rooms.get(roomId)?.slotHolders.get(slotId) ?? null;
     },
 
+    /** V4/G52: rendered gifted radio, exposed for CDP/world-interaction proof. */
+    getRadioFixture() {
+      return radioFixture;
+    },
+
     /** Force the bedroom window to night sky (G6 sleep). @param {boolean} on */
     setNightSky(on) {
       nightSkyOverride = !!on;
@@ -1277,15 +1390,25 @@ export function createRoomManager({ scene, camera, assets, store }) {
       offNougatChanged?.(); // V3/G35: stop following nougat.installed
       for (const geo of ownedGeos) geo.dispose();
       for (const mat of ownedMats) disposeIfOwned(mat);
+      radioNoteTexture?.dispose(); // V4/G52: pooled radio-note texture
       skyDome?.userData.dispose(); // V2/G19 (dome textures stay cached)
       updateHooks.clear(); // V2/G19
       // GLB clones share geometry/materials with the asset cache — not disposed.
       scene.remove(homeGroup);
       listeners.clear();
       anchors.clear();
+      if (import.meta.env.DEV && globalThis.__goobyRoomManager === manager) {
+        delete globalThis.__goobyRoomManager;
+        delete globalThis.__goobyRoomCamera;
+      }
     },
   };
 
+  // V4/G52: dev-only CDP seam for proving the real radio hitbox raycast.
+  if (import.meta.env.DEV) {
+    globalThis.__goobyRoomManager = manager;
+    globalThis.__goobyRoomCamera = camera;
+  }
   return manager;
 }
 

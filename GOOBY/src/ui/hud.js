@@ -112,7 +112,51 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
         stroke-dasharray="${RING_C.toFixed(2)}" stroke-dashoffset="${RING_C.toFixed(2)}"></circle>
     </svg>
     <span class="g5-ring-label"><span class="g5-ring-lvl">1</span><span class="g5-ring-cap">${t('ui.level')}</span></span>`;
-  meta.append(coins, ring);
+
+  // ---- V4/G52: playing-only HUD radio chip (§C-SYS1.3) --------------------
+  // It lives inside the safe-area-aware meta row, so the transient fixed
+  // now-playing chip never overlaps it or any bottom action.
+  if (!document.querySelector('style[data-owner="v4-g52-hud-radio"]')) {
+    const radioStyle = document.createElement('style');
+    radioStyle.dataset.owner = 'v4-g52-hud-radio';
+    radioStyle.textContent = `
+.g52-hud-radio{display:none;pointer-events:auto;align-items:center;gap:.3125rem;min-width:max(44px,2.75rem);min-height:max(44px,2.75rem);padding:.375rem .625rem;border:0;border-radius:999px;background:rgba(255,255,255,.94);color:var(--pink-dark);font:800 .6875rem/1 system-ui,sans-serif;box-shadow:var(--shadow-soft);cursor:pointer;}
+.g52-hud-radio.g52-show{display:inline-flex;}
+.g52-hud-radio-note{font-size:1.125rem;animation:g52hudnote 1s ease-in-out infinite;}
+@keyframes g52hudnote{50%{transform:translateY(-.1875rem) rotate(-8deg);}}`;
+    document.head.appendChild(radioStyle);
+  }
+  const radioChip = document.createElement('button');
+  radioChip.className = 'g52-hud-radio';
+  radioChip.dataset.hud = 'radio';
+  radioChip.innerHTML = '<span class="g52-hud-radio-note" aria-hidden="true">♫</span><span></span>';
+  const radioChipText = radioChip.querySelector('span:last-child');
+  const syncRadioChip = () => {
+    let label = t('radio.hud');
+    radioChip.classList.toggle('g52-show', store.get('radio.playing') === true);
+    if (label !== 'radio.hud') {
+      radioChipText.textContent = label;
+      radioChip.setAttribute('aria-label', label);
+      return;
+    }
+    import('../data/strings/v4-radio.js').then(({ EN, DE }) => {
+      label = (getLang() === 'de' ? DE : EN)['radio.hud'];
+      radioChipText.textContent = label;
+      radioChip.setAttribute('aria-label', label);
+    });
+  };
+  radioChip.addEventListener('click', () => {
+    audio.play('ui.tap');
+    ui.openPanel('radioPanel');
+  });
+  const offsG52 = [
+    store.on('radioChanged', syncRadioChip),
+    store.on('radioTrackChanged', syncRadioChip),
+    store.on('change', syncRadioChip),
+  ];
+  meta.append(coins, radioChip, ring);
+  syncRadioChip();
+  // ---- end V4/G52 HUD radio chip -------------------------------------------
   top.appendChild(meta);
   el.appendChild(top);
 
@@ -346,6 +390,7 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
     dispose() {
       for (const off of offs) off?.();
       for (const off of offsG23) off?.(); // V2/G23: badge + sick-chip listeners
+      for (const off of offsG52) off?.();
       if (visTimer != null) clearInterval(visTimer);
       el.remove();
     },

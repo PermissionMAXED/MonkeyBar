@@ -116,6 +116,21 @@ async function boot() {
 
   const framework = createMinigameFramework({ sceneManager, store, ui, audio });
 
+  // ---- V4/G52: radio UI + now-playing chip (PLAN4 §C-SYS1.3–1.8) ----
+  // Same-wave G51 engine modules are discovered inside radioScreen.js; until
+  // they land, the UI keeps a feature-detected 14-track catalog fallback.
+  try {
+    const [{ registerRadioUi }, { initNowPlaying }] = await Promise.all([
+      import('./ui/radioScreen.js'),
+      import('./ui/nowPlaying.js'),
+    ]);
+    registerRadioUi({ store, ui, audio, sceneManager, framework });
+    initNowPlaying({ store, ui, audio, sceneManager, framework });
+  } catch (err) {
+    console.warn('[boot] V4/G52 radio UI unavailable:', err);
+  }
+  // ---- end V4/G52 radio UI block ----
+
   // ---- G5 wiring hook (the single marked G5 integration point) ----
   // Registers the home HUD, arcade screen and food-tray panel, and wraps the
   // home-scene factory so care interactions (§C3: pet/tickle/poke, feed, wash,
