@@ -13,6 +13,10 @@
 // food-affordability bars must still hold (constants untuned by rule).
 import test from 'node:test';
 import assert from 'node:assert/strict';
+// V4/G54: reason-whitelist static scan (§C-SYS11.2)
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { join, dirname } from 'node:path';
 
 import {
   award,
@@ -37,7 +41,17 @@ import {
   recordHarvest,
   sellableHarvest,
   harvestedKey,
+  // V4/G54 (§B11): ledger + difficulty/endless constants
+  getLedger,
+  resetLedgerForTests,
+  LEDGER_SIZE,
+  DIFFICULTY_COIN_MULT,
+  ENDLESS_FLAT_COINS,
 } from '../src/systems/economy.js';
+// V4/G54 (§C-SYS11.2): the v4 sim drives the REAL modifier engine paths
+import { rand01, rollGlueckspilz } from '../src/systems/modifierEngine.js';
+import { getTarget } from '../src/data/difficultyTargets.js';
+import { MODIFIER } from '../src/data/constants.js';
 import {
   ECONOMY, MINIGAME, COIN_TABLE, FOOD_TABLE, STATS, OFFLINE,
   CROP_TABLE, ITEM_PRICES, UNLOCKS, VET, LEVELING, // V2/G16
@@ -118,7 +132,8 @@ test('coinsChanged fires on award/spend after a flush (§E2 events)', () => {
 
 test('coin table has exactly the 27 §C6/§C1.1/§E0.1-3 rows', () => {
   assert.deepEqual([...MINIGAME_IDS].sort(), Object.keys(COIN_TABLE).sort());
-  assert.equal(MINIGAME_IDS.length, 27); // V2/G16: 12 v1 + 9 §C1.1; V3/G34: +6 3.0 rows
+  // V2/G16: 12 v1 + 9 §C1.1; V3/G34: +6 3.0 rows; V4/G53: +goobyWelt (§B10)
+  assert.equal(MINIGAME_IDS.length, 28);
 });
 
 for (const id of MINIGAME_IDS.filter((g) => !COIN_TABLE[g].special)) {
@@ -797,6 +812,353 @@ test('V2 economy simulation: quest + garden day still nets ≥ +40c', (t) => {
 // counter-diff watcher: ANY path that bumps achievements.counters.harvests /
 // .deliveries pays +2/+3 XP through the same leveling path quest/sticker XP
 // uses. This test drives the counters and asserts the XP actually moved.
+
+// ============================================================================
+// V4/G54 — §B11/§C-SYS11 economy v4 (PLAN4): difficulty multipliers, per-mode
+// boards + beaten writes, endless flat-5 + 100 c/day ledger, the dev ledger,
+// the §C-SYS11.2 v4 simulation (4 assertions) and the reason whitelist.
+// The existing v1/v2 sims above stay untouched (§C-SYS11.2 rule).
+// ============================================================================
+
+test('V4/G54 §G5.2: difficulty multipliers — easy ×0.7 floors at min, hard ×1.3 caps at max', () => {
+  pinDay('2026-09-10');
+  assert.deepEqual({ ...DIFFICULTY_COIN_MULT }, { easy: 0.7, normal: 1, hard: 1.3 });
+  const store = makeStore();
+  store.set('minigames.lastPlayDay.carrotCatch', '2026-09-10'); // daily ×1
+  // carrotCatch row: divisor 3, min 4, max 25 (§C6)
+  assert.equal(awardMinigame(store, 'carrotCatch', 45).coins, 15, 'normal = v1 bit-identical');
+  assert.equal(awardMinigame(store, 'carrotCatch', 45, { difficulty: 'easy' }).coins, 11); // round(15 × 0.7)
+  assert.equal(awardMinigame(store, 'carrotCatch', 0, { difficulty: 'easy' }).coins, 4, 'floors at row min');
+  assert.equal(awardMinigame(store, 'carrotCatch', 45, { difficulty: 'hard' }).coins, 20); // round(15 × 1.3)
+  assert.equal(awardMinigame(store, 'carrotCatch', 1_000_000, { difficulty: 'hard' }).coins, 25, 'caps at row max');
+  const junk = awardMinigame(store, 'carrotCatch', 45, { difficulty: 'nope' });
+  assert.equal(junk.difficulty, 'normal');
+  assert.equal(junk.coins, 15);
+});
+
+test('V4/G54 §G5.7-4: per-mode boards — best / bestByDiff / endlessBest single write site', () => {
+  pinDay('2026-09-10');
+  const store = makeStore();
+  const easy = awardMinigame(store, 'carrotCatch', 50, { difficulty: 'easy' });
+  assert.equal(easy.newBest, true);
+  assert.equal(easy.best, 50);
+  assert.equal(store.get('minigames.bestByDiff.carrotCatch.easy'), 50);
+  assert.equal(store.get('minigames.best.carrotCatch') ?? 0, 0, 'Mittel board untouched');
+  awardMinigame(store, 'carrotCatch', 40); // normal → the classic board
+  assert.equal(store.get('minigames.best.carrotCatch'), 40);
+  awardMinigame(store, 'carrotCatch', 30, { difficulty: 'hard' });
+  assert.equal(store.get('minigames.bestByDiff.carrotCatch.hard'), 30);
+  assert.equal(store.get('minigames.best.carrotCatch'), 40, 'hard never writes Mittel');
+  // a worse easy round regresses nothing and reports the standing board
+  const worse = awardMinigame(store, 'carrotCatch', 20, { difficulty: 'easy' });
+  assert.equal(worse.newBest, false);
+  assert.equal(worse.best, 50);
+  assert.equal(store.get('minigames.bestByDiff.carrotCatch.easy'), 50);
+});
+
+test('V4/G54 §G5.4: beaten[id][mode] writes when score ≥ the difficultyTargets row', () => {
+  pinDay('2026-09-10');
+  const store = makeStore();
+  const target = getTarget('carrotCatch');
+  assert.equal(target, 70); // §G5.4 row verbatim
+  const miss = awardMinigame(store, 'carrotCatch', target - 1);
+  assert.equal(miss.beatTarget, false);
+  assert.equal(store.get('minigames.beaten.carrotCatch'), undefined);
+  const hard = awardMinigame(store, 'carrotCatch', target, { difficulty: 'hard' });
+  assert.equal(hard.beatTarget, true);
+  assert.equal(store.get('minigames.beaten.carrotCatch.hard'), true);
+  // easy/normal share the same target number (§G5.5)
+  awardMinigame(store, 'carrotCatch', target + 5, { difficulty: 'easy' });
+  assert.equal(store.get('minigames.beaten.carrotCatch.easy'), true);
+  assert.equal(store.get('minigames.beaten.carrotCatch.normal'), undefined);
+  // cityDrive is a §G5.1 exclusion — no row, never beaten
+  assert.equal(getTarget('cityDrive'), null);
+  const cd = awardMinigame(store, 'cityDrive', 999, { coinsOverride: 10 });
+  assert.equal(cd.beatTarget, false);
+});
+
+test('V4/G54 §G5.2: endless pays flat 5 c (daily ×2 applies) under the 100 c/day ledger', () => {
+  pinDay('2026-09-11');
+  const store = makeStore();
+  const first = awardMinigame(store, 'runner', 500, {
+    difficulty: 'endless', coinsOverride: ENDLESS_FLAT_COINS,
+  });
+  assert.equal(first.coins, 10, 'flat 5 × daily ×2 (first play of the day)');
+  assert.equal(first.difficulty, 'endless');
+  assert.equal(first.endlessBest, 500);
+  assert.equal(first.endlessNewBest, true);
+  assert.equal(store.get('minigames.endlessBest.runner'), 500);
+  assert.equal(store.get('minigames.best.runner') ?? 0, 0, 'Mittel board untouched');
+  assert.equal(first.beatTarget, false, 'endless never writes beaten (§G5.4)');
+  assert.equal(store.get('modifiers.endlessCoins'), 10, '§C-SYS11.1 row 6 ledger');
+  const again = awardMinigame(store, 'runner', 300, { difficulty: 'endless' }); // flat default
+  assert.equal(again.coins, ENDLESS_FLAT_COINS);
+  assert.equal(again.endlessNewBest, false);
+  assert.equal(again.endlessBest, 500);
+  // 100 c/day cap crossover: 97 booked → the round pays 3, flagged
+  store.update((s) => { s.modifiers.endlessCoins = 97; });
+  const capped = awardMinigame(store, 'runner', 100, { difficulty: 'endless' });
+  assert.equal(capped.coins, 3);
+  assert.equal(capped.dayCapReached, true);
+  const zero = awardMinigame(store, 'runner', 100, { difficulty: 'endless' });
+  assert.equal(zero.coins, 0, 'saturated endless day pays nothing');
+  // the day rolls over
+  pinDay('2026-09-12');
+  const fresh = awardMinigame(store, 'runner', 100, { difficulty: 'endless' });
+  assert.equal(fresh.coins, 10, 'new local day → new ledger (and new daily ×2)');
+});
+
+test('V4/G54 §B11: getLedger — last ≤ 50 movements, dev-only, never persisted', () => {
+  pinDay('2026-09-13');
+  resetLedgerForTests();
+  const store = makeStore();
+  assert.deepEqual(getLedger(), []);
+  award(store, 30, 'daily');
+  spend(store, 12, 'shop');
+  const rows = getLedger();
+  assert.equal(rows.length, 2);
+  assert.deepEqual(
+    rows.map(({ kind, amount, reason, balance }) => ({ kind, amount, reason, balance })),
+    [
+      { kind: 'award', amount: 30, reason: 'daily', balance: 130 },
+      { kind: 'spend', amount: 12, reason: 'shop', balance: 118 },
+    ]
+  );
+  assert.ok(rows.every((r) => Number.isFinite(r.at)));
+  awardMinigame(store, 'carrotCatch', 45); // 30 c, no level-up at xp 0
+  assert.equal(getLedger().at(-1).reason, 'minigame');
+  // the ring buffer caps at LEDGER_SIZE and drops the oldest rows
+  for (let i = 0; i < 60; i += 1) award(store, 1, 'quests');
+  const full = getLedger();
+  assert.equal(full.length, LEDGER_SIZE);
+  assert.ok(full.every((r) => r.reason === 'quests'), 'oldest rows dropped');
+  // NOT persisted (§B11): the save knows nothing about the ledger
+  persist(store.get());
+  assert.equal(load().state.ledger, undefined);
+  resetLedgerForTests();
+});
+
+// ------------------------------- V4 economy simulation (§C-SYS11.2, binding)
+//
+// The v2 average day PLUS one modifier event (doppelGold, both plays used)
+// PLUS one 10-min code-buff session (2 rounds inside it) PLUS one glueckspilz
+// roll (seeded mid-value 35 c) — against a parallel baseline store playing
+// the IDENTICAL rounds without any v4 bonus, so assertion (a) can subtract
+// the known additive bonuses exactly. Level 12, xp 0 → no level-up drift
+// inside one day (13 rounds ≈ 350 XP < the 650 XP to L13).
+
+test('V4 economy simulation (§C-SYS11.2): modifier + buff + glueckspilz day', (t) => {
+  const DAY_V4 = '2026-09-01';
+  pinDay(DAY_V4);
+  const mk = () => { const s = makeStore(); s.set('level', 12); return s; };
+  const v4 = mk(); // the v4 day
+  const v2 = mk(); // the same seed's v2-style day (no v4 bonuses)
+  const games = [...Object.keys(TYPICAL), ...Object.keys(TYPICAL_V2)];
+  const ALL = { ...TYPICAL, ...TYPICAL_V2 };
+  const startV4 = v4.get('coins');
+  const startV2 = v2.get('coins');
+  let knownBonuses = 0;
+  let maxDayCoins = 0;
+  const trackCap = () => {
+    const dc = v4.get('modifiers.dayCoins') ?? 0;
+    maxDayCoins = Math.max(maxDayCoins, dc);
+    assert.ok(dc <= MODIFIER.DAY_COIN_CAP, `(c) dayCoins ${dc} > 150`);
+  };
+
+  // 1) daily bonus (both stores)
+  award(v4, ECONOMY.DAILY_BONUS[0], 'daily');
+  award(v2, ECONOMY.DAILY_BONUS[0], 'daily');
+
+  // 2) 10 first-today rounds; the doppelGold event runs on games[0] —
+  //    play 1 here, play 2 as the repeat round right after (both plays used)
+  for (let i = 0; i < 10; i += 1) {
+    const id = games[i];
+    const opts = i === 0 ? { modifier: 'doppelGold' } : {};
+    const r4 = awardMinigame(v4, id, ALL[id].score, opts);
+    const r2 = awardMinigame(v2, id, ALL[id].score);
+    knownBonuses += r4.coins - r2.coins;
+    trackCap();
+  }
+  {
+    const id = games[0];
+    const r4 = awardMinigame(v4, id, ALL[id].score, { modifier: 'doppelGold' });
+    const r2 = awardMinigame(v2, id, ALL[id].score);
+    assert.ok(r4.modifierBonus > 0, 'the event paid a surplus');
+    knownBonuses += r4.coins - r2.coins;
+    trackCap();
+  }
+
+  // 3) the 10-min code-buff session: 2 rounds inside the buff window
+  v4.set('codes.buffs.doubleCoinsUntil', dayMs(DAY_V4) + 600000);
+  for (const id of [games[1], games[2]]) {
+    const r4 = awardMinigame(v4, id, ALL[id].score);
+    const r2 = awardMinigame(v2, id, ALL[id].score);
+    assert.equal(r4.doubleCoinsBuff, true, 'buff active inside the window');
+    knownBonuses += r4.coins - r2.coins;
+  }
+  v4.set('codes.buffs.doubleCoinsUntil', 0); // session over
+
+  // 4) ONE glueckspilz roll, seeded to the §C-SYS11.2 mid-value 35 c —
+  //    found on the real mulberry32 stream, paid through the real reason
+  let gSeed = -1;
+  for (let s = 1; s < 20000; s += 1) {
+    if (10 + Math.floor(rand01(s) * 51) === 35) { gSeed = s; break; }
+  }
+  assert.ok(gSeed > 0, 'a 35 c stream position exists');
+  let rolled = 0;
+  v4.update((s) => { s.modifiers.seed = gSeed; rolled = rollGlueckspilz(s); });
+  assert.equal(rolled, 35);
+  knownBonuses += award(v4, rolled, 'glueckspilz');
+  trackCap();
+
+  // 5) quests + garden + feeding — identical on both stores (v2-sim shape)
+  award(v4, 75, 'quests');
+  award(v2, 75, 'quests');
+  const drainPerDay =
+    45 * -STATS.RATES_AWAKE.hunger +
+    480 * -STATS.RATES_ASLEEP.hunger +
+    OFFLINE.AWAKE_CAP_MIN * -STATS.RATES_AWAKE.hunger * OFFLINE.AWAKE_RATE_MULT;
+  const menu = ['burger', 'pancakes', 'sandwich', 'salad', 'bread', 'carrot', 'apple'];
+  for (const store of [v4, v2]) {
+    buySeed(store, 'radish');
+    buySeed(store, 'carrot');
+    store.update((s) => {
+      s.inventory.radish = (s.inventory.radish ?? 0) + CROP_TABLE.radish.yield;
+      s.inventory.carrot = (s.inventory.carrot ?? 0) + CROP_TABLE.carrot.yield;
+    });
+    recordHarvest(store, 'radish', CROP_TABLE.radish.yield);
+    recordHarvest(store, 'carrot', CROP_TABLE.carrot.yield);
+    sellHarvest(store, 'radish', CROP_TABLE.radish.yield);
+    sellHarvest(store, 'carrot', CROP_TABLE.carrot.yield);
+    let hunger = 80 - drainPerDay;
+    let menuIdx = 0;
+    while (hunger < 95) {
+      const foodId = menu[menuIdx % menu.length];
+      menuIdx += 1;
+      const res = buyFood(store, foodId, 1);
+      assert.equal(res.ok, true, `food must stay affordable (${foodId})`);
+      hunger = Math.min(100, hunger + FOOD_TABLE[foodId].hunger);
+      store.update((s) => { s.inventory[foodId] -= 1; });
+    }
+  }
+
+  const netV4 = v4.get('coins') - startV4;
+  const netV2 = v2.get('coins') - startV2;
+  const adjusted = netV4 - knownBonuses;
+  t.diagnostic(
+    `v4 day: net +${netV4}c (bonuses +${knownBonuses}c, adjusted +${adjusted}c) ` +
+      `vs v2 baseline +${netV2}c; dayCoins peak ${maxDayCoins}/150`
+  );
+  // (a) subtracting the KNOWN additive bonuses lands within ±20 % of the
+  //     same seed's v2 net — the underlying economy is unchanged
+  assert.ok(
+    Math.abs(adjusted - netV2) <= 0.2 * netV2,
+    `(a) adjusted ${adjusted}c vs v2 ${netV2}c drifts > 20 %`
+  );
+  // (b) absolute day net ∈ [+40 c, +480 c]
+  assert.ok(netV4 >= 40 && netV4 <= 480, `(b) day net ${netV4}c ∉ [40, 480]`);
+  // (c) dayCoins never exceeded 150 (asserted live after every booking)
+  assert.ok(maxDayCoins > 0 && maxDayCoins <= MODIFIER.DAY_COIN_CAP, '(c)');
+});
+
+test('V4 §C-SYS11.2(d): a 7-day modifier week stays within ×1.25 of the v3 baseline', (t) => {
+  const mk = () => { const s = makeStore(); s.set('level', 12); return s; };
+  const v4 = mk();
+  const v3 = mk();
+  const games = [...Object.keys(TYPICAL), ...Object.keys(TYPICAL_V2)];
+  const ALL = { ...TYPICAL, ...TYPICAL_V2 };
+  // events average every 85 min (the [50, 120] seeded-uniform mean, §B4) —
+  // a ~45-min daily session therefore catches ONE active window per day;
+  // the day's event type rotates through the whole §C-SYS4.2 table.
+  const types = ['doppelGold', 'muenzregen', 'turbo', 'riesenGooby', 'stickerChance', 'glueckspilz'];
+  const dayIds = ['2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04',
+    '2026-10-05', '2026-10-06', '2026-10-07'];
+
+  for (let d = 0; d < 7; d += 1) {
+    pinDay(dayIds[d]);
+    award(v4, ECONOMY.DAILY_BONUS[Math.min(d, 6)], 'daily');
+    award(v3, ECONOMY.DAILY_BONUS[Math.min(d, 6)], 'daily');
+    const type = types[d % types.length];
+    for (let i = 0; i < 10; i += 1) {
+      const id = games[(d * 3 + i) % games.length];
+      const opts = type === 'doppelGold' && i === 0 ? { modifier: 'doppelGold' } : {};
+      awardMinigame(v4, id, ALL[id].score, opts);
+      awardMinigame(v3, id, ALL[id].score);
+      const dc = v4.get('modifiers.dayCoins') ?? 0;
+      assert.ok(dc <= MODIFIER.DAY_COIN_CAP, `(c) day ${d + 1}: dayCoins ${dc}`);
+    }
+    if (type === 'doppelGold') { // both event plays used — the repeat round
+      const id = games[(d * 3) % games.length];
+      awardMinigame(v4, id, ALL[id].score, { modifier: 'doppelGold' });
+      awardMinigame(v3, id, ALL[id].score);
+    }
+    if (type === 'glueckspilz') { // 3 plays → 3 seeded results rolls
+      for (let k = 0; k < 3; k += 1) {
+        let bonus = 0;
+        v4.update((s) => { bonus = rollGlueckspilz(s); });
+        award(v4, bonus, 'glueckspilz');
+      }
+    }
+    award(v4, 75, 'quests');
+    award(v3, 75, 'quests');
+  }
+
+  const earnedV4 = v4.get('profile.coinsEarned');
+  const earnedV3 = v3.get('profile.coinsEarned');
+  t.diagnostic(`week lifetime: v4 ${earnedV4}c vs v3 baseline ${earnedV3}c ` +
+    `(×${(earnedV4 / earnedV3).toFixed(3)})`);
+  assert.ok(earnedV4 >= earnedV3, 'bonuses never reduce income');
+  assert.ok(
+    earnedV4 <= earnedV3 * 1.25,
+    `(d) v4 week ${earnedV4}c > ×1.25 of the v3 baseline ${earnedV3}c`
+  );
+});
+
+// -------------------------------------- V4/G54: reason whitelist (§C-SYS11.2)
+// "Any future coin surface without an economy.js reason tag is a test
+// failure" — static scan over src/: every award(store, …) call site must
+// pass a string-literal reason from the §B11 whitelist. (dailyBonus/sleep
+// apply their coin grants inside store.update by design — pre-v4 paths.)
+
+test('V4/G54 §B11: every src award() call site carries a whitelisted reason tag', () => {
+  const AWARD_REASONS = new Set([
+    // §B11 v4 reasons
+    'code', 'modifier', 'glueckspilz', 'endless',
+    // established award tags (v1–v3 + internal payout rows)
+    'minigame', 'levelUp', 'daily', 'quests', 'sellHarvest', 'devGrant',
+  ]);
+  const srcRoot = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
+  const files = [];
+  (function walk(dir) {
+    for (const entry of readdirSync(dir)) {
+      const p = join(dir, entry);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (p.endsWith('.js')) files.push(p);
+    }
+  })(srcRoot);
+  assert.ok(files.length > 100, 'src scan found the codebase');
+  const sites = [];
+  for (const file of files) {
+    const text = readFileSync(file, 'utf8');
+    const re = /(?<!function )\baward\(\s*store\s*,([^)]*)\)/g;
+    let match;
+    while ((match = re.exec(text)) !== null) {
+      const literal = /['"`]([\w:-]*)['"`]\s*$/.exec(match[1].trim());
+      sites.push({
+        file: file.slice(srcRoot.length + 1),
+        reason: literal ? literal[1] : null,
+      });
+    }
+  }
+  assert.ok(sites.length >= 4, `award() sites found: ${sites.length}`);
+  for (const site of sites) {
+    assert.ok(site.reason, `${site.file}: award() without a reason tag (§B11)`);
+    assert.ok(
+      AWARD_REASONS.has(site.reason),
+      `${site.file}: unknown award reason '${site.reason}' — extend the §B11 whitelist deliberately`
+    );
+  }
+});
 
 test('V2/FIX-A: harvest +2 XP / delivery +3 XP flow through the real engine path', () => {
   resetAchievementsEngineForTests();

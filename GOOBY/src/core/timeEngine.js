@@ -44,6 +44,8 @@ import * as profileStats from '../systems/profileStats.js';
 import { bandAt } from '../systems/dayNight.js';
 import { weatherAt } from '../systems/weather.js';
 import { CROPS_BY_ID } from '../data/crops.js';
+// V4/G54 (PLAN4 §B4): modifier event scheduler rides the same 1 s tick
+import * as modifierEngine from '../systems/modifierEngine.js';
 
 /** V2/G20: ambience ticker interval (§B4: 60 s). */
 export const AMBIENCE_TICK_MS = 60000;
@@ -136,6 +138,23 @@ export function createTimeEngine(store) {
       state.garden = grown.g;
       if (grown.events.length > 0) store.emit?.('cropsReadyLive', grown.events);
     }
+    // ── V4/G54 (PLAN4 §B4): modifier event scheduler — real-time like the
+    // garden (sleep included, offline `nextAt` catch-up starts on the next
+    // tick after boot). The engine tick is pure; it returns a fresh slice
+    // only when something changed, which we assign here and announce via
+    // the §B10 runtime store event `modifierChanged {current, nextAt}`
+    // (arcade tile glow G68/G76 + dev card 14 re-render off it).
+    {
+      const r = modifierEngine.tick(state, endMs);
+      if (r.changes) {
+        state.modifiers = r.changes;
+        store.emit?.('modifierChanged', {
+          current: r.changes.current,
+          nextAt: r.changes.nextAt,
+        });
+      }
+    }
+    // ── end V4/G54 ──
     if (awakeMin > 0) {
       const wasQueasy = state.health?.state === 'queasy';
       const lowStatCount = STATS.KEYS.filter(

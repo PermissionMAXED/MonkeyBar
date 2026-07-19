@@ -22,9 +22,31 @@
 // recordHarvest credits items['harvested:<foodId>'] at the harvest site, and
 // sellHarvest only sells min(inventory, harvestedCount) (sellableHarvest).
 // Shop-bought crop foods are never compost-sellable.
+//
+// V4/G54 (PLAN4 §B11, §C-SYS11, §E0.1-2 — the binding stacking ruling):
+//   • awardMinigame gains {difficulty, modifier} options; the SINGLE payout
+//     site is frozen as base = min(row.max, max(row.min, round(rowClamp(score)
+//     × difficultyMult))) → paid = base × dailyFirstPlay(×2) × codeBuff(×2)
+//     × doppelGold(×2). doppelGold additionally caps paid ≤ 2 × row.max and
+//     books the surplus (paid − base×daily×buff) into modifiers.dayCoins
+//     against MODIFIER.DAY_COIN_CAP (150 c/local day — §C-SYS11.1 rows 1/5;
+//     beyond it doppelGold pays base, the breakdown flags dayCapReached).
+//   • Endless (§G5.2): flat 5 c override (framework passes coinsOverride 5),
+//     daily ×2 applies; ALL endless-reason coins share the §C-SYS11.1 row-6
+//     ≤ 100 c/local-day ledger (modifiers.endlessCoins/endlessCoinsDay).
+//   • award() reasons 'glueckspilz'/'modifier' book into modifiers.dayCoins
+//     (capped — a capped glueckspilz roll returns 0 → „Tagesbonus erreicht"),
+//     'endless' books into the endless ledger; new reasons whitelist:
+//     'code' | 'modifier' | 'glueckspilz' | 'endless' (§B11).
+//   • beaten/bestByDiff/endlessBest single persistence site (§G5.7-4):
+//     score ≥ data/difficultyTargets.js target sets beaten[id][mode]; easy/
+//     hard highscores land in bestByDiff (`best` stays the Mittel board),
+//     endless in endlessBest.
+//   • getLedger(): dev-only in-memory ring buffer of the last 50 coin
+//     movements {at, kind, amount, reason, balance} — NOT persisted (§B11).
 
 import { ECONOMY, MINIGAME, ITEM_PRICES, UNLOCKS, VET } from '../data/constants.js'; // V2/G16: + v2 tables
-import { getMinigame, computeCoins } from '../data/minigames.js';
+import { getMinigame } from '../data/minigames.js'; // V4/G54: rowClamp math inlined at the §E0.1-2 stacking site
 import { getFood } from '../data/foods.js';
 import { getCrop } from '../data/crops.js'; // V2/G16 (§C2.3)
 import { getSkin } from '../data/skins.js'; // V2/G16 (§C8.5)
@@ -32,6 +54,10 @@ import { applyXp, minigameXp } from './leveling.js';
 import { clampStat } from './stats.js';
 import { add as invAdd, remove as invRemove } from './inventory.js'; // V2/G16: + remove; V2/FIX-A: has-gate moved into sellableHarvest
 import { localDay, now } from '../core/clock.js'; // V2/G16: + now (health calls)
+// V4/G54: modifier caps/slice factory + §G5.4 targets (both pure, cycle-free)
+import { MODIFIER_CAPS, defaultSlice as modifierDefaultSlice } from './modifierEngine.js';
+import { getTarget } from '../data/difficultyTargets.js';
+import { isDoubleCoinsActive } from './codesEngine.js'; // V4/G53 (§B6: code buff — pure)
 
 /**
  * @typedef {import('../core/store.js').createStore} _store
@@ -55,6 +81,98 @@ export const healthReady = import('./health.js').then(
   () => { healthApi = null; }
 );
 
+// --- V4/G54: dev ledger + §C-SYS11 day-cap bookkeeping ----------------------
+
+/** §G5.2 difficulty coin multipliers (frozen at the single payout site). */
+export const DIFFICULTY_COIN_MULT = Object.freeze({ easy: 0.7, normal: 1, hard: 1.3 });
+
+/** §G5.2: Endlos pays a flat 5 c per run (daily ×2 still applies after). */
+export const ENDLESS_FLAT_COINS = 5;
+
+/** Ledger ring-buffer size (§B11: last 50 movements, dev card 3). */
+export const LEDGER_SIZE = 50;
+
+/** @type {{at: number, kind: 'award'|'spend', amount: number, reason: string, balance: number}[]} */
+let ledger = [];
+
+/** Record one coin movement into the dev ring buffer (§B11 — NOT persisted). */
+function pushLedger(kind, amount, reason, balance) {
+  ledger.push({ at: now(), kind, amount, reason: reason || '', balance });
+  if (ledger.length > LEDGER_SIZE) ledger = ledger.slice(-LEDGER_SIZE);
+}
+
+/**
+ * V4/G54 (§B11): the dev-only in-memory ledger — last ≤ 50 coin movements
+ * `{at, kind: 'award'|'spend', amount, reason, balance}`, oldest first.
+ * Dev-panel card 3 renders it (G58). Returns a copy; never persisted.
+ * @returns {{at: number, kind: string, amount: number, reason: string, balance: number}[]}
+ */
+export function getLedger() {
+  return ledger.map((row) => ({ ...row }));
+}
+
+/** Test hook: empty the ledger between isolated stores. */
+export function resetLedgerForTests() {
+  ledger = [];
+}
+
+/**
+ * Ensure the §B1 modifiers slice exists (same-wave guard until G53's save
+ * v4 merges — the engine's factory keeps the shape single-sourced).
+ * @param {object} state save state (mutated in place)
+ * @returns {object} state.modifiers
+ */
+function modifiersSliceOf(state) {
+  if (state.modifiers == null || typeof state.modifiers !== 'object') {
+    state.modifiers = modifierDefaultSlice();
+  }
+  return state.modifiers;
+}
+
+/**
+ * Book `amount` against the §C-SYS11.1 row-5 modifier-surplus day ledger
+ * (modifiers.dayCoins, MODIFIER.DAY_COIN_CAP = 150 c per local day; the
+ * day rolls over lazily). Returns the granted part (0 when capped).
+ * @param {object} state save state (mutated in place)
+ * @param {number} amount wanted surplus (integer ≥ 0)
+ * @param {string} [day] localDay() of the booking
+ * @returns {number} coins actually grantable
+ */
+function bookModifierDayCoins(state, amount, day = localDay()) {
+  const m = modifiersSliceOf(state);
+  if (m.dayCoinsDay !== day) {
+    m.dayCoins = 0;
+    m.dayCoinsDay = day;
+  }
+  const headroom = Math.max(0, MODIFIER_CAPS.DAY_COIN_CAP - m.dayCoins);
+  const granted = Math.min(Math.max(0, Math.floor(amount)), headroom);
+  m.dayCoins += granted;
+  return granted;
+}
+
+/**
+ * Book `amount` against the §C-SYS11.1 row-6 endless day ledger
+ * (modifiers.endlessCoins, ≤ 100 c per local day — same pattern as
+ * dayCoins). Returns the granted part.
+ * @param {object} state save state (mutated in place)
+ * @param {number} amount
+ * @param {string} [day]
+ * @returns {number}
+ */
+function bookEndlessDayCoins(state, amount, day = localDay()) {
+  const m = modifiersSliceOf(state);
+  if (m.endlessCoinsDay !== day) {
+    m.endlessCoins = 0;
+    m.endlessCoinsDay = day;
+  }
+  const headroom = Math.max(0, MODIFIER_CAPS.ENDLESS_DAY_CAP - m.endlessCoins);
+  const granted = Math.min(Math.max(0, Math.floor(amount)), headroom);
+  m.endlessCoins += granted;
+  return granted;
+}
+
+// --- end V4/G54 ledger/day-cap helpers --------------------------------------
+
 /**
  * Can the player pay `amount` coins right now?
  * @param {Store} store
@@ -67,6 +185,11 @@ export function canAfford(store, amount) {
 
 /**
  * Grant coins (floored, never negative). Emits 'coinsChanged' via the store.
+ * V4/G54 (§C-SYS11.1): the reasons 'glueckspilz' and 'modifier' book against
+ * the 150 c/local-day modifier-surplus ledger, 'endless' against the
+ * 100 c/local-day endless ledger — the return value is the coins ACTUALLY
+ * granted after the cap (0 when capped → the results UI renders the
+ * „Tagesbonus erreicht" note, G76).
  * @param {Store} store
  * @param {number} amount
  * @param {string} [reason] payout source for logging ('minigame', 'daily', …)
@@ -75,12 +198,22 @@ export function canAfford(store, amount) {
 export function award(store, amount, reason = '') {
   const n = normAward(amount);
   if (n === 0) return 0;
+  let granted = n;
   store.update((state) => {
-    state.coins += n;
-    state.profile.coinsEarned += n; // V2/G16: lifetime total (§B2/§C12.1)
+    // V4/G54: §C-SYS11.1 rows 2/5/6 — capped bonus surfaces
+    if (reason === 'glueckspilz' || reason === 'modifier') {
+      granted = bookModifierDayCoins(state, n);
+    } else if (reason === 'endless') {
+      granted = bookEndlessDayCoins(state, n);
+    }
+    if (granted > 0) {
+      state.coins += granted;
+      state.profile.coinsEarned += granted; // V2/G16: lifetime total (§B2/§C12.1)
+    }
   });
-  if (reason) console.debug(`[economy] +${n}c (${reason})`);
-  return n;
+  if (reason) console.debug(`[economy] +${granted}c (${reason})`);
+  if (granted > 0) pushLedger('award', granted, reason, store.get('coins')); // V4/G54 (§B11)
+  return granted;
 }
 
 /**
@@ -99,6 +232,7 @@ export function spend(store, amount, reason = '') {
     state.profile.coinsSpent += n; // V2/G16: lifetime total (§B2/§C12.1)
   });
   if (reason) console.debug(`[economy] -${n}c (${reason})`);
+  pushLedger('spend', n, reason, store.get('coins')); // V4/G54 (§B11)
   return true;
 }
 
@@ -106,26 +240,50 @@ export function spend(store, amount, reason = '') {
  * @typedef {Object} MinigameBreakdown  results-screen data (§E8)
  * @property {string} gameId
  * @property {number} score        final score
- * @property {number} coins        coins paid (after clamp + daily ×2)
+ * @property {number} coins        coins paid (after the §E0.1-2 stacking)
  * @property {boolean} firstToday  daily ×2 applied (first play per local day)
- * @property {number} best         best score after this round
- * @property {boolean} newBest     this round set the best
+ * @property {boolean} doubleCoinsBuff V4/G53: 'UpdateLiebe' ×2 buff applied (§C-SYS5.2)
+ * @property {number} best         best score after this round — the PLAYED
+ *   mode's board (V4/G54 §G5.5: normal → `best`, easy/hard → `bestByDiff`,
+ *   endless → `endlessBest`)
+ * @property {boolean} newBest     this round set that board's best
  * @property {number} xp           XP granted (§C1.5 minigame formula)
  * @property {number} levelsGained
  * @property {number} coinsFromLevels level-up rewards paid on top (§C1.5)
+ * @property {'easy'|'normal'|'hard'|'endless'} difficulty played mode (V4/G54 §G5.2)
+ * @property {string}  modifierType applied payout modifier ('' = none)
+ * @property {number}  modifierBonus doppelGold surplus actually paid on top
+ *   (§E0.1-2 — the framework's „Bonus: {name} +X 🪙" results row, §G8-3)
+ * @property {boolean} dayCapReached a §C-SYS11.1 day cap truncated this
+ *   round's bonus („Tagesbonus erreicht" note)
+ * @property {boolean} beatTarget  score ≥ the §G5.4 target on the played mode
+ * @property {number}  [endlessBest] endless board after this round (endless only)
+ * @property {boolean} [endlessNewBest] endless round improved it (endless only)
  */
 
 /**
- * THE minigame payout path (§C6 shared rules + §C1.5): pays
- * computeCoins(coinTable, score) with the ×2 first-play-per-local-day
- * multiplier (per-game `minigames.lastPlayDay` in the save, localDay from
- * core/clock.js), +15 fun, minigame XP (10 + min(15, floor(coins/2))) with
- * level-up coin rewards, and updates plays/best counters — in one atomic
- * store.update. Returns the breakdown for the results screen.
+ * THE minigame payout path (§C6 shared rules + §C1.5 + V4/G54 §E0.1-2 —
+ * the ONE frozen stacking order):
+ *   base = min(row.max, max(row.min, round(rowClamp(score) × difficultyMult)))
+ *   paid = base × dailyFirstPlay(×2) × codeBuff(×2) × doppelGold(×2)
+ * Endless replaces base with the flat 5 c override (§G5.2). doppelGold
+ * additionally caps paid ≤ 2 × row.max (the cap limits the modifier's
+ * ADDITION, never the pre-modifier chain) and books its surplus into
+ * modifiers.dayCoins against MODIFIER.DAY_COIN_CAP (§C-SYS11.1 rows 1/5 —
+ * beyond it the round pays base × daily × buff and `dayCapReached` flags
+ * the „Tagesbonus erreicht" note). Also pays +15 fun, minigame XP
+ * (10 + min(15, floor(coins/2))) with level-up coin rewards, updates
+ * plays/lastPlayDay and the per-mode boards (§G5.7-4 single write site:
+ * `best` = Mittel, `bestByDiff` = Leicht/Schwer, `endlessBest` = Endlos)
+ * plus `beaten` vs the §G5.4 targets — in one atomic store.update.
+ * Returns the breakdown for the results screen.
  * @param {Store} store
  * @param {string} id minigame id
  * @param {number} score
- * @param {{coinsOverride?: number}} [opts] cityDrive passes §C4.3 coins directly
+ * @param {{coinsOverride?: number, difficulty?: string,
+ *   modifier?: string|{type: string}}} [opts] cityDrive/surf-travel pass
+ *   §C4.3 coins via coinsOverride; the framework (G56) forwards the launch
+ *   difficulty and the CONSUMED modifier snapshot (§C-SYS4.4)
  * @returns {MinigameBreakdown}
  */
 export function awardMinigame(store, id, score, opts = {}) {
@@ -134,34 +292,151 @@ export function awardMinigame(store, id, score, opts = {}) {
   const s = Math.max(0, Math.floor(Number(score) || 0));
   const today = localDay();
   const firstToday = store.get(`minigames.lastPlayDay.${id}`) !== today;
-  const coins = computeCoins(meta.coinTable, s, firstToday, opts.coinsOverride);
+
+  // ── V4/G54 (§G5.2/§E0.1-2): played mode + base coins ──────────────────
+  const difficulty = ['easy', 'normal', 'hard', 'endless'].includes(opts.difficulty)
+    ? opts.difficulty : 'normal';
+  const modifierType =
+    typeof opts.modifier === 'string' ? opts.modifier : (opts.modifier?.type ?? '');
+  let base;
+  if (difficulty === 'endless') {
+    // §G5.2: Endlos pays flat 5 c — the framework passes coinsOverride: 5
+    // (honored when present; hard default otherwise).
+    base = typeof opts.coinsOverride === 'number'
+      ? Math.max(0, Math.floor(opts.coinsOverride)) : ENDLESS_FLAT_COINS;
+  } else if (typeof opts.coinsOverride === 'number') {
+    base = Math.max(0, Math.floor(opts.coinsOverride)); // cityDrive §C4.3 / surf travel
+  } else {
+    const table = meta.coinTable;
+    const rowClamp = Math.min(
+      table.max,
+      Math.max(table.min ?? 0, Math.floor(s / (table.divisor ?? 1)))
+    );
+    // §G5.2: Leicht ×0.7 floors at row min, Schwer ×1.3 caps at row max;
+    // ×1 reproduces the v1 rowClamp bit-identically (existing tests green).
+    const mult = DIFFICULTY_COIN_MULT[difficulty] ?? 1;
+    base = Math.min(table.max, Math.max(table.min ?? 0, Math.round(rowClamp * mult)));
+  }
+  // ── end V4/G54 base ─────────────────────────────────────────────────────
+
+  // V4/G53 (PLAN4 §B6/§C-SYS5.2): the 'UpdateLiebe' double-coins buff — ×2
+  // AFTER the daily ×2 (multiplicative → ×4, bounded per §C-SYS11.2); the
+  // pure check lives in systems/codesEngine.js (the HUD ×2 chip reads it too).
+  const doubleCoinsBuff = isDoubleCoinsActive(store.get(), now());
+
   const prevBest = store.get(`minigames.best.${id}`) ?? 0;
-  const newBest = s > prevBest;
-  const xp = minigameXp(coins);
+  const board = modeBoardOf(store, id, difficulty, s, prevBest);
+  const target = getTarget(id);
+  const beatTarget =
+    difficulty !== 'endless' && typeof target === 'number' && s >= target;
   let progress;
+  let paid = 0;
+  let modifierBonus = 0;
+  let dayCapReached = false;
+
   store.update((state) => {
-    state.coins += coins;
+    // ── V4/G54 (§E0.1-2 verbatim): the frozen stacking order ────────────
+    const dailyMult = firstToday ? MINIGAME.DAILY_FIRST_PLAY_MULT : 1;
+    const buffMult = doubleCoinsBuff ? 2 : 1;
+    const unmodified = base * dailyMult * buffMult;
+    paid = unmodified;
+    if (modifierType === 'doppelGold') {
+      // doppelGold ×2 AFTER daily and buff; caps paid ≤ 2 × row.max
+      // (§C-SYS11.1 row 1) and books the surplus (paid − unmodified) into
+      // the 150 c/day ledger (row 5 — capped surplus → pays base chain).
+      const wanted = Math.min(unmodified, Math.max(0, 2 * meta.coinTable.max - unmodified));
+      modifierBonus = bookModifierDayCoins(state, wanted, today);
+      if (modifierBonus < wanted) dayCapReached = true;
+      paid = unmodified + modifierBonus;
+    }
+    if (difficulty === 'endless') {
+      // §C-SYS11.1 row 6: every coin an endless run pays counts against
+      // the ≤ 100 c/local-day endless ledger.
+      const granted = bookEndlessDayCoins(state, paid, today);
+      if (granted < paid) dayCapReached = true;
+      paid = granted;
+    }
+    // ── end stacking ─────────────────────────────────────────────────────
+    state.coins += paid;
     state.stats.fun = clampStat(state.stats.fun + MINIGAME.FUN_REWARD);
     state.minigames.plays[id] = (state.minigames.plays[id] ?? 0) + 1;
     state.minigames.lastPlayDay[id] = today;
-    if (newBest) state.minigames.best[id] = s;
-    progress = applyXp({ xp: state.xp, level: state.level }, xp);
+    // ── V4/G54 (§G5.7-4): per-mode boards + beaten — single write site ───
+    if (difficulty === 'normal') {
+      if (s > prevBest) state.minigames.best[id] = s;
+    } else if (difficulty === 'endless') {
+      if (board.newBest) {
+        if (state.minigames.endlessBest == null) state.minigames.endlessBest = {};
+        state.minigames.endlessBest[id] = s;
+      }
+    } else if (board.newBest) {
+      if (state.minigames.bestByDiff == null) state.minigames.bestByDiff = {};
+      if (state.minigames.bestByDiff[id] == null) state.minigames.bestByDiff[id] = {};
+      state.minigames.bestByDiff[id][difficulty] = s;
+    }
+    if (beatTarget) {
+      if (state.minigames.beaten == null) state.minigames.beaten = {};
+      if (state.minigames.beaten[id] == null) state.minigames.beaten[id] = {};
+      state.minigames.beaten[id][difficulty] = true;
+    }
+    if (modifierType && typeof state.achievements?.counters?.modifierPlays === 'number') {
+      state.achievements.counters.modifierPlays += 1; // §B1 v4 counter
+    }
+    // ── end board writes ─────────────────────────────────────────────────
+    progress = applyXp({ xp: state.xp, level: state.level }, minigameXp(paid), 'minigame'); // V4/G54: xpGranted source tag (§E0.1-13/§C-SYS3.1 row 1)
     state.xp = progress.xp;
     state.level = progress.level;
     state.coins += progress.coinsAwarded;
-    state.profile.coinsEarned += coins + progress.coinsAwarded; // V2/G16 (§B2)
+    state.profile.coinsEarned += paid + progress.coinsAwarded; // V2/G16 (§B2)
   });
+  pushLedger('award', paid, 'minigame', store.get('coins') - progress.coinsAwarded); // V4/G54 (§B11)
+  if (progress.coinsAwarded > 0) {
+    pushLedger('award', progress.coinsAwarded, 'levelUp', store.get('coins'));
+  }
   return {
     gameId: id,
     score: s,
-    coins,
+    coins: paid,
     firstToday,
-    best: Math.max(prevBest, s),
-    newBest,
-    xp,
+    doubleCoinsBuff, // V4/G53 (§C-SYS5.2): results-screen chip data
+    best: board.best,
+    newBest: board.newBest,
+    xp: minigameXp(paid),
     levelsGained: progress.levelsGained,
     coinsFromLevels: progress.coinsAwarded,
+    // V4/G54 (§E0.1-2/§G8-3/§G5.6): results-row + pre-game data
+    difficulty,
+    modifierType,
+    modifierBonus,
+    dayCapReached,
+    beatTarget,
+    ...(difficulty === 'endless'
+      ? { endlessBest: board.best, endlessNewBest: board.newBest }
+      : {}),
   };
+}
+
+/**
+ * V4/G54 (§G5.5): resolve the played mode's highscore board BEFORE the round
+ * is written — `best` (Mittel) / `bestByDiff` (Leicht/Schwer) /
+ * `endlessBest` (Endlos). Defensive against the pre-v4 save shape.
+ * @param {Store} store
+ * @param {string} id
+ * @param {'easy'|'normal'|'hard'|'endless'} difficulty
+ * @param {number} s round score
+ * @param {number} prevBest pre-read Mittel best
+ * @returns {{best: number, newBest: boolean}} board value AFTER this round
+ */
+function modeBoardOf(store, id, difficulty, s, prevBest) {
+  let prev;
+  if (difficulty === 'endless') {
+    prev = Math.max(0, Math.floor(Number(store.get(`minigames.endlessBest.${id}`)) || 0));
+  } else if (difficulty === 'easy' || difficulty === 'hard') {
+    prev = Math.max(0, Math.floor(Number(store.get(`minigames.bestByDiff.${id}.${difficulty}`)) || 0));
+  } else {
+    prev = prevBest;
+  }
+  return { best: Math.max(prev, s), newBest: s > prev };
 }
 
 /**
