@@ -1,3 +1,8 @@
+Hier vom Music Menschen: Information für den Song Agent also du kannst jetzt https://treblo.com/developers/docs nutzen und per API Songs anfragen (maximal 15) wenn du weitere brauchst dann pack die anfrage nach einem weiteren API Key dafür in Requests.md
+Hier ist der API Key für Treblo: sksonauto_kGkQ4eDdviD8GW_XiLsH6cnNe7m_Dnq6GwuJlqGNeL0f5VAK
+
+Damit kannst du selbst Songs und Instrumentals generieren für das was du brauchst.
+
 # 🎵 GoobyMusic — Song-Requests
 
 Hi! Lege deine Songs (MP3 oder OGG, gerne 128-192 kbps) einfach **direkt in diesen Ordner** (`GOOBY/public/assets/GoobyMusic/`).
