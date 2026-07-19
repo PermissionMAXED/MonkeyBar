@@ -35,7 +35,60 @@ export const CATCH = Object.freeze({
   SPAWN_BASE_SEC: 1.05,
   /** Spawn interval shrinks to this fraction by the end of the round. */
   SPAWN_END_FRACTION: 0.72,
+  /** V4/G71 §G5: derived-mode/runtime knobs (Mittel identity values). */
+  SPAWN_INTERVAL_MULT: 1,
+  WINDOW_MULT: 1,
+  DURATION_MULT: 1,
+  SPEED_MULT: 1,
+  SCORE_MULT: 1,
+  ENDLESS: false,
+  ENDLESS_MISSED_CARROTS: 3,
 });
+
+/** V4/G71 §G5.3 timed-arena row. Endlos uses Schwer params without a timer. */
+export const CATCH_DIFFICULTY = Object.freeze({
+  easy: Object.freeze({ spawn: 1.2, window: 1.25, duration: 1.2, endless: false }),
+  normal: Object.freeze({ spawn: 1, window: 1, duration: 1, endless: false }),
+  hard: Object.freeze({ spawn: 0.85, window: 0.8, duration: 1, endless: false }),
+  endless: Object.freeze({ spawn: 0.85, window: 0.8, duration: 1, endless: true }),
+});
+
+/**
+ * Derive frozen per-mode tuning. Mittel returns the frozen live table itself,
+ * making its numbers bit-identical (§G5.2/§E5).
+ */
+export function applyDifficulty(tune = CATCH, mode = 'normal') {
+  const id = Object.hasOwn(CATCH_DIFFICULTY, mode) ? mode : 'normal';
+  if (id === 'normal') return tune;
+  const row = CATCH_DIFFICULTY[id];
+  return Object.freeze({
+    ...tune,
+    DURATION_SEC: tune.DURATION_SEC * row.duration,
+    SPAWN_BASE_SEC: tune.SPAWN_BASE_SEC * row.spawn,
+    BASKET_HALF_WIDTH: Math.max(
+      tune.BASKET_HALF_WIDTH * 0.55,
+      tune.BASKET_HALF_WIDTH * row.window
+    ),
+    SPAWN_INTERVAL_MULT: row.spawn,
+    WINDOW_MULT: row.window,
+    DURATION_MULT: row.duration,
+    ENDLESS: row.endless,
+    MODE: id,
+  });
+}
+
+/** Apply carrotCatch's only eligible gameplay modifier: Turbo (§C-SYS4.3). */
+export function applyModifier(tune, modifier) {
+  if (modifier?.type !== 'turbo') return tune;
+  const speedMult = Math.max(0.1, Number(modifier.speedMult) || 1);
+  return Object.freeze({
+    ...tune,
+    FALL_BASE_SPEED: tune.FALL_BASE_SPEED * speedMult,
+    SPAWN_BASE_SEC: tune.SPAWN_BASE_SEC / speedMult,
+    SPEED_MULT: speedMult,
+    SCORE_MULT: Math.max(0, Number(modifier.scoreMult) || 1),
+  });
+}
 
 /**
  * Good-food rarity table (§C6.1: +1–3 pts by rarity). Keys are Kenney
@@ -67,9 +120,9 @@ export const JUNK_FOODS = Object.freeze(['soda-can-crushed', 'fish-bones']);
  * @param {number} elapsed seconds since round start
  * @returns {number} multiplier ≥ 1
  */
-export function fallSpeedMultAt(elapsed) {
-  const steps = Math.max(0, Math.floor(elapsed / CATCH.FALL_RAMP_EVERY_SEC));
-  return Math.pow(1 + CATCH.FALL_RAMP_PCT, steps);
+export function fallSpeedMultAt(elapsed, tune = CATCH) {
+  const steps = Math.max(0, Math.floor(elapsed / tune.FALL_RAMP_EVERY_SEC));
+  return Math.pow(1 + tune.FALL_RAMP_PCT, steps);
 }
 
 /**
@@ -77,8 +130,8 @@ export function fallSpeedMultAt(elapsed) {
  * @param {number} elapsed seconds
  * @returns {number}
  */
-export function fallSpeedAt(elapsed) {
-  return CATCH.FALL_BASE_SPEED * fallSpeedMultAt(elapsed);
+export function fallSpeedAt(elapsed, tune = CATCH) {
+  return tune.FALL_BASE_SPEED * fallSpeedMultAt(elapsed, tune);
 }
 
 /**
@@ -98,9 +151,9 @@ export function junkRatioAt(elapsed, duration = CATCH.DURATION_SEC) {
  * @param {number} [duration]
  * @returns {number}
  */
-export function spawnIntervalAt(elapsed, duration = CATCH.DURATION_SEC) {
+export function spawnIntervalAt(elapsed, duration = CATCH.DURATION_SEC, tune = CATCH) {
   const t = Math.min(1, Math.max(0, elapsed / duration));
-  return CATCH.SPAWN_BASE_SEC * (1 - (1 - CATCH.SPAWN_END_FRACTION) * t);
+  return tune.SPAWN_BASE_SEC * (1 - (1 - tune.SPAWN_END_FRACTION) * t);
 }
 
 /**
@@ -110,13 +163,13 @@ export function spawnIntervalAt(elapsed, duration = CATCH.DURATION_SEC) {
  * @param {number} elapsed seconds since round start
  * @returns {{kind: 'good'|'junk', key: string, value: number}}
  */
-export function rollItem(rng, elapsed) {
-  if (rng() < junkRatioAt(elapsed)) {
-    if (rng() < CATCH.ROTTEN_RATIO_OF_JUNK) {
-      return { kind: 'rotten', key: 'carrot', value: CATCH.JUNK_PENALTY };
+export function rollItem(rng, elapsed, tune = CATCH) {
+  if (rng() < junkRatioAt(elapsed, tune.DURATION_SEC)) {
+    if (rng() < tune.ROTTEN_RATIO_OF_JUNK) {
+      return { kind: 'rotten', key: 'carrot', value: tune.JUNK_PENALTY };
     }
     const key = JUNK_FOODS[Math.min(JUNK_FOODS.length - 1, Math.floor(rng() * JUNK_FOODS.length))];
-    return { kind: 'junk', key, value: CATCH.JUNK_PENALTY };
+    return { kind: 'junk', key, value: tune.JUNK_PENALTY };
   }
   const total = GOOD_FOODS.reduce((s, f) => s + f.weight, 0);
   let roll = rng() * total;
@@ -145,12 +198,12 @@ export function applyCatch(score, value) {
  * @param {number} [duration] run length (the onboarding variant is 30 s)
  * @returns {number} elapsed seconds
  */
-export function goldenSpawnAt(rng, duration = CATCH.DURATION_SEC) {
+export function goldenSpawnAt(rng, duration = CATCH.DURATION_SEC, tune = CATCH) {
   const latest = Math.max(
     0,
-    Math.min(CATCH.GOLDEN_WINDOW_END_SEC, duration - CATCH.GOLDEN_FALL_LEAD_SEC)
+    Math.min(tune.GOLDEN_WINDOW_END_SEC, duration - tune.GOLDEN_FALL_LEAD_SEC)
   );
-  const earliest = Math.min(CATCH.GOLDEN_WINDOW_START_SEC, latest);
+  const earliest = Math.min(tune.GOLDEN_WINDOW_START_SEC, latest);
   return earliest + rng() * (latest - earliest);
 }
 
@@ -160,8 +213,8 @@ export function goldenSpawnAt(rng, duration = CATCH.DURATION_SEC) {
  * @param {'good'|'junk'|'rotten'|'golden'} kind
  * @returns {number}
  */
-export function itemFallSpeed(elapsed, kind) {
-  return fallSpeedAt(elapsed) * (kind === 'golden' ? CATCH.GOLDEN_SPEED_MULT : 1);
+export function itemFallSpeed(elapsed, kind, tune = CATCH) {
+  return fallSpeedAt(elapsed, tune) * (kind === 'golden' ? tune.GOLDEN_SPEED_MULT : 1);
 }
 
 /**
@@ -181,8 +234,8 @@ export function spawnXForRoll(roll, halfW) {
  * @param {number} basketX
  * @returns {boolean}
  */
-export function basketCatchesX(itemX, basketX) {
-  return Math.abs(itemX - basketX) <= CATCH.BASKET_HALF_WIDTH + Number.EPSILON * 8;
+export function basketCatchesX(itemX, basketX, tune = CATCH) {
+  return Math.abs(itemX - basketX) <= tune.BASKET_HALF_WIDTH + Number.EPSILON * 8;
 }
 
 /**
@@ -200,4 +253,45 @@ export function applyCatchState(state, item) {
     combo: good ? state.combo + 1 : 0,
     delta: score - state.score,
   };
+}
+
+/** §G5.4: Endlos stops after three catchable carrots hit the ground. */
+export function isCatchRoundOver({ elapsed, missedCarrots }, tune = CATCH) {
+  return tune.ENDLESS
+    ? missedCarrots >= tune.ENDLESS_MISSED_CARROTS
+    : elapsed >= tune.DURATION_SEC;
+}
+
+/** Turbo's score multiplier is rounded once, at the end (§C-SYS4.2). */
+export function finalCatchScore(score, tune = CATCH) {
+  return Math.max(0, Math.round(score * (tune.SCORE_MULT ?? 1)));
+}
+
+/** Deterministic pure certification model for the live autoplay policy. */
+export function simulateCatchAutoplay(mode = 'normal', seed = 1) {
+  const tune = applyDifficulty(CATCH, mode);
+  let a = seed >>> 0;
+  const rng = () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) | 0;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+  const skill = mode === 'easy' ? 0.98 : mode === 'hard' || mode === 'endless' ? 0.76 : 0.94;
+  let score = 0;
+  let missedCarrots = 0;
+  let elapsed = 0;
+  while (elapsed < (tune.ENDLESS ? 240 : tune.DURATION_SEC)) {
+    const item = rollItem(rng, elapsed, tune);
+    const good = item.kind === 'good';
+    const caught = good ? rng() < skill : rng() < 0.04;
+    if (caught) score = applyCatch(score, item.value);
+    else if (tune.ENDLESS && good && item.key === 'carrot') missedCarrots += 1;
+    elapsed += spawnIntervalAt(elapsed, tune.DURATION_SEC, tune);
+    if (isCatchRoundOver({ elapsed, missedCarrots }, tune)) break;
+  }
+  // The live round guarantees one +10 golden carrot; the certification bot
+  // catches it with the same mode skill.
+  if (!tune.ENDLESS && rng() < skill) score += tune.GOLDEN_POINTS;
+  return { score: finalCatchScore(score, tune), elapsed, missedCarrots };
 }

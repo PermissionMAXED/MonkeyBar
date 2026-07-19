@@ -24,6 +24,7 @@ import {
   isKingDue,
   applyKingTap,
   acceptsTapAfter,
+  applyDifficulty,
 } from './carrotGuard.logic.js';
 
 const GRID_SPACING = 1.5;
@@ -94,6 +95,8 @@ export default {
     this.ctx = ctx;
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
+    const difficulty = ctx.params?.difficulty ?? 'normal';
+    this.tune = applyDifficulty(GUARD, difficulty);
 
     this.phase = 'play';
     this.score = 0;
@@ -101,7 +104,7 @@ export default {
     this.bonks = 0;
     this.kingsSpawned = 0;
     this.kingsDefeated = 0;
-    this.carrots = GUARD.CARROTS;
+    this.carrots = this.tune.CARROTS;
     this.spawnT = 0.8;
     this.endT = 0;
     this.autoT = 0;
@@ -184,8 +187,8 @@ export default {
 
     /** @type {Array<{mound: THREE.Group, mole: THREE.Group, carrot: THREE.Group, crown: THREE.Mesh, up: boolean, timer: number, upFor: number, hit: boolean, king: boolean, hp: number, lastTap: number}>} */
     this.holes = [];
-    for (let r = 0; r < GUARD.GRID; r += 1) {
-      for (let c = 0; c < GUARD.GRID; c += 1) {
+    for (let r = 0; r < this.tune.GRID; r += 1) {
+      for (let c = 0; c < this.tune.GRID; c += 1) {
         const x = (c - 1) * GRID_SPACING;
         const z = (r - 1) * GRID_SPACING - 0.3;
 
@@ -247,7 +250,7 @@ export default {
 
     // --- carrot stock display (§C6.1: 10 carrots) along the front edge ---
     this.stockCarrots = [];
-    for (let i = 0; i < GUARD.CARROTS; i += 1) {
+    for (let i = 0; i < this.tune.CARROTS; i += 1) {
       const cm = ctx.assets.getModel('nature-kit/crop_carrot');
       const box = new THREE.Box3().setFromObject(cm);
       const size = box.getSize(new THREE.Vector3());
@@ -302,7 +305,7 @@ export default {
     });
 
     ctx.hud.setScore(0);
-    ctx.hud.setTime(GUARD.DURATION_SEC);
+    ctx.hud.setTime(this.tune.ENDLESS ? 0 : this.tune.DURATION_SEC);
   },
 
   /** Swing the mallet down over a world position. */
@@ -415,12 +418,13 @@ export default {
     hole.up = true;
     hole.hit = false;
     hole.king = king;
-    hole.hp = king ? GUARD.KING_TAPS : 1;
+    hole.hp = king ? this.tune.KING_TAPS : 1;
     hole.lastTap = -Infinity;
     hole.crown.visible = king;
     hole.mole.scale.x = hole.mole.scale.z = king ? 1.22 : 1;
-    hole.upFor = king ? Math.max(1.5, upTimeAt(elapsed) * 2.4) : upTimeAt(elapsed);
-    hole.timer = hole.upFor + GUARD.POP_SEC * 2;
+    const upFor = upTimeAt(elapsed, this.tune.DURATION_SEC, this.tune);
+    hole.upFor = king ? Math.max(1.5, upFor * 2.4) : upFor;
+    hole.timer = hole.upFor + this.tune.POP_SEC * 2;
     hole.carrot.visible = false;
     hole.mole.visible = true;
     hole.mole.scale.y = 0.01;
@@ -428,7 +432,7 @@ export default {
     if (king) this.ctx.hud.banner(t('mg.guard.king'));
     const mole = hole.mole;
     tween({
-      from: 0.01, to: 1, duration: GUARD.POP_SEC, ease: easings.easeOutBack,
+      from: 0.01, to: 1, duration: this.tune.POP_SEC, ease: easings.easeOutBack,
       onUpdate: (v) => {
         mole.scale.y = Math.max(0.01, v);
       },
@@ -459,9 +463,11 @@ export default {
     const { rng } = this.ctx;
     for (const hole of this.holes) {
       if (!hole.up || hole.hit) continue;
-      const elapsedUp = hole.upFor + GUARD.POP_SEC * 2 - hole.timer;
-      if (elapsedUp < 0.34) continue; // reaction time
-      if (hole.king || rng() < 0.82) {
+      const elapsedUp = hole.upFor + this.tune.POP_SEC * 2 - hole.timer;
+      if (elapsedUp < this.tune.BOT_REACTION_SEC) continue;
+      const accuracy = this.tune.MODE === 'easy' ? 0.96 : this.tune.MODE === 'hard' ||
+        this.tune.MODE === 'endless' ? 0.82 : 0.93;
+      if (hole.king || rng() < accuracy) {
         this.bonk(hole);
         return; // one bonk per tick — doubles can slip through
       }
@@ -484,7 +490,7 @@ export default {
       return;
     }
 
-    ctx.hud.setTime(GUARD.DURATION_SEC - elapsed);
+    ctx.hud.setTime(this.tune.ENDLESS ? elapsed : this.tune.DURATION_SEC - elapsed);
 
     if (this.autoplay) this.autoplayTick(dt);
 
@@ -500,12 +506,12 @@ export default {
         }
         continue;
       }
-      if (hole.timer <= GUARD.POP_SEC && hole.timer + dt > GUARD.POP_SEC) {
+      if (hole.timer <= this.tune.POP_SEC && hole.timer + dt > this.tune.POP_SEC) {
         // about to duck away with loot — show the stolen carrot in his paws
         hole.carrot.visible = true;
         const mole = hole.mole;
         tween({
-          from: 1, to: 0.01, duration: GUARD.POP_SEC, ease: easings.easeOutQuad,
+          from: 1, to: 0.01, duration: this.tune.POP_SEC, ease: easings.easeOutQuad,
           onUpdate: (v) => {
             mole.scale.y = Math.max(0.01, v);
           },
@@ -518,11 +524,16 @@ export default {
     this.spawnT -= dt;
     if (this.spawnT <= 0) {
       const king = this.popMole(elapsed);
-      if (!king && this.ctx.rng() < doubleChanceAt(elapsed)) this.popMole(elapsed);
-      this.spawnT = spawnIntervalAt(elapsed);
+      if (
+        !king &&
+        this.ctx.rng() < doubleChanceAt(elapsed, this.tune.DURATION_SEC, this.tune)
+      ) {
+        this.popMole(elapsed);
+      }
+      this.spawnT = spawnIntervalAt(elapsed, this.tune.DURATION_SEC, this.tune);
     }
 
-    if (isRoundOver({ elapsed, carrots: this.carrots })) {
+    if (isRoundOver({ elapsed, carrots: this.carrots }, this.tune.DURATION_SEC, this.tune)) {
       this.phase = 'ending';
       this.endT = 0;
       if (this.carrots <= 0) ctx.hud.banner(t('mg.guard.empty'));

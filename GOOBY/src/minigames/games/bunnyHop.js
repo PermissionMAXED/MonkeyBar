@@ -23,6 +23,10 @@ import {
   gustPhaseAt,
   applyGustShift,
   gatePoints,
+  applyDifficulty,
+  applyModifier,
+  coinSpawns,
+  finalHopScore,
 } from './bunnyHop.logic.js';
 
 const GOOBY_X = -0.85;
@@ -98,6 +102,8 @@ export default {
     this.ctx = ctx;
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
+    const difficulty = ctx.params?.difficulty ?? 'normal';
+    this.tune = applyModifier(applyDifficulty(HOP, difficulty), ctx.params?.modifier);
 
     this.phase = 'play'; // 'play' | 'crashed' | 'done'
     this.gates = 0;
@@ -107,7 +113,8 @@ export default {
     this.started = false; // gravity waits for the first hop
     this.endT = 0;
     this.autoT = 0;
-    this.autoLapseGate = 15 + Math.floor(ctx.rng() * 21); // autoplay run length draw
+    const botBase = difficulty === 'easy' ? 62 : difficulty === 'hard' || difficulty === 'endless' ? 48 : 55;
+    this.autoLapseGate = botBase + Math.floor(ctx.rng() * 10);
     this.lastGapCenterY = undefined;
     this.gustAppliedIndex = -1;
     this.gusts = 0;
@@ -142,13 +149,13 @@ export default {
       new THREE.PlaneGeometry(this.halfW * 2 + 4, 2.5),
       new THREE.MeshBasicMaterial({ color: '#8FCE7A' })
     ));
-    ground.position.set(0, HOP.FLOOR_Y - 1.05, -0.5);
+    ground.position.set(0, this.tune.FLOOR_Y - 1.05, -0.5);
     scene.add(ground);
     const groundLip = own(new THREE.Mesh(
       new THREE.PlaneGeometry(this.halfW * 2 + 4, 0.12),
       new THREE.MeshBasicMaterial({ color: '#6FB35E' })
     ));
-    groundLip.position.set(0, HOP.FLOOR_Y + 0.16, -0.4);
+    groundLip.position.set(0, this.tune.FLOOR_Y + 0.16, -0.4);
     scene.add(groundLip);
 
     scene.add(new THREE.HemisphereLight(0xfff8ee, 0xc8e6b8, 1.15));
@@ -196,7 +203,7 @@ export default {
       model.scale.setScalar(s);
       model.position.set(
         -this.halfW + (i / 9) * this.halfW * 2 + ctx.rng() * 0.5,
-        HOP.FLOOR_Y + 0.12,
+        this.tune.FLOOR_Y + 0.12,
         -0.2 - ctx.rng() * 0.4
       );
       scene.add(model);
@@ -207,8 +214,14 @@ export default {
     const fenceMaster = ctx.assets.getModel('nature-kit/fence_simple');
     const fbox = new THREE.Box3().setFromObject(fenceMaster);
     const fsize = fbox.getSize(new THREE.Vector3());
-    this.fenceScale = (HOP.PILLAR_HALF_W * 2) / (Math.max(fsize.x, fsize.z) || 1);
+    this.fenceScale = (this.tune.PILLAR_HALF_W * 2) / (Math.max(fsize.x, fsize.z) || 1);
     this.fenceSegH = Math.max(0.35, fsize.y * this.fenceScale);
+    this.coinGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.06, 16);
+    this.coinMat = new THREE.MeshStandardMaterial({
+      color: '#FFD166', roughness: 0.35, metalness: 0.5,
+    });
+    this.ownedGeos.push(this.coinGeo);
+    this.ownedMats.push(this.coinMat);
 
     /** @type {Array<{group: THREE.Group, x: number, gapCenterY: number, gapHeight: number, passed: boolean}>} */
     this.pillars = [];
@@ -219,7 +232,8 @@ export default {
     this.floats = createFloatTexts(scene, ctx.camera);
     this.gooby = createGooby({ particles: this.particles });
     applyEquippedOutfits(this.gooby); // G14: cameo wears the equipped outfits
-    this.gooby.group.scale.setScalar(GOOBY_SCALE);
+    this.goobyScale = GOOBY_SCALE * this.tune.RENDER_SCALE_MULT;
+    this.gooby.group.scale.setScalar(this.goobyScale);
     this.gooby.group.rotation.y = Math.PI / 2; // face the scroll direction
     this.gooby.setEmotion('happy');
     scene.add(this.gooby.group);
@@ -236,7 +250,7 @@ export default {
   hop() {
     if (this.phase !== 'play') return;
     this.started = true;
-    this.vy = HOP.HOP_VY;
+    this.vy = this.tune.HOP_VY;
     this.ctx.audio.play('hop.flap');
     // squash & stretch (§C6.1: squash+stretch on hop)
     const grp = this.gooby.group;
@@ -244,7 +258,11 @@ export default {
       from: 0, to: 1, duration: 0.3, ease: easings.easeOutQuad,
       onUpdate: (v) => {
         const stretch = Math.sin((1 - v) * Math.PI) * 0.22;
-        grp.scale.set(GOOBY_SCALE * (1 - stretch * 0.6), GOOBY_SCALE * (1 + stretch), GOOBY_SCALE * (1 - stretch * 0.6));
+        grp.scale.set(
+          this.goobyScale * (1 - stretch * 0.6),
+          this.goobyScale * (1 + stretch),
+          this.goobyScale * (1 - stretch * 0.6)
+        );
       },
     });
   },
@@ -252,8 +270,8 @@ export default {
   /** Build one pillar pair (bottom + top columns with a gap). */
   spawnPillar() {
     const { rng, scene, assets } = this.ctx;
-    const gapHeight = gapAtGate(this.gatesPassed);
-    const gapCenterY = rollGapCenter(rng, gapHeight, this.lastGapCenterY);
+    const gapHeight = gapAtGate(this.gatesPassed, this.tune);
+    const gapCenterY = rollGapCenter(rng, gapHeight, this.lastGapCenterY, this.tune);
     this.lastGapCenterY = gapCenterY;
     const group = new THREE.Group();
 
@@ -287,12 +305,21 @@ export default {
 
     const gapBottom = gapCenterY - gapHeight / 2;
     const gapTop = gapCenterY + gapHeight / 2;
-    group.add(buildColumn(HOP.FLOOR_Y, gapBottom, true));
-    group.add(buildColumn(gapTop, HOP.CEILING_Y + 1.2, false));
+    group.add(buildColumn(this.tune.FLOOR_Y, gapBottom, true));
+    group.add(buildColumn(gapTop, this.tune.CEILING_Y + 1.2, false));
+    let coin = null;
+    if (coinSpawns(rng(), this.tune)) {
+      coin = new THREE.Mesh(this.coinGeo, this.coinMat);
+      coin.rotation.x = Math.PI / 2;
+      coin.position.y = gapCenterY;
+      group.add(coin);
+    }
     group.position.x = this.nextPillarX;
     scene.add(group);
-    this.pillars.push({ group, x: this.nextPillarX, gapCenterY, gapHeight, passed: false });
-    this.nextPillarX += HOP.PILLAR_SPACING_X;
+    this.pillars.push({
+      group, x: this.nextPillarX, gapCenterY, gapHeight, passed: false, coin, coinTaken: false,
+    });
+    this.nextPillarX += this.tune.PILLAR_SPACING_X;
   },
 
   crash() {
@@ -302,7 +329,12 @@ export default {
     this.ctx.hud.banner(t('mg.hop.crash'));
     this.gooby.play('dizzy');
     this.particles.emit('dizzyStars', this.gooby.group.position.clone().add(new THREE.Vector3(0, 0.9, 0)));
-    if (this.autoplay) console.log(`[bunnyHop] autoplay run ended — score ${this.gates}`);
+    if (this.autoplay) {
+      console.log(
+        `[bunnyHop] autoplay run ended — score ${finalHopScore(this.gates, this.tune)} ` +
+        `raw=${this.gates} gates=${this.gatesPassed}`
+      );
+    }
   },
 
   /** Dev-only autoplay: fly the gap band until the attention lapse ends the run. */
@@ -320,14 +352,19 @@ export default {
     }
     let next = null;
     for (const p of this.pillars) {
-      if (p.x + HOP.PILLAR_HALF_W > GOOBY_X - 0.2 && (next == null || p.x < next.x)) next = p;
+      if (
+        p.x + this.tune.PILLAR_HALF_W > GOOBY_X - 0.2 &&
+        (next == null || p.x < next.x)
+      ) {
+        next = p;
+      }
     }
     let target = next ? next.gapCenterY - next.gapHeight * 0.1 : 0;
     // near a pillar, stay inside its gap band: a hop peaks ~0.6 u above y
     // (don't clip the top edge) and don't approach below the bottom edge
-    const halfH = HOP.BODY_HALF_H * HOP.HITBOX_SCALE;
-    const hitDist = HOP.PILLAR_HALF_W + HOP.BODY_HALF_W;
-    const speed = speedAtGate(this.gatesPassed);
+    const halfH = this.tune.BODY_HALF_H * this.tune.HITBOX_SCALE;
+    const hitDist = this.tune.PILLAR_HALF_W + this.tune.BODY_HALF_W;
+    const speed = speedAtGate(this.gatesPassed, this.tune);
     const horizon = hitDist + speed * 0.45;
     let capOk = true;
     for (const p of this.pillars) {
@@ -342,7 +379,8 @@ export default {
         // when this pillar arrives
         const tArr = (dx - hitDist) / speed;
         if (tArr < 1.1) {
-          const yArrHop = this.y + HOP.HOP_VY * tArr + 0.5 * HOP.GRAVITY * tArr * tArr;
+          const yArrHop = this.y + this.tune.HOP_VY * tArr +
+            0.5 * this.tune.GRAVITY * tArr * tArr;
           if (yArrHop + halfH > gapTop - 0.1) capOk = false;
         }
       }
@@ -360,9 +398,9 @@ export default {
     if (this.phase === 'crashed') {
       // tumble to the ground, then a get-up happyBounce before the results
       this.endT += dt;
-      if (this.y > HOP.FLOOR_Y + 0.05) {
-        this.vy += HOP.GRAVITY * dt;
-        this.y = Math.max(HOP.FLOOR_Y + 0.05, this.y + this.vy * dt);
+      if (this.y > this.tune.FLOOR_Y + 0.05) {
+        this.vy += this.tune.GRAVITY * dt;
+        this.y = Math.max(this.tune.FLOOR_Y + 0.05, this.y + this.vy * dt);
         this.gooby.group.position.y = this.y - 0.35;
       }
       if (this.endT >= 1.1 && !this.celebrated) {
@@ -373,7 +411,7 @@ export default {
       }
       if (this.endT >= 2.0 && this.phase !== 'done') {
         this.phase = 'done';
-        ctx.onEnd({ score: this.gates });
+        ctx.onEnd({ score: finalHopScore(this.gates, this.tune) });
       }
       return;
     }
@@ -383,7 +421,7 @@ export default {
     if (this.autoplay) this.autoplayTick(dt);
 
     // V3 wind gust: telegraph, then one clamped 0.4-lane vertical shift.
-    const gust = gustPhaseAt(elapsed);
+    const gust = gustPhaseAt(elapsed, this.tune);
     const cueKey = `${gust.phase}:${gust.index}`;
     this.windCue.visible = gust.phase !== 'none';
     if (this.windCue.visible) {
@@ -394,7 +432,7 @@ export default {
       ctx.hud.banner(t(gust.direction > 0 ? 'mg.hop.gustUpWarn' : 'mg.hop.gustDownWarn'));
     }
     if (gust.phase === 'gust' && gust.index !== this.gustAppliedIndex) {
-      this.y = applyGustShift(this.y, gust.direction);
+      this.y = applyGustShift(this.y, gust.direction, this.tune);
       this.gustAppliedIndex = gust.index;
       this.gusts += 1;
       ctx.audio.play('whoosh');
@@ -406,7 +444,7 @@ export default {
     // physics (gravity + world scroll wait for the first hop, so neither the
     // countdown nor a hesitant player leaks free gates)
     if (this.started) {
-      const next = stepPhysics({ y: this.y, vy: this.vy }, dt);
+      const next = stepPhysics({ y: this.y, vy: this.vy }, dt, this.tune);
       this.y = next.y;
       this.vy = next.vy;
     } else {
@@ -421,7 +459,7 @@ export default {
     }
 
     // scroll world (§C6.1: speed +2%/gate)
-    const speed = speedAtGate(this.gatesPassed);
+    const speed = speedAtGate(this.gatesPassed, this.tune);
     for (const p of this.pillars) {
       p.x -= speed * dt;
       p.group.position.x = p.x;
@@ -435,22 +473,40 @@ export default {
 
     // gates + collisions
     for (const p of this.pillars) {
-      if (!p.passed && p.x + HOP.PILLAR_HALF_W < GOOBY_X - HOP.BODY_HALF_W) {
+      if (
+        !p.passed &&
+        p.x + this.tune.PILLAR_HALF_W < GOOBY_X - this.tune.BODY_HALF_W
+      ) {
         p.passed = true;
         this.gatesPassed += 1;
         const points = gatePoints(gust.phase === 'gust');
         this.gates += points;
         ctx.onScore(points);
+        if (
+          p.coin &&
+          !p.coinTaken &&
+          Math.abs(this.y - p.gapCenterY) <= p.gapHeight * 0.42
+        ) {
+          p.coinTaken = true;
+          p.coin.visible = false;
+          this.gates += 1;
+          ctx.onScore(1);
+          ctx.audio.play('coin.get');
+          this.particles.emit('sparkles', new THREE.Vector3(p.x, p.gapCenterY, 0), { count: 5 });
+        }
         ctx.audio.play('hop.gate');
         this.floats.spawn(`+${points}`, new THREE.Vector3(GOOBY_X + 0.5, this.y + 0.6, 0), '#2E8B57');
         this.particles.emit('sparkles', new THREE.Vector3(p.x, p.gapCenterY, 0), { count: 4 });
       }
-      if (this.started && collides({ x: GOOBY_X, y: this.y }, p)) {
+      if (this.started && collides({ x: GOOBY_X, y: this.y }, p, this.tune)) {
         this.crash();
         return;
       }
     }
-    if (this.started && this.y - 0.42 * 0.7 <= HOP.FLOOR_Y) {
+    if (
+      this.started &&
+      this.y - this.tune.BODY_HALF_H * this.tune.HITBOX_SCALE <= this.tune.FLOOR_Y
+    ) {
       this.crash();
       return;
     }

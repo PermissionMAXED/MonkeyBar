@@ -81,7 +81,75 @@ export const RUNNER = Object.freeze({
    * 0.35 m guarantees ≥ 2 samples inside every window at any dt.
    */
   MAX_SWEEP_STEP_M: 0.35,
+  /** V4/G71 §G5/§C-SYS4 derived-mode defaults (Mittel identity). */
+  DENSITY_MULT: 1,
+  SPEED_MULT: 1,
+  SCORE_MULT: 1,
+  COIN_RATE: 1,
+  RENDER_SCALE_MULT: 1,
+  ENDLESS: false,
+  BOT_MISS_CHANCE: 0.025,
 });
+
+export const RUNNER_DIFFICULTY = Object.freeze({
+  easy: Object.freeze({ speed: 0.85, density: 0.85, extraHits: 1, endless: false }),
+  normal: Object.freeze({ speed: 1, density: 1, extraHits: 0, endless: false }),
+  hard: Object.freeze({ speed: 1.2, density: 1.15, extraHits: 0, endless: false }),
+  endless: Object.freeze({ speed: 1.2, density: 1.15, extraHits: 1, endless: true }),
+});
+
+export function applyDifficulty(tune = RUNNER, mode = 'normal') {
+  const id = Object.hasOwn(RUNNER_DIFFICULTY, mode) ? mode : 'normal';
+  if (id === 'normal') return tune;
+  const row = RUNNER_DIFFICULTY[id];
+  const maxSpeed = row.endless ? tune.MAX_SPEED * 1.4 : tune.MAX_SPEED * row.speed;
+  return Object.freeze({
+    ...tune,
+    BASE_SPEED: tune.BASE_SPEED * row.speed,
+    MAX_SPEED: maxSpeed,
+    ROW_GAP_M: Object.freeze({
+      start: tune.ROW_GAP_M.start / row.density,
+      end: tune.ROW_GAP_M.end / row.density,
+    }),
+    MAX_HITS: tune.MAX_HITS + row.extraHits,
+    DENSITY_MULT: row.density,
+    SPEED_MULT: row.speed,
+    ENDLESS: row.endless,
+    BOT_MISS_CHANCE: id === 'easy' ? 0.008 : id === 'hard' || id === 'endless' ? 0.035 : tune.BOT_MISS_CHANCE,
+    MODE: id,
+  });
+}
+
+/** Apply runner's coin-rain, Turbo and Giant-Gooby hooks (§C-SYS4.3). */
+export function applyModifier(tune, modifier) {
+  if (!modifier) return tune;
+  if (modifier.type === 'muenzregen') {
+    const coinRate = Math.max(0, Number(modifier.coinRate) || 1);
+    return Object.freeze({
+      ...tune,
+      COIN_RATE: coinRate,
+    });
+  }
+  if (modifier.type === 'turbo') {
+    const speedMult = Math.max(0.1, Number(modifier.speedMult) || 1);
+    return Object.freeze({
+      ...tune,
+      BASE_SPEED: tune.BASE_SPEED * speedMult,
+      MAX_SPEED: tune.MAX_SPEED * speedMult,
+      SPEED_MULT: tune.SPEED_MULT * speedMult,
+      SCORE_MULT: Math.max(0, Number(modifier.scoreMult) || 1),
+    });
+  }
+  if (modifier.type === 'riesenGooby') {
+    return Object.freeze({
+      ...tune,
+      PLAYER_HALF_DEPTH: tune.PLAYER_HALF_DEPTH *
+        Math.max(0.1, Number(modifier.hitboxMult) || 1),
+      RENDER_SCALE_MULT: Math.max(0.1, Number(modifier.scale) || 1),
+    });
+  }
+  return tune;
+}
 
 /**
  * Forward speed after `elapsed` seconds: +5% (compounding) every 10 s,
@@ -121,6 +189,18 @@ export function rowGapAt(difficulty, tune = RUNNER) {
 }
 
 /**
+ * Number of coins in one spawned line. Fractional coin-rate multipliers use
+ * one seeded Bernoulli draw, so Muenzregen's 1.5× payload is exactly +50% in
+ * expectation instead of rounding three baseline coins up to five.
+ */
+export function coinLineCount(rng, tune = RUNNER) {
+  const expected = Math.max(0, tune.COIN_LINE * (tune.COIN_RATE ?? 1));
+  const whole = Math.floor(expected);
+  const fraction = expected - whole;
+  return whole + (fraction > 0 && rng() < fraction ? 1 : 0);
+}
+
+/**
  * Coin-streak combo multiplier (×1..×3): steps up at COMBO_STEPS coins
  * collected without a hit. Stumbling resets the streak (§C6.1 #6).
  * @param {number} coinStreak coins collected since the last hit
@@ -145,6 +225,10 @@ export function comboMultiplier(coinStreak, tune = RUNNER) {
  */
 export function runnerScore(meters, coinPoints) {
   return Math.max(0, Math.floor(meters) + Math.round(coinPoints));
+}
+
+export function finalRunnerScore(meters, coinPoints, tune = RUNNER) {
+  return Math.max(0, Math.round(runnerScore(meters, coinPoints) * (tune.SCORE_MULT ?? 1)));
 }
 
 /**
@@ -391,4 +475,44 @@ export function generateRow(rng, elapsed, recentRows, tune = RUNNER) {
   const lanes = new Array(tune.LANES).fill(null);
   lanes[0] = 'cone';
   return { lanes, gap };
+}
+
+/** Deterministic headless certification of the mode-aware live pilot. */
+export function simulateRunnerAutoplay(mode = 'normal', seed = 1, maxSec = 180) {
+  const tune = applyDifficulty(RUNNER, mode);
+  let a = seed >>> 0;
+  const rng = () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) | 0;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+  let elapsed = 0;
+  let meters = 0;
+  let hits = 0;
+  let coinPoints = 0;
+  let streak = 0;
+  while (elapsed < maxSec && hits < tune.MAX_HITS) {
+    const d = difficultyAt(elapsed, tune);
+    const gap = rowGapAt(d, tune) * (0.9 + rng() * 0.25);
+    const speed = speedAt(elapsed, tune);
+    elapsed += gap / speed;
+    meters += gap;
+    if (rng() < tune.BOT_MISS_CHANCE) {
+      hits += 1;
+      streak = 0;
+    } else if (rng() < tune.COIN_LINE_CHANCE) {
+      const coins = coinLineCount(rng, tune);
+      for (let i = 0; i < coins; i += 1) {
+        streak += 1;
+        coinPoints += mysteryCoinPoints(comboMultiplier(streak, tune), false, tune);
+      }
+    }
+  }
+  return {
+    score: finalRunnerScore(meters, coinPoints, tune),
+    elapsed,
+    meters,
+    hits,
+  };
 }

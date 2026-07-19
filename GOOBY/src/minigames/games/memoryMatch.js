@@ -24,6 +24,8 @@ import {
   advancePeekProgress,
   canUsePeek,
   canFlipCard,
+  applyDifficulty,
+  isMemoryEndlessOver,
 } from './memoryMatch.logic.js';
 
 /** Procedural pastel card-back texture (dots on pink, shared per round). */
@@ -57,6 +59,8 @@ export default {
     this.ctx = ctx;
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
+    const difficulty = ctx.params?.difficulty ?? 'normal';
+    this.tune = applyDifficulty(MEMORY, difficulty);
 
     const level = Number.isFinite(ctx.params?.level)
       ? ctx.params.level
@@ -65,6 +69,11 @@ export default {
 
     this.phase = 'play';
     this.misses = 0;
+    this.totalMisses = 0;
+    this.totalScore = 0;
+    this.boards = 0;
+    this.boardStartedAt = 0;
+    this.finalScore = 0;
     this.matched = 0;
     this.finished = 0; // elapsed at completion (for the time bonus)
     this.endT = 0;
@@ -75,7 +84,7 @@ export default {
     this.cleanMatches = 0;
     this.peekUses = 0;
     this.peekedIndices = [];
-    this.autoT = 0.6;
+    this.autoT = 0.6 / this.tune.PREVIEW_SPEED_MULT;
     /** @type {number[]} indices of the currently face-up unresolved cards */
     this.picked = [];
     /** @type {Map<number, number[]>} autoplay memory: pairId → seen card indices */
@@ -106,6 +115,7 @@ export default {
     const matchedMat = new THREE.MeshStandardMaterial({ color: '#DFF3D8', roughness: 0.9 });
     this.ownedGeos.push(cardGeo);
     this.ownedMats.push(backMat, faceMat, matchedMat);
+    this.faceMat = faceMat;
     this.matchedMat = matchedMat;
 
     // --- deck + grid ---
@@ -223,7 +233,7 @@ export default {
     const flipper = card.flipper;
     const food = card.food;
     tween({
-      from: 0, to: Math.PI, duration: 0.28, ease: easings.easeInOutQuad,
+      from: 0, to: Math.PI, duration: this.tune.FLIP_SEC, ease: easings.easeInOutQuad,
       onUpdate: (v) => {
         flipper.rotation.y = v;
         flipper.position.z = Math.sin(v) * 0.3; // lift while turning
@@ -242,7 +252,7 @@ export default {
       if (isMatch(this.cards[a].pairId, this.cards[b].pairId)) {
         this.resolveMatch(a, b);
       } else {
-        this.revealT = MEMORY.REVEAL_SEC; // flip back after the reveal delay (dt-driven)
+        this.revealT = this.tune.REVEAL_SEC; // flip back after the reveal delay (dt-driven)
       }
     }
   },
@@ -275,14 +285,14 @@ export default {
     this.gooby.play('happyBounce');
   },
 
-  flipBackPicked() {
+  flipBackPicked(elapsed = this.boardStartedAt) {
     for (const i of this.picked) {
       const card = this.cards[i];
       card.state = 'down';
       const flipper = card.flipper;
       const food = card.food;
       tween({
-        from: Math.PI, to: 0, duration: 0.28, ease: easings.easeInOutQuad,
+        from: Math.PI, to: 0, duration: this.tune.FLIP_SEC, ease: easings.easeInOutQuad,
         onUpdate: (v) => {
           flipper.rotation.y = v;
           flipper.position.z = Math.sin(v) * 0.3;
@@ -292,6 +302,7 @@ export default {
     }
     this.picked = [];
     this.misses += 1;
+    this.totalMisses += 1;
     const progress = advancePeekProgress({
       cleanMatches: this.cleanMatches,
       peekReady: this.peekReady,
@@ -299,9 +310,17 @@ export default {
     }, false);
     this.cleanMatches = progress.cleanMatches;
     this.peekReady = progress.peekReady;
-    this.ctx.hud.setScore(Math.max(0, MEMORY.SCORE_BASE - this.misses));
+    const boardScore = Math.max(0, MEMORY.SCORE_BASE - this.misses);
+    this.ctx.hud.setScore(this.tune.ENDLESS ? this.totalScore + boardScore : boardScore);
     this.ctx.audio.play('card.nomatch');
     this.gooby.play('refuse');
+    if (isMemoryEndlessOver(this.totalMisses, this.tune)) {
+      this.finalScore = this.totalScore +
+        boardScore;
+      this.finished = elapsed;
+      this.phase = 'ending';
+      this.endT = 0;
+    }
   },
 
   usePeek() {
@@ -309,7 +328,7 @@ export default {
     this.peekReady = false;
     this.peekUsed = true;
     this.peekUses += 1;
-    this.peekT = MEMORY.PEEK_SEC;
+    this.peekT = this.tune.PEEK_SEC;
     this.peekToken.visible = false;
     this.peekedIndices = [];
     for (let i = 0; i < this.cards.length; i += 1) {
@@ -347,14 +366,16 @@ export default {
     }
     this.autoT -= dt;
     if (this.autoT > 0) return;
-    this.autoT = 0.55 + this.ctx.rng() * 0.4;
+    this.autoT = (0.55 + this.ctx.rng() * 0.4) / this.tune.PREVIEW_SPEED_MULT;
 
     const downCards = this.cards
       .map((c, i) => ({ c, i }))
       .filter(({ c }) => c.state === 'down');
     if (downCards.length === 0) return;
 
-    const recallOk = this.ctx.rng() > 0.12; // occasional recall failures
+    const recallFail = this.tune.MODE === 'easy' ? 0.04
+      : this.tune.MODE === 'hard' || this.tune.MODE === 'endless' ? 0.12 : 0.08;
+    const recallOk = this.ctx.rng() > recallFail;
 
     // 1) first pick: a fully-known pair? start flipping its halves
     if (this.picked.length === 0 && recallOk) {
@@ -386,6 +407,40 @@ export default {
     this.flipUp(pick.i);
   },
 
+  /** Reset the same face set for the next endless board (new memory map). */
+  resetEndlessBoard(elapsed) {
+    const positions = this.cards.map((card) => card.group.position.clone());
+    const byPair = new Map();
+    for (const card of this.cards) {
+      if (!byPair.has(card.pairId)) byPair.set(card.pairId, []);
+      byPair.get(card.pairId).push(card);
+      card.state = 'down';
+      card.flipper.rotation.y = 0;
+      card.flipper.position.z = 0;
+      card.food.visible = false;
+      card.face.material = this.faceMat;
+      card.group.scale.setScalar(1);
+    }
+    const deck = buildDeck(this.layout.pairs, this.ctx.rng);
+    this.cards = deck.map((pairId) => byPair.get(pairId).pop());
+    this.cards.forEach((card, index) => {
+      card.group.position.copy(positions[index]);
+      card.group.userData.cardIndex = index;
+    });
+    this.picked = [];
+    this.matched = 0;
+    this.misses = 0;
+    this.revealT = 0;
+    this.peekT = 0;
+    this.peekUsed = false;
+    this.peekReady = false;
+    this.cleanMatches = 0;
+    this.peekedIndices = [];
+    this.memoryMap.clear();
+    this.boardStartedAt = elapsed;
+    this.autoT = 0.35 / this.tune.PREVIEW_SPEED_MULT;
+  },
+
   update(dt, elapsed) {
     const ctx = this.ctx;
     this.gooby.update(dt);
@@ -395,8 +450,7 @@ export default {
       this.endT += dt;
       if (this.endT >= 1.5 && this.phase !== 'done') {
         this.phase = 'done';
-        const score = memoryScore(this.misses, this.finished, this.layout);
-        ctx.onEnd({ score });
+        ctx.onEnd({ score: this.finalScore });
       }
       return;
     }
@@ -412,15 +466,26 @@ export default {
     // pending flip-back (dt-driven, pause-safe §E8)
     if (this.picked.length === 2 && this.revealT > 0) {
       this.revealT -= dt;
-      if (this.revealT <= 0) this.flipBackPicked();
+      if (this.revealT <= 0) this.flipBackPicked(elapsed);
     }
 
     if (this.autoplay) this.autoplayTick(dt);
 
     if (this.matched >= this.layout.pairs && this.phase === 'play') {
+      const boardElapsed = elapsed - this.boardStartedAt;
+      const score = memoryScore(this.misses, boardElapsed, this.layout, this.tune);
+      if (this.tune.ENDLESS) {
+        this.totalScore += score;
+        this.boards += 1;
+        ctx.hud.setScore(this.totalScore);
+        ctx.hud.banner(t('mg.memory.cleared'));
+        ctx.audio.play('card.match');
+        this.resetEndlessBoard(elapsed);
+        return;
+      }
       this.phase = 'ending';
       this.finished = elapsed;
-      const score = memoryScore(this.misses, this.finished, this.layout);
+      this.finalScore = score;
       ctx.hud.setScore(score);
       ctx.hud.banner(t('mg.memory.cleared'));
       ctx.audio.play('ui.win');

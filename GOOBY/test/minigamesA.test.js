@@ -20,6 +20,11 @@ import {
   spawnXForRoll,
   basketCatchesX,
   applyCatchState,
+  applyDifficulty as applyCatchDifficulty,
+  applyModifier as applyCatchModifier,
+  isCatchRoundOver,
+  finalCatchScore,
+  simulateCatchAutoplay,
 } from '../src/minigames/games/carrotCatch.logic.js';
 import {
   HOP,
@@ -32,6 +37,11 @@ import {
   gustPhaseAt,
   applyGustShift,
   gatePoints,
+  applyDifficulty as applyHopDifficulty,
+  applyModifier as applyHopModifier,
+  coinSpawns,
+  finalHopScore,
+  simulateHopAutoplay,
 } from '../src/minigames/games/bunnyHop.logic.js';
 import {
   GUARD,
@@ -46,6 +56,8 @@ import {
   isKingDue,
   applyKingTap,
   acceptsTapAfter,
+  applyDifficulty as applyGuardDifficulty,
+  simulateGuardAutoplay,
 } from '../src/minigames/games/carrotGuard.logic.js';
 import {
   MEMORY,
@@ -59,6 +71,9 @@ import {
   canUsePeek,
   canFlipCard,
   gridExtents,
+  applyDifficulty as applyMemoryDifficulty,
+  isMemoryEndlessOver,
+  simulateMemoryAutoplay,
 } from '../src/minigames/games/memoryMatch.logic.js';
 import { MINIGAME, COIN_TABLE } from '../src/data/constants.js';
 import { computeCoins } from '../src/data/minigames.js';
@@ -73,6 +88,11 @@ function rngFrom(seed) {
     t2 = (t2 + Math.imul(t2 ^ (t2 >>> 7), 61 | t2)) | 0;
     return ((t2 ^ (t2 >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+function botMean(simulate, mode, field = 'score') {
+  const values = Array.from({ length: 10 }, (_, i) => simulate(mode, i + 1)[field]);
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -550,4 +570,130 @@ test('V3 memoryMatch audit: 6×4 board fits 320×568 canvas even with 130% DOM U
   assert.ok(ext.width / 2 < halfW, `${ext.width} world-width fits ${halfW * 2}`);
   assert.ok(ext.height < halfH * 2, `${ext.height} world-height fits ${halfH * 2}`);
   assert.equal(MEMORY.BIG.cols * MEMORY.BIG.rows, 24);
+});
+
+// ---------------------------------------------------------------------------
+// V4/G71 difficulty, endless, modifier and seeded-bot certification
+// ---------------------------------------------------------------------------
+
+test('V4/G71 carrotCatch: timed-arena modes, guardrail, endless and Turbo', () => {
+  assert.strictEqual(applyCatchDifficulty(CATCH, 'normal'), CATCH, 'Mittel is identity');
+  const easy = applyCatchDifficulty(CATCH, 'easy');
+  const hard = applyCatchDifficulty(CATCH, 'hard');
+  assert.equal(easy.SPAWN_BASE_SEC, CATCH.SPAWN_BASE_SEC * 1.2);
+  assert.equal(easy.BASKET_HALF_WIDTH, CATCH.BASKET_HALF_WIDTH * 1.25);
+  assert.equal(easy.DURATION_SEC, CATCH.DURATION_SEC * 1.2);
+  assert.equal(hard.SPAWN_BASE_SEC, CATCH.SPAWN_BASE_SEC * 0.85);
+  assert.equal(hard.BASKET_HALF_WIDTH, CATCH.BASKET_HALF_WIDTH * 0.8);
+  assert.ok(hard.BASKET_HALF_WIDTH >= CATCH.BASKET_HALF_WIDTH * 0.55);
+  assert.ok(Object.isFrozen(easy) && Object.isFrozen(hard));
+
+  const endless = applyCatchDifficulty(CATCH, 'endless');
+  assert.equal(isCatchRoundOver({ elapsed: 999, missedCarrots: 2 }, endless), false);
+  assert.equal(isCatchRoundOver({ elapsed: 1, missedCarrots: 3 }, endless), true);
+
+  const turbo = applyCatchModifier(hard, {
+    type: 'turbo', speedMult: 1.25, scoreMult: 1.5,
+  });
+  assert.equal(turbo.FALL_BASE_SPEED, hard.FALL_BASE_SPEED * 1.25);
+  assert.equal(turbo.SPAWN_BASE_SEC, hard.SPAWN_BASE_SEC / 1.25);
+  assert.equal(finalCatchScore(20, turbo), 30);
+  assert.strictEqual(
+    applyCatchModifier(hard, { type: 'doppelGold', coinMult: 2 }),
+    hard,
+    'payout-only modifier has no game hook'
+  );
+});
+
+test('V4/G71 carrotCatch: hard target is beatable and bot means get harder', () => {
+  const hard = Array.from({ length: 5 }, (_, i) => simulateCatchAutoplay('hard', i + 1).score);
+  assert.ok(hard.some((score) => score >= 70), `Schwer target 70 missed: ${hard}`);
+  assert.ok(botMean(simulateCatchAutoplay, 'easy') >= botMean(simulateCatchAutoplay, 'normal'));
+  assert.ok(botMean(simulateCatchAutoplay, 'normal') >= botMean(simulateCatchAutoplay, 'hard'));
+});
+
+test('V4/G71 bunnyHop: physics modes, endless wind and all eligible modifiers', () => {
+  assert.strictEqual(applyHopDifficulty(HOP, 'normal'), HOP, 'Mittel is identity');
+  const easy = applyHopDifficulty(HOP, 'easy');
+  const hard = applyHopDifficulty(HOP, 'hard');
+  assert.equal(easy.GAP_BASE, HOP.GAP_BASE * 1.25);
+  assert.equal(hard.GAP_BASE, HOP.GAP_BASE * 0.8);
+  assert.equal(hard.TOLERANCE_MULT, 0.8);
+  assert.ok(hard.TOLERANCE_MULT >= 0.55);
+  assert.ok(gapAtGate(9999, hard) > 2 * forgivingHalf(HOP.BODY_HALF_H, hard));
+
+  const endless = applyHopDifficulty(HOP, 'endless');
+  assert.equal(endless.ENDLESS, true);
+  assert.equal(endless.GUST_FIRST_SEC, endless.GUST_TELEGRAPH_SEC, 'wind starts immediately');
+
+  const rain = applyHopModifier(hard, { type: 'muenzregen', coinRate: 1.5 });
+  assert.equal(rain.COIN_RATE, 1.5);
+  assert.equal(coinSpawns(0.47, rain), true);
+  assert.equal(coinSpawns(0.49, rain), false);
+  const turbo = applyHopModifier(hard, {
+    type: 'turbo', speedMult: 1.25, scoreMult: 1.5,
+  });
+  assert.equal(turbo.BASE_SPEED, hard.BASE_SPEED * 1.25);
+  assert.equal(finalHopScore(20, turbo), 30);
+  const giant = applyHopModifier(hard, {
+    type: 'riesenGooby', scale: 1.6, hitboxMult: 1.3,
+  });
+  assert.equal(giant.RENDER_SCALE_MULT, 1.6);
+  assert.equal(giant.HITBOX_SCALE, hard.HITBOX_SCALE * 1.3);
+});
+
+test('V4/G71 bunnyHop: hard target is beatable and bot means get harder', () => {
+  const hard = Array.from({ length: 5 }, (_, i) => simulateHopAutoplay('hard', i + 1).score);
+  assert.ok(hard.some((score) => score >= 45), `Schwer target 45 missed: ${hard}`);
+  assert.ok(botMean(simulateHopAutoplay, 'easy') >= botMean(simulateHopAutoplay, 'normal'));
+  assert.ok(botMean(simulateHopAutoplay, 'normal') >= botMean(simulateHopAutoplay, 'hard'));
+});
+
+test('V4/G71 carrotGuard: timed-arena modes, 0.35 s guardrail and endless steals', () => {
+  assert.strictEqual(applyGuardDifficulty(GUARD, 'normal'), GUARD, 'Mittel is identity');
+  const easy = applyGuardDifficulty(GUARD, 'easy');
+  const hard = applyGuardDifficulty(GUARD, 'hard');
+  assert.equal(easy.SPAWN_START_SEC, GUARD.SPAWN_START_SEC * 1.2);
+  assert.equal(easy.DURATION_SEC, GUARD.DURATION_SEC * 1.2);
+  assert.equal(hard.SPAWN_END_SEC, GUARD.SPAWN_END_SEC * 0.85);
+  assert.equal(hard.UP_TIME_START, GUARD.UP_TIME_START * 0.8);
+  assert.equal(hard.UP_TIME_END, GUARD.UP_TIME_END * 0.8);
+  assert.ok(hard.UP_TIME_START >= 0.35 && hard.UP_TIME_END >= 0.35);
+
+  const endless = applyGuardDifficulty(GUARD, 'endless');
+  assert.equal(isRoundOver({ elapsed: 999, carrots: 8 }, endless.DURATION_SEC, endless), false);
+  assert.equal(isRoundOver({ elapsed: 1, carrots: 7 }, endless.DURATION_SEC, endless), true);
+});
+
+test('V4/G71 carrotGuard: hard target is beatable and bot means get harder', () => {
+  const hard = Array.from({ length: 5 }, (_, i) => simulateGuardAutoplay('hard', i + 1).score);
+  assert.ok(hard.some((score) => score >= 70), `Schwer target 70 missed: ${hard}`);
+  assert.ok(botMean(simulateGuardAutoplay, 'easy') >= botMean(simulateGuardAutoplay, 'normal'));
+  assert.ok(botMean(simulateGuardAutoplay, 'normal') >= botMean(simulateGuardAutoplay, 'hard'));
+});
+
+test('V4/G71 memoryMatch: puzzle modes, window guardrail and endless misses', () => {
+  assert.strictEqual(applyMemoryDifficulty(MEMORY, 'normal'), MEMORY, 'Mittel is identity');
+  const easy = applyMemoryDifficulty(MEMORY, 'easy');
+  const hard = applyMemoryDifficulty(MEMORY, 'hard');
+  assert.equal(easy.PREVIEW_SPEED_MULT, 0.85);
+  assert.equal(easy.REVEAL_SEC, MEMORY.REVEAL_SEC * 1.25);
+  assert.equal(hard.PREVIEW_SPEED_MULT, 1.15);
+  assert.equal(hard.REVEAL_SEC, MEMORY.REVEAL_SEC * 0.8);
+  assert.equal(hard.RAMP_FLOOR_STEP, -1);
+  assert.ok(hard.REVEAL_SEC >= 0.35 && hard.PEEK_SEC >= 0.35);
+  assert.equal(memoryScore(0, 0, MEMORY.BIG, hard), 48, 'Schwer clear bonus reaches §G5 cap');
+
+  const endless = applyMemoryDifficulty(MEMORY, 'endless');
+  assert.equal(isMemoryEndlessOver(11, endless), false);
+  assert.equal(isMemoryEndlessOver(12, endless), true);
+});
+
+test('V4/G71 memoryMatch: hard target is beatable; raw bot skill gets harder', () => {
+  const hard = Array.from({ length: 5 }, (_, i) => simulateMemoryAutoplay('hard', i + 1).score);
+  assert.ok(hard.some((score) => score >= 40), `Schwer target 40 missed: ${hard}`);
+  assert.ok(botMean(simulateMemoryAutoplay, 'easy', 'rawScore') >=
+    botMean(simulateMemoryAutoplay, 'normal', 'rawScore'));
+  assert.ok(botMean(simulateMemoryAutoplay, 'normal', 'rawScore') >=
+    botMean(simulateMemoryAutoplay, 'hard', 'rawScore'));
 });

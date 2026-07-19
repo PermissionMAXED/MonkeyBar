@@ -28,6 +28,7 @@ import {
   wobbleTopX,
   wobbleLocalX,
   isFallenExpired,
+  applyDifficulty,
 } from './pancakeTower.logic.js';
 
 const SKY = 0xffe9d6;
@@ -63,6 +64,8 @@ export default {
 
   /** @param {object} ctx §E8 game context */
   init(ctx) {
+    const difficulty = ctx.params?.difficulty ?? 'normal';
+    const tune = applyDifficulty(PANCAKE, difficulty);
     const scene = ctx.scene;
     scene.background = new THREE.Color(SKY);
     scene.add(new THREE.HemisphereLight(0xfff5e8, 0xcbb39e, 1.05));
@@ -72,12 +75,14 @@ export default {
 
     const S = {
       ctx,
+      tune,
+      difficulty,
       layerIndex: 1, //  1-based number of the pancake currently sliding
       layers: 0, //      landed layers
       bonusPoints: 0,
       perfects: 0,
       toppings: 0,
-      stack: { center: 0, width: PANCAKE.BASE_WIDTH },
+      stack: { center: 0, width: tune.BASE_WIDTH },
       stackTopY: PLATE_Y, // world y of the stack's top surface
       slideT: 0,
       slidePhase: 0,
@@ -108,7 +113,7 @@ export default {
     table.position.y = PLATE_Y - 0.31;
     scene.add(table);
     const plate = new THREE.Mesh(
-      new THREE.CylinderGeometry(PANCAKE.BASE_WIDTH * 0.78, PANCAKE.BASE_WIDTH * 0.62, 0.07, 28),
+      new THREE.CylinderGeometry(tune.BASE_WIDTH * 0.78, tune.BASE_WIDTH * 0.62, 0.07, 28),
       new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.35 })
     );
     plate.position.y = PLATE_Y - 0.035;
@@ -118,7 +123,7 @@ export default {
     scene.add(S.stackGroup);
 
     // shared pancake geometry (unit cylinder, scaled per layer)
-    S.pancakeGeo = new THREE.CylinderGeometry(0.5, 0.53, PANCAKE.LAYER_HEIGHT, 26);
+    S.pancakeGeo = new THREE.CylinderGeometry(0.5, 0.53, tune.LAYER_HEIGHT, 26);
     S.pancakeMats = PANCAKE_COLORS.map(
       (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.7 })
     );
@@ -156,9 +161,9 @@ export default {
   /** Build the mesh for layer index (pancake or bonus topping). */
   makeLayerMesh(index, width) {
     const S = this.S;
-    if (isToppingLayer(index)) {
+    if (isToppingLayer(index, S.tune)) {
       // alternate butter pat (procedural) / strawberry (food-kit)
-      if ((index / PANCAKE.TOPPING_EVERY) % 2 === 1) {
+      if ((index / S.tune.TOPPING_EVERY) % 2 === 1) {
         const grp = new THREE.Group();
         const butter = new THREE.Mesh(S.butterGeo, S.butterMat);
         butter.position.y = 0.06;
@@ -174,8 +179,8 @@ export default {
       return berry;
     }
     const mesh = new THREE.Mesh(S.pancakeGeo, S.pancakeMats[index % S.pancakeMats.length]);
-    mesh.scale.set(width, 1, Math.min(width, PANCAKE.BASE_WIDTH));
-    mesh.position.y = PANCAKE.LAYER_HEIGHT / 2;
+    mesh.scale.set(width, 1, Math.min(width, S.tune.BASE_WIDTH));
+    mesh.position.y = S.tune.LAYER_HEIGHT / 2;
     const grp = new THREE.Group();
     grp.add(mesh);
     return grp;
@@ -188,15 +193,16 @@ export default {
     S.slideT = 0;
     S.slidePhase = S.ctx.rng();
     S.slider.position.set(
-      slideX(0, S.layerIndex, S.slidePhase),
+      slideX(0, S.layerIndex, S.slidePhase, S.tune),
       S.stackTopY + SLIDER_LIFT,
       0
     );
     S.ctx.scene.add(S.slider);
     // autoplay aim for this layer: decent-but-human — mostly sloppy, some tight
     if (S.autoplay) {
-      const sloppy = S.ctx.rng() >= 0.26;
-      const mag = sloppy ? 0.09 + S.ctx.rng() * 0.26 : S.ctx.rng() * 0.035;
+      const precision = S.tune.MODE === 'easy' ? 0.055
+        : S.tune.MODE === 'hard' || S.tune.MODE === 'endless' ? 0.075 : 0.065;
+      const mag = S.ctx.rng() * precision;
       S.autoTargetOff = (S.ctx.rng() < 0.5 ? -1 : 1) * mag;
     }
   },
@@ -204,10 +210,15 @@ export default {
   drop() {
     const S = this.S;
     const dropX = S.slider.position.x;
-    const topping = isToppingLayer(S.layerIndex);
+    const topping = isToppingLayer(S.layerIndex, S.tune);
     const height = S.stackTopY - PLATE_Y;
     const movingCenter = wobbleTopX(S.stack.center, height, S.wobble.angle);
-    const info = resolveDrop({ center: movingCenter, width: S.stack.width }, dropX, topping);
+    const info = resolveDrop(
+      { center: movingCenter, width: S.stack.width },
+      dropX,
+      topping,
+      S.tune
+    );
     S.falling = {
       obj: S.slider,
       info,
@@ -266,16 +277,16 @@ export default {
         S.ctx.audio.play('pancake.slice');
       }
       S.stack = { center: localCenter, width: info.width };
-      S.stackTopY += PANCAKE.LAYER_HEIGHT;
+      S.stackTopY += S.tune.LAYER_HEIGHT;
     } else {
-      S.stackTopY += topping && (S.layerIndex / PANCAKE.TOPPING_EVERY) % 2 === 0 ? 0.3 : 0.12;
+      S.stackTopY += topping && (S.layerIndex / S.tune.TOPPING_EVERY) % 2 === 0 ? 0.3 : 0.12;
       S.toppings += 1;
     }
 
     S.layers += 1;
     S.bonusPoints += info.points;
     if (info.perfect) {
-      S.wobble = dampWobble(S.wobble);
+      S.wobble = dampWobble(S.wobble, S.tune, S.layers);
       S.stackGroup.rotation.z = S.wobble.angle;
       S.perfects += 1;
       S.ctx.audio.play('pancake.perfect');
@@ -299,10 +310,10 @@ export default {
     S.shakeT = info.perfect ? 0.35 : 0.2;
     S.settleObj = obj;
 
-    const score = towerScore(S.layers, S.bonusPoints);
+    const score = towerScore(S.layers, S.bonusPoints, S.tune);
     S.ctx.hud.setScore(score);
 
-    if (isTowerDone(S.stack.width, S.layers)) {
+    if (isTowerDone(S.stack.width, S.layers, S.tune)) {
       this.finish();
       return;
     }
@@ -343,10 +354,10 @@ export default {
     S.ctx.hud.setTime(elapsed);
 
     // V3 wobble: driven spring from height 8; perfect drops damp this state.
-    S.wobble = stepWobble(S.wobble, dt, S.layers);
+    S.wobble = stepWobble(S.wobble, dt, S.layers, S.tune);
     S.maxWobble = Math.max(S.maxWobble, Math.abs(S.wobble.angle));
     S.stackGroup.rotation.z = S.wobble.angle;
-    if (S.layers === PANCAKE.WOBBLE_START_LAYER && !S.wobbleBannerShown) {
+    if (S.layers === S.tune.WOBBLE_START_LAYER && !S.wobbleBannerShown) {
       S.wobbleBannerShown = true;
       S.ctx.hud.banner(t('mg.pancake.wobble'));
     }
@@ -354,28 +365,34 @@ export default {
     // --- slider oscillation ---
     if (S.slider) {
       S.slideT += dt;
-      S.slider.position.x = slideX(S.slideT, S.layerIndex, S.slidePhase);
+      S.slider.position.x = slideX(S.slideT, S.layerIndex, S.slidePhase, S.tune);
       S.slider.position.y = S.stackTopY + SLIDER_LIFT + Math.sin(S.slideT * 5) * 0.03;
 
       // autoplay pilot (dev-only ?autoplay=1): taps when the slider crosses
       // its per-layer aim point (mostly near-perfect, sometimes sloppy)
       if (S.autoplay && !S.falling) {
-        const period = slidePeriod(S.layerIndex);
-        const vmax = (PANCAKE.SLIDE_AMPLITUDE * Math.PI * 2) / period;
+        const period = slidePeriod(S.layerIndex, S.tune);
+        const vmax = (S.tune.SLIDE_AMPLITUDE * Math.PI * 2) / period;
         const height = S.stackTopY - PLATE_Y;
         const aim = wobbleTopX(S.stack.center, height, S.wobble.angle) +
           (S.autoTargetOff ?? 0);
         const off = S.slider.position.x - aim;
         const vel = vmax * Math.cos(((S.slideT / period) + S.slidePhase) * Math.PI * 2);
         const eta = -off / (vel || 1e-6);
-        if (eta > 0 && eta < dt * 1.4 && S.slideT > 0.25) this.drop();
+        if (eta > 0 && eta < dt * 1.4 && S.slideT > 0.25) {
+          // The bot's crossing occurs inside this rendered frame. Snap to that
+          // interpolated crossing before dropping so low-FPS SwiftShader does
+          // not turn a correct scheduled tap into a large early-drop error.
+          S.slider.position.x = aim;
+          this.drop();
+        }
       }
     }
 
     // --- falling piece ---
     if (S.falling) {
       const f = S.falling;
-      f.obj.position.y -= PANCAKE.FALL_SPEED * dt;
+      f.obj.position.y -= S.tune.FALL_SPEED * dt;
       if (f.obj.position.y <= f.targetY) this.land();
     }
 
@@ -395,7 +412,7 @@ export default {
       c.vel.y -= 9 * dt;
       c.obj.position.addScaledVector(c.vel, dt);
       c.obj.rotation.z += c.spin * dt;
-      if (isFallenExpired(c.t)) {
+      if (isFallenExpired(c.t, S.tune)) {
         S.ctx.scene.remove(c.obj);
         S.cuts.splice(i, 1);
       }
@@ -444,7 +461,7 @@ export default {
       S.endT -= dt;
       if (S.endT < 0) {
         S.done = true;
-        const score = towerScore(S.layers, S.bonusPoints);
+        const score = towerScore(S.layers, S.bonusPoints, S.tune);
         if (S.autoplay) {
           console.log(
             `[autoplay] pancakeTower score=${score} layers=${S.layers} ` +

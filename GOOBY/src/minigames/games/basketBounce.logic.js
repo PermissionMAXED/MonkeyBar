@@ -64,7 +64,44 @@ export const BASKET = Object.freeze({
   MAX_SWEEP_STEP_M: 0.1,
   /** Ball considered dead below this y (fell past the floor). */
   FLOOR_Y: 0.0,
+  /** V4/G71 §G5 timed-arena defaults (Mittel identity). */
+  SPAWN_INTERVAL_MULT: 1,
+  WINDOW_MULT: 1,
+  DURATION_MULT: 1,
+  SCORE_RADIUS_SCALE: 1,
+  SHOT_RESET_SEC: 0.55,
+  AUTO_INTERVAL_MIN_SEC: 0.5,
+  AUTO_INTERVAL_RANGE_SEC: 0.5,
+  ENDLESS: false,
+  ENDLESS_CONSECUTIVE_MISSES: 3,
 });
+
+export const BASKET_DIFFICULTY = Object.freeze({
+  easy: Object.freeze({ spawn: 1.2, window: 1.25, duration: 1.2, endless: false }),
+  normal: Object.freeze({ spawn: 1, window: 1, duration: 1, endless: false }),
+  hard: Object.freeze({ spawn: 0.85, window: 0.8, duration: 1, endless: false }),
+  endless: Object.freeze({ spawn: 0.85, window: 0.8, duration: 1, endless: true }),
+});
+
+export function applyDifficulty(tune = BASKET, mode = 'normal') {
+  const id = Object.hasOwn(BASKET_DIFFICULTY, mode) ? mode : 'normal';
+  if (id === 'normal') return tune;
+  const row = BASKET_DIFFICULTY[id];
+  const window = Math.max(0.55, row.window);
+  return Object.freeze({
+    ...tune,
+    DURATION_SEC: tune.DURATION_SEC * row.duration,
+    SCORE_RADIUS_SCALE: window,
+    SHOT_RESET_SEC: tune.SHOT_RESET_SEC * row.spawn,
+    AUTO_INTERVAL_MIN_SEC: tune.AUTO_INTERVAL_MIN_SEC * row.spawn,
+    AUTO_INTERVAL_RANGE_SEC: tune.AUTO_INTERVAL_RANGE_SEC * row.spawn,
+    SPAWN_INTERVAL_MULT: row.spawn,
+    WINDOW_MULT: window,
+    DURATION_MULT: row.duration,
+    ENDLESS: row.endless,
+    MODE: id,
+  });
+}
 
 /**
  * Hoop center x-offset while sliding (§C6.1 #7: slides horizontally after
@@ -140,7 +177,7 @@ export function stepBall(ball, dt, hoop, tune = BASKET) {
   const rAfter = Math.hypot(p.x - hoop.x, p.z - hoop.z);
   if (yBefore > tune.RIM_Y && p.y <= tune.RIM_Y && v.y < 0) {
     const rAtCross = (rBefore + rAfter) / 2;
-    if (rAtCross < tune.RIM_R - tune.BALL_R * 0.35) {
+    if (rAtCross < tune.RIM_R * tune.SCORE_RADIUS_SCALE - tune.BALL_R * 0.35) {
       ev.basket = true;
       return ev;
     }
@@ -325,4 +362,46 @@ export function solveBasketVelocity(hoop, rng, tune = BASKET) {
     if (simulateShot(cand, hoop, tune).result === 'basket') return cand;
   }
   return null;
+}
+
+/** Timed modes use duration; Endlos stops at three consecutive misses. */
+export function isBasketRoundOver(elapsed, missStreak, tune = BASKET) {
+  return tune.ENDLESS
+    ? missStreak >= tune.ENDLESS_CONSECUTIVE_MISSES
+    : elapsed >= tune.DURATION_SEC;
+}
+
+/** Deterministic pure certification model for the live arc-solving bot. */
+export function simulateBasketAutoplay(mode = 'normal', seed = 1) {
+  const tune = applyDifficulty(BASKET, mode);
+  let a = seed >>> 0;
+  const rng = () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) | 0;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+  const accuracy = mode === 'easy' ? 0.94 : mode === 'hard' || mode === 'endless' ? 0.78 : 0.87;
+  let elapsed = 0;
+  let missStreak = 0;
+  let swishStreak = 0;
+  let baskets = 0;
+  let score = 0;
+  while (!isBasketRoundOver(elapsed, missStreak, tune) && elapsed < 240) {
+    const made = rng() < accuracy;
+    const swish = made && rng() < 0.62;
+    const bank = made && !swish && rng() < 0.35;
+    const shot = scoreShot({ basket: made, swish, bank }, swishStreak, isMovingHoop(baskets, tune), tune);
+    swishStreak = shot.swishStreak;
+    score += shot.points;
+    if (made) {
+      baskets += 1;
+      missStreak = 0;
+    } else {
+      missStreak += 1;
+    }
+    elapsed += 1.35 + tune.SHOT_RESET_SEC +
+      tune.AUTO_INTERVAL_MIN_SEC + rng() * tune.AUTO_INTERVAL_RANGE_SEC;
+  }
+  return { score, elapsed, missStreak, baskets };
 }

@@ -53,7 +53,34 @@ export const PANCAKE = Object.freeze({
   PERFECT_WOBBLE_DAMP: 0.4,
   /** Audit contract: all missed/cut pieces, including toppings, despawn. */
   FALLEN_DESPAWN_SEC: 1.4,
+  /** V4/G71 §G5 physics/skill defaults (Mittel identity). */
+  TOLERANCE_MULT: 1,
+  OVERHANG_TOLERANCE_MULT: 1,
+  ENDLESS: false,
 });
+
+export const PANCAKE_DIFFICULTY = Object.freeze({
+  easy: Object.freeze({ tolerance: 1.25, endless: false }),
+  normal: Object.freeze({ tolerance: 1, endless: false }),
+  hard: Object.freeze({ tolerance: 0.8, endless: false }),
+  endless: Object.freeze({ tolerance: 0.8, endless: true }),
+});
+
+export function applyDifficulty(tune = PANCAKE, mode = 'normal') {
+  const id = Object.hasOwn(PANCAKE_DIFFICULTY, mode) ? mode : 'normal';
+  if (id === 'normal') return tune;
+  const row = PANCAKE_DIFFICULTY[id];
+  const tolerance = Math.max(0.55, row.tolerance);
+  return Object.freeze({
+    ...tune,
+    PERFECT_EPS: tune.PERFECT_EPS * tolerance,
+    TOLERANCE_MULT: tolerance,
+    OVERHANG_TOLERANCE_MULT: tolerance,
+    MAX_LAYERS: row.endless ? Number.POSITIVE_INFINITY : tune.MAX_LAYERS,
+    ENDLESS: row.endless,
+    MODE: id,
+  });
+}
 
 /**
  * Is layer `index` (1-based count of the pancake being dropped) a bonus
@@ -130,7 +157,8 @@ export function resolveDrop(stack, dropCenter, topping, tune = PANCAKE) {
     };
   }
 
-  const overlap = stack.width - absOff;
+  const effectiveOff = absOff / tune.OVERHANG_TOLERANCE_MULT;
+  const overlap = stack.width - effectiveOff;
   if (overlap <= 0) {
     // total miss — the whole pancake tumbles off
     return { landed: false, perfect: false, center: stack.center, width: stack.width, cut: null, points: 0 };
@@ -146,7 +174,7 @@ export function resolveDrop(stack, dropCenter, topping, tune = PANCAKE) {
 
   // --- normal slice: keep the overlap, cut the overhang (§C6.1 #8) ---
   const newCenter = stack.center + (offset / 2);
-  const cutSize = absOff;
+  const cutSize = Math.min(stack.width, effectiveOff);
   const cutCenter = dropCenter + side * (overlap / 2); // center of the overhang piece
   return {
     landed: true,
@@ -217,7 +245,9 @@ export function stepWobble(state, dt, layers, tune = PANCAKE) {
  * @param {{angle:number,velocity:number,phase:number}} state
  * @param {object} [tune]
  */
-export function dampWobble(state, tune = PANCAKE) {
+export function dampWobble(state, tune = PANCAKE, layers = 0) {
+  // §G5.4: endless wobble never damps below its stage-8 behavior.
+  if (tune.ENDLESS && layers >= tune.WOBBLE_START_LAYER) return { ...state };
   return {
     angle: state.angle * tune.PERFECT_WOBBLE_DAMP,
     velocity: state.velocity * tune.PERFECT_WOBBLE_DAMP,
@@ -249,4 +279,32 @@ export function wobbleLocalX(worldX, heightAboveBase, angle) {
 /** Fallen toppings and pancake cuts share the same bounded lifetime. */
 export function isFallenExpired(age, tune = PANCAKE) {
   return age >= tune.FALLEN_DESPAWN_SEC;
+}
+
+/** Deterministic pure certification model for the live timing bot. */
+export function simulatePancakeAutoplay(mode = 'normal', seed = 1) {
+  const tune = applyDifficulty(PANCAKE, mode);
+  let a = seed >>> 0;
+  const rng = () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) | 0;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+  let stack = { center: 0, width: tune.BASE_WIDTH };
+  let layers = 0;
+  let bonusPoints = 0;
+  const limit = tune.ENDLESS ? 120 : tune.MAX_LAYERS;
+  while (!isTowerDone(stack.width, layers, tune) && layers < limit) {
+    const index = layers + 1;
+    const topping = isToppingLayer(index, tune);
+    const spread = mode === 'easy' ? 0.055 : mode === 'hard' || mode === 'endless' ? 0.075 : 0.065;
+    const offset = (rng() - 0.5) * spread * 2;
+    const drop = resolveDrop(stack, stack.center + offset, topping, tune);
+    if (!drop.landed) break;
+    layers += 1;
+    bonusPoints += drop.points;
+    stack = { center: drop.center, width: drop.width };
+  }
+  return { score: towerScore(layers, bonusPoints, tune), layers, width: stack.width };
 }

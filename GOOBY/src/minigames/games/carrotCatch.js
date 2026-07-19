@@ -25,6 +25,10 @@ import {
   spawnXForRoll,
   basketCatchesX,
   applyCatchState,
+  applyDifficulty,
+  applyModifier,
+  isCatchRoundOver,
+  finalCatchScore,
 } from './carrotCatch.logic.js';
 
 /** Basket catch geometry (world units at the z=0 play plane). */
@@ -109,16 +113,22 @@ export default {
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
 
-    // G14: onboarding tutorial variant (§C8.1) — shorter round + coin floor
-    this.durationSec = Number.isFinite(ctx.params?.durationSec) ? ctx.params.durationSec : CATCH.DURATION_SEC;
+    const difficulty = ctx.params?.difficulty ?? 'normal';
+    this.tune = applyModifier(applyDifficulty(CATCH, difficulty), ctx.params?.modifier);
+    // G14: onboarding tutorial variant (§C8.1) — shorter round + coin floor.
+    // Arcade difficulty owns the default duration; tutorial override still wins.
+    this.durationSec = Number.isFinite(ctx.params?.durationSec)
+      ? ctx.params.durationSec
+      : this.tune.DURATION_SEC;
     this.minCoins = Number.isFinite(ctx.params?.minCoins) ? ctx.params.minCoins : null;
     this.phase = 'play'; // 'play' | 'ending' | 'done'
     this.score = 0;
     this.combo = 0;
-    this.goldenAt = goldenSpawnAt(ctx.rng, this.durationSec);
+    this.goldenAt = goldenSpawnAt(ctx.rng, this.durationSec, this.tune);
     this.goldenSpawned = false;
     this.goldenCaught = false;
     this.rottenCaught = 0;
+    this.missedCarrots = 0;
     this.spawnT = 0.6; // small head start before the first item
     this.dizzyT = 0;
     this.endT = 0;
@@ -221,7 +231,7 @@ export default {
     });
 
     ctx.hud.setScore(0);
-    ctx.hud.setTime(this.durationSec); // G14: tutorial variant honors params.durationSec
+    ctx.hud.setTime(this.tune.ENDLESS ? 0 : this.durationSec);
   },
 
   /** Take (or clone) a model holder for an asset key. */
@@ -235,7 +245,7 @@ export default {
     const { rng } = this.ctx;
     const roll = !this.goldenSpawned && elapsed >= this.goldenAt
       ? { kind: 'golden', key: 'carrot', value: CATCH.GOLDEN_POINTS }
-      : rollItem(rng, elapsed);
+      : rollItem(rng, elapsed, this.tune);
     if (roll.kind === 'golden') this.goldenSpawned = true;
     const holder = this.takeItem(roll.key);
     const special = roll.kind === 'golden' || roll.kind === 'rotten';
@@ -379,14 +389,17 @@ export default {
         this.phase = 'done';
         // G14: tutorial coin floor (§C8.1 — guaranteed ≥ params.minCoins)
         const floorCoins = this.minCoins == null ? undefined
-          : Math.max(this.minCoins, computeCoins(getMinigame('carrotCatch').coinTable, this.score, false));
-        ctx.onEnd({ score: this.score, coins: floorCoins });
+          : Math.max(
+            this.minCoins,
+            computeCoins(getMinigame('carrotCatch').coinTable, finalCatchScore(this.score, this.tune), false)
+          );
+        ctx.onEnd({ score: finalCatchScore(this.score, this.tune), coins: floorCoins });
       }
       return;
     }
 
     const remaining = this.durationSec - elapsed; // G14: tutorial variant
-    ctx.hud.setTime(remaining);
+    ctx.hud.setTime(this.tune.ENDLESS ? elapsed : remaining);
 
     if (this.dizzyT > 0) this.dizzyT -= dt;
 
@@ -408,7 +421,7 @@ export default {
     this.spawnT -= dt;
     if (this.spawnT <= 0) {
       this.spawnItem(elapsed);
-      this.spawnT = spawnIntervalAt(elapsed);
+      this.spawnT = spawnIntervalAt(elapsed, this.durationSec, this.tune);
     }
 
     // falling items: gentle spin + §C6.1 speed ramp; catch at the basket band
@@ -416,22 +429,31 @@ export default {
       if (!item.active) continue;
       const h = item.holder;
       const prevY = h.position.y;
-      h.position.y -= itemFallSpeed(elapsed, item.kind) * dt;
+      h.position.y -= itemFallSpeed(elapsed, item.kind, this.tune) * dt;
       h.rotation.x += item.spinX * dt;
       h.rotation.z += item.spinZ * dt;
       if (
         prevY > BASKET_Y + 0.15 &&
         h.position.y <= BASKET_Y + 0.15 &&
-        basketCatchesX(h.position.x, this.basketX)
+        basketCatchesX(h.position.x, this.basketX, this.tune)
       ) {
         this.catchItem(item);
         continue;
       }
-      if (h.position.y < -this.halfH - 0.8) this.despawnItem(item);
+      if (h.position.y < -this.halfH - 0.8) {
+        if (
+          this.tune.ENDLESS &&
+          item.key === 'carrot' &&
+          (item.kind === 'good' || item.kind === 'golden')
+        ) {
+          this.missedCarrots += 1;
+        }
+        this.despawnItem(item);
+      }
     }
     this.items = this.items.filter((i) => i.active);
 
-    if (remaining <= 0) {
+    if (isCatchRoundOver({ elapsed, missedCarrots: this.missedCarrots }, this.tune)) {
       this.phase = 'ending';
       ctx.audio.play('ui.win');
       this.gooby.setEmotion('ecstatic');
@@ -440,7 +462,9 @@ export default {
       if (this.autoplay) {
         console.log(
           `[carrotCatch] autoplay run ended — score ${this.score} ` +
-          `golden=${this.goldenCaught} rotten=${this.rottenCaught}`
+          `final=${finalCatchScore(this.score, this.tune)} ` +
+          `golden=${this.goldenCaught} rotten=${this.rottenCaught} ` +
+          `missedCarrots=${this.missedCarrots}`
         );
       }
     }

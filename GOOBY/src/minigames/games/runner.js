@@ -29,8 +29,8 @@ import { clampFloatTextToView } from '../framework.js'; // F4 P2-3
 import {
   RUNNER,
   speedAt,
+  coinLineCount,
   comboMultiplier,
-  runnerScore,
   sweepHitsObstacle,
   passableLanes,
   generateRow,
@@ -39,6 +39,9 @@ import {
   mysteryCoinPoints,
   magnetCollects,
   resolveRunnerHit,
+  applyDifficulty,
+  applyModifier,
+  finalRunnerScore,
 } from './runner.logic.js';
 
 const CORRIDOR_LEN = 104; //  scenery conveyor loop length (m)
@@ -102,6 +105,8 @@ export default {
 
   /** @param {object} ctx §E8 game context */
   init(ctx) {
+    const difficulty = ctx.params?.difficulty ?? 'normal';
+    const tune = applyModifier(applyDifficulty(RUNNER, difficulty), ctx.params?.modifier);
     const scene = ctx.scene;
     scene.background = new THREE.Color(SKY);
     scene.fog = new THREE.Fog(SKY, 34, 92);
@@ -120,6 +125,8 @@ export default {
     /** All internal state — dropped whole in dispose(). */
     const S = {
       ctx,
+      tune,
+      difficulty,
       started: false,
       ending: 0, // >0 = end-sequence countdown (s)
       elapsed: 0,
@@ -143,7 +150,7 @@ export default {
       obstacles: [], //   {kind, lane, z, obj, rowId}
       coinsArr: [], //    {lane, z, y, obj, taken}
       mysteryArr: [], //  {lane,z,obj}
-      nextMysteryAt: RUNNER.MYSTERY_FIRST_M,
+      nextMysteryAt: tune.MYSTERY_FIRST_M,
       knocked: [], //     {obj, vel, spin, t} stumble debris
       floaters: [], //    {sprite, t, life}
       distSinceRow: 0,
@@ -212,13 +219,15 @@ export default {
     S.coinMat = new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.35, metalness: 0.55 });
 
     // --- overhead scaffold prototype pieces (posts are procedural) ---
-    S.postGeo = new THREE.BoxGeometry(0.09, RUNNER.OBSTACLES.overhead.gapY + 0.3, 0.09);
+    S.postGeo = new THREE.BoxGeometry(0.09, tune.OBSTACLES.overhead.gapY + 0.3, 0.09);
     S.postMat = new THREE.MeshLambertMaterial({ color: 0xb0552f });
 
     // --- Gooby: bouncy hop-run (rabbit!), facing away from the camera ---
     S.particles = createParticles(scene);
     S.gooby = createGooby({ particles: S.particles });
     applyEquippedOutfits(S.gooby); // G14: cameo wears the equipped outfits
+    S.goobyScale = tune.RENDER_SCALE_MULT;
+    S.gooby.group.scale.setScalar(S.goobyScale);
     S.gooby.group.rotation.y = Math.PI;
     S.gooby.setEmotion('happy');
     S.gooby.play('happyBounce', { loop: true, speed: 1.7 });
@@ -267,7 +276,7 @@ export default {
   // ------------------------------------------------------------- actions
   changeLane(dir) {
     const S = this.S;
-    const next = Math.max(0, Math.min(RUNNER.LANES - 1, S.lane + dir));
+    const next = Math.max(0, Math.min(S.tune.LANES - 1, S.lane + dir));
     if (next !== S.lane) {
       S.lane = next;
       S.ctx.audio.play('whoosh');
@@ -279,7 +288,7 @@ export default {
     if (S.jumpT >= 0 || S.slideT >= 0) return;
     S.jumpT = 0;
     S.ctx.audio.play('jump');
-    S.gooby.play('jump', { speed: 0.6 / RUNNER.JUMP_SEC });
+    S.gooby.play('jump', { speed: 0.6 / S.tune.JUMP_SEC });
   },
 
   slide() {
@@ -311,23 +320,23 @@ export default {
         // overhead: barrier raised on two posts — slide under it
         obj = new THREE.Group();
         const bar = ground(fitWidth(ctx.assets.getModel('city-kit-roads/construction-barrier'), 1.3));
-        bar.position.y = RUNNER.OBSTACLES.overhead.gapY;
+        bar.position.y = S.tune.OBSTACLES.overhead.gapY;
         obj.add(bar);
         for (const px of [-0.55, 0.55]) {
           const post = new THREE.Mesh(S.postGeo, S.postMat);
-          post.position.set(px, (RUNNER.OBSTACLES.overhead.gapY + 0.3) / 2 - 0.15, 0);
+          post.position.set(px, (S.tune.OBSTACLES.overhead.gapY + 0.3) / 2 - 0.15, 0);
           obj.add(post);
         }
       }
-      obj.position.x = RUNNER.LANE_X[lane];
+      obj.position.x = S.tune.LANE_X[lane];
       obj.position.z = SPAWN_Z;
       S.ctx.scene.add(obj);
       S.obstacles.push({ kind, lane, z: SPAWN_Z, obj, rowId: S.rowId });
     });
 
     // coins guide a survivable path through the row (arc over jumpables)
-    if (S.ctx.rng() < RUNNER.COIN_LINE_CHANCE) {
-      const pass = passableLanes(row);
+    if (S.ctx.rng() < S.tune.COIN_LINE_CHANCE) {
+      const pass = passableLanes(row, S.tune);
       const options = pass
         .map((ok, lane) => ({ ok, lane, kind: row.lanes[lane] }))
         .filter((o) => o.ok);
@@ -336,15 +345,16 @@ export default {
         const opt = (pickFree.length > 0 && S.ctx.rng() < 0.7)
           ? pickFree[Math.floor(S.ctx.rng() * pickFree.length)]
           : options[Math.floor(S.ctx.rng() * options.length)];
-        const overJump = opt.kind != null && RUNNER.OBSTACLES[opt.kind].pass === 'jump';
-        for (let i = 0; i < RUNNER.COIN_LINE; i += 1) {
-          const zOff = (i - (RUNNER.COIN_LINE - 1) / 2) * 1.15;
+        const overJump = opt.kind != null && S.tune.OBSTACLES[opt.kind].pass === 'jump';
+        const coinCount = coinLineCount(S.ctx.rng, S.tune);
+        for (let i = 0; i < coinCount; i += 1) {
+          const zOff = (i - (coinCount - 1) / 2) * 1.15;
           const y = overJump
-            ? 0.55 + RUNNER.JUMP_HEIGHT * 0.8 * Math.cos((zOff / 2.2) * Math.PI * 0.5) ** 2
+            ? 0.55 + S.tune.JUMP_HEIGHT * 0.8 * Math.cos((zOff / 2.2) * Math.PI * 0.5) ** 2
             : 0.55;
           const coin = new THREE.Mesh(S.coinGeo, S.coinMat);
           coin.rotation.z = Math.PI / 2;
-          coin.position.set(RUNNER.LANE_X[opt.lane], y, SPAWN_Z + zOff);
+          coin.position.set(S.tune.LANE_X[opt.lane], y, SPAWN_Z + zOff);
           S.ctx.scene.add(coin);
           S.coinsArr.push({ lane: opt.lane, z: SPAWN_Z + zOff, y, obj: coin, taken: false });
         }
@@ -364,10 +374,10 @@ export default {
     mark.scale.set(0.7, 0.35, 1);
     mark.position.y = 0.75;
     obj.add(mark);
-    obj.position.set(RUNNER.LANE_X[lane], 0, SPAWN_Z);
+    obj.position.set(S.tune.LANE_X[lane], 0, SPAWN_Z);
     S.ctx.scene.add(obj);
     S.mysteryArr.push({ lane, z: SPAWN_Z, obj });
-    S.nextMysteryAt += RUNNER.MYSTERY_GAP_M;
+    S.nextMysteryAt += S.tune.MYSTERY_GAP_M;
   },
 
   /** Floating "+N" text at a world position (dt-driven, pause-safe). */
@@ -394,7 +404,7 @@ export default {
       hits: S.hits,
       shield: S.pu.shield,
       invulnT: S.invulnT,
-    });
+    }, S.tune);
     if (hit.outcome === 'ignored') return;
     S.hits = hit.hits;
     S.pu.shield = hit.shield;
@@ -434,6 +444,10 @@ export default {
   // ------------------------------------------------------------- autoplay
   autoplayTick(speed) {
     const S = this.S;
+    if (S.auto.targetLane !== S.lane) {
+      this.changeLane(Math.sign(S.auto.targetLane - S.lane));
+      return;
+    }
     // nearest unhandled row ahead of the player
     let row = null;
     for (const ob of S.obstacles) {
@@ -451,22 +465,25 @@ export default {
     const reactDist = speed * 0.95;
     if (row.z < -reactDist) return;
     S.auto.handledRow = row.rowId;
-    if (S.ctx.rng() < 0.2) return; // random-ish: sometimes just… doesn't react
+    if (S.ctx.rng() < S.tune.BOT_MISS_CHANCE) return;
     const rowObs = S.obstacles.filter((o) => o.rowId === row.rowId);
     const lanes = [null, null, null];
     for (const o of rowObs) lanes[o.lane] = o.kind;
-    const pass = passableLanes({ lanes, gap: 0 });
+    const pass = passableLanes({ lanes, gap: 0 }, S.tune);
     // prefer: stay in lane if passable, else nearest passable lane
     const order = [S.lane, S.lane - 1, S.lane + 1, S.lane - 2, S.lane + 2]
-      .filter((l) => l >= 0 && l < RUNNER.LANES);
+      .filter((l) => l >= 0 && l < S.tune.LANES);
     const target = order.find((l) => pass[l]);
     if (target == null) return;
+    S.auto.targetLane = target;
     if (target !== S.lane) this.changeLane(Math.sign(target - S.lane));
     const kind = lanes[target];
     if (kind) {
-      const def = RUNNER.OBSTACLES[kind];
+      const def = S.tune.OBSTACLES[kind];
       S.auto.action = def.pass; // 'jump' | 'slide'
-      S.auto.actionAtZ = -(speed * (def.pass === 'jump' ? RUNNER.JUMP_SEC * 0.45 : RUNNER.SLIDE_SEC * 0.42));
+      S.auto.actionAtZ = -(
+        speed * (def.pass === 'jump' ? S.tune.JUMP_SEC * 0.45 : S.tune.SLIDE_SEC * 0.42)
+      );
       S.auto.actionRow = row.rowId;
     } else {
       S.auto.action = null;
@@ -479,7 +496,7 @@ export default {
     if (!S) return;
     S.started = true;
     S.elapsed = elapsed;
-    const speed = S.ending ? 0 : speedAt(elapsed);
+    const speed = S.ending ? 0 : speedAt(elapsed, S.tune);
     S.meters += speed * dt;
     S.ctx.hud.setTime(elapsed);
     S.pu.magnetT = Math.max(0, S.pu.magnetT - dt);
@@ -495,7 +512,7 @@ export default {
       if (S.meters >= S.nextMysteryAt) this.spawnMysteryBox();
       S.distSinceRow += speed * dt;
       if (!S.pendingRow) {
-        S.pendingRow = generateRow(S.ctx.rng, elapsed, S.recentRows);
+        S.pendingRow = generateRow(S.ctx.rng, elapsed, S.recentRows, S.tune);
       }
       if (S.distSinceRow >= S.pendingRow.gap) {
         this.spawnRow(S.pendingRow);
@@ -520,23 +537,23 @@ export default {
     }
 
     // --- player motion: lane lerp, jump, slide ---
-    const targetX = RUNNER.LANE_X[S.lane];
-    const k = Math.min(1, dt / RUNNER.LANE_CHANGE_SEC);
+    const targetX = S.tune.LANE_X[S.lane];
+    const k = Math.min(1, dt / S.tune.LANE_CHANGE_SEC);
     S.laneX += (targetX - S.laneX) * k;
     let y = 0;
     if (S.jumpT >= 0) {
       S.jumpT += dt;
-      if (S.jumpT >= RUNNER.JUMP_SEC) {
+      if (S.jumpT >= S.tune.JUMP_SEC) {
         S.jumpT = -1;
         S.gooby.play('happyBounce', { loop: true, speed: 1.7 });
       } else {
-        y = RUNNER.JUMP_HEIGHT * Math.sin((S.jumpT / RUNNER.JUMP_SEC) * Math.PI);
+        y = S.tune.JUMP_HEIGHT * Math.sin((S.jumpT / S.tune.JUMP_SEC) * Math.PI);
       }
     }
     let sliding = false;
     if (S.slideT >= 0) {
       S.slideT += dt;
-      if (S.slideT >= RUNNER.SLIDE_SEC) {
+      if (S.slideT >= S.tune.SLIDE_SEC) {
         S.slideT = -1;
         S.gooby.play('happyBounce', { loop: true, speed: 1.7 });
       } else {
@@ -544,10 +561,11 @@ export default {
       }
     }
     // squash pose while sliding (squashable rig — group scale)
-    const squash = sliding ? RUNNER.SLIDE_HEIGHT / RUNNER.STAND_HEIGHT : 1;
+    const squash = sliding ? S.tune.SLIDE_HEIGHT / S.tune.STAND_HEIGHT : 1;
     const sq = S.gooby.group.scale;
-    sq.y += (squash - sq.y) * Math.min(1, dt * 16);
-    sq.x = sq.z = 1 + (1 - sq.y) * 0.55;
+    const targetScaleY = S.goobyScale * squash;
+    sq.y += (targetScaleY - sq.y) * Math.min(1, dt * 16);
+    sq.x = sq.z = S.goobyScale * (1 + (1 - squash) * 0.55);
     S.gooby.group.position.set(S.laneX, y, 0);
     S.gooby.group.rotation.z = (S.laneX - targetX) * 0.25;
     S.gooby.update(dt);
@@ -564,8 +582,8 @@ export default {
     }
 
     // --- obstacles: advance, collide, recycle ---
-    const laneNow = RUNNER.LANE_X.reduce(
-      (best, x, i) => (Math.abs(S.laneX - x) < Math.abs(S.laneX - RUNNER.LANE_X[best]) ? i : best),
+    const laneNow = S.tune.LANE_X.reduce(
+      (best, x, i) => (Math.abs(S.laneX - x) < Math.abs(S.laneX - S.tune.LANE_X[best]) ? i : best),
       0
     );
     if (S.invulnT > 0) S.invulnT -= dt;
@@ -575,7 +593,7 @@ export default {
       // check tunnels through collision windows on large (low-FPS) dt frames.
       const dz = speed * dt;
       const hit = !S.ending && S.invulnT <= 0 &&
-        sweepHitsObstacle({ lane: laneNow, y, sliding }, ob, dz);
+        sweepHitsObstacle({ lane: laneNow, y, sliding }, ob, dz, S.tune);
       ob.z += dz;
       ob.obj.position.z = ob.z;
       if (ob.z > DESPAWN_Z) {
@@ -601,9 +619,10 @@ export default {
         continue;
       }
       const magnet = magnetCollects(
-        { x: RUNNER.LANE_X[c.lane], y: c.y, z: c.z },
+        { x: S.tune.LANE_X[c.lane], y: c.y, z: c.z },
         { x: S.laneX, y: y + 0.55, z: 0 },
-        S.pu.magnetT > 0
+        S.pu.magnetT > 0,
+        S.tune
       );
       if (!S.ending && !c.taken &&
           (magnet || (Math.abs(c.z) < 0.55 && c.lane === laneNow &&
@@ -612,10 +631,10 @@ export default {
         S.ctx.scene.remove(c.obj);
         S.coinsArr.splice(i, 1);
         S.coins += 1;
-        const prevMult = comboMultiplier(S.coinStreak);
+        const prevMult = comboMultiplier(S.coinStreak, S.tune);
         S.coinStreak += 1;
-        const mult = comboMultiplier(S.coinStreak);
-        const points = mysteryCoinPoints(mult, S.pu.x2T > 0);
+        const mult = comboMultiplier(S.coinStreak, S.tune);
+        const points = mysteryCoinPoints(mult, S.pu.x2T > 0, S.tune);
         S.coinPoints += points;
         S.ctx.audio.play('coin.get');
         this.floatText(`+${points}`, '#FFD166', c.obj.position.clone().setY(c.y + 0.5));
@@ -640,7 +659,7 @@ export default {
       }
       if (!S.ending && Math.abs(box.z) < 0.7 && box.lane === laneNow && y < 0.8) {
         const kind = rollMysteryPower(S.ctx.rng);
-        S.pu = activateMysteryPower(S.pu, kind);
+        S.pu = activateMysteryPower(S.pu, kind, S.tune);
         S.powerups += 1;
         S.ctx.audio.play(kind === 'shield' ? 'hopper.shield' : 'hopper.star');
         S.ctx.hud.banner(t(`mg.runner.${kind}`));
@@ -712,7 +731,7 @@ export default {
       for (const th of crossedMilestones(S.fx.prevSpeed, speed, RUNNER_FX.MILESTONES, S.fx.seen)) {
         S.fx.seen.add(th);
         S.ctx.audio.play('combo.up');
-        S.ctx.hud.banner(t(th >= RUNNER.MAX_SPEED ? 'mg.speedfx.top' : 'mg.speedfx.up'));
+        S.ctx.hud.banner(t(th >= S.tune.MAX_SPEED ? 'mg.speedfx.top' : 'mg.speedfx.up'));
       }
       S.fx.prevSpeed = speed;
     }
@@ -730,7 +749,7 @@ export default {
     // ── end V4/G67 update ──────────────────────────────────────────────────
 
     // --- score ---
-    const score = runnerScore(S.meters, S.coinPoints);
+    const score = finalRunnerScore(S.meters, S.coinPoints, S.tune);
     if (score !== S.lastShownScore) {
       S.lastShownScore = score;
       S.ctx.hud.setScore(score);

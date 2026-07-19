@@ -23,6 +23,8 @@ import {
   simulateShot,
   solveBasketVelocity,
   isMovingHoop,
+  applyDifficulty,
+  isBasketRoundOver,
 } from './basketBounce.logic.js';
 
 const SKY = 0xcfe8ff;
@@ -56,6 +58,8 @@ export default {
 
   /** @param {object} ctx §E8 game context */
   init(ctx) {
+    const difficulty = ctx.params?.difficulty ?? 'normal';
+    const tune = applyDifficulty(BASKET, difficulty);
     const scene = ctx.scene;
     scene.background = new THREE.Color(SKY);
     scene.fog = new THREE.Fog(SKY, 30, 70);
@@ -64,11 +68,13 @@ export default {
     sun.position.set(-4, 8, 6);
     scene.add(sun);
 
-    ctx.camera.position.set(0, 2.3, BASKET.SPAWN.z + 3.2);
+    ctx.camera.position.set(0, 2.3, tune.SPAWN.z + 3.2);
     ctx.camera.lookAt(0, 2.1, -3);
 
     const S = {
       ctx,
+      tune,
+      difficulty,
       elapsed: 0,
       score: 0,
       baskets: 0,
@@ -76,7 +82,7 @@ export default {
       swishStreak: 0,
       movingSwishes: 0,
       slideT: 0,
-      hoop: { x: 0, z: BASKET.SPAWN.z - hoopDistance(0) },
+      hoop: { x: 0, z: tune.SPAWN.z - hoopDistance(0, tune) },
       ball: null, // physics state while flying
       ballReady: true,
       resetT: -1,
@@ -105,7 +111,7 @@ export default {
       new THREE.MeshBasicMaterial({ color: 0xffffff })
     );
     line.rotation.x = -Math.PI / 2;
-    line.position.set(0, 0.01, BASKET.SPAWN.z);
+    line.position.set(0, 0.01, tune.SPAWN.z);
     scene.add(line);
 
     // --- hoop assembly: pole, backboard, torus rim, net ---
@@ -157,7 +163,7 @@ export default {
       ballGrp.add(seam);
     }
     scene.add(ballGrp);
-    ballGrp.position.set(BASKET.SPAWN.x, BASKET.SPAWN.y, BASKET.SPAWN.z);
+    ballGrp.position.set(tune.SPAWN.x, tune.SPAWN.y, tune.SPAWN.z);
 
     // --- Gooby courtside ---
     S.particles = createParticles(scene);
@@ -169,19 +175,19 @@ export default {
     scene.add(S.gooby.group);
 
     ctx.hud.setScore(0);
-    ctx.hud.setTime(BASKET.DURATION_SEC);
+    ctx.hud.setTime(tune.ENDLESS ? 0 : tune.DURATION_SEC);
 
     // --- input: flick to throw (swipe or fast dragend) ---
     const throwFrom = (p) => {
       if (S.done || !S.ballReady) return;
-      const vel = flickToVelocity({ vx: p.vx ?? 0, vy: p.vy ?? 0 });
+      const vel = flickToVelocity({ vx: p.vx ?? 0, vy: p.vy ?? 0 }, tune);
       if (!vel) return;
       this.throwBall(vel);
     };
     S.offSwipe = ctx.input.on('swipe', throwFrom);
     S.offDragEnd = ctx.input.on('dragend', (p) => {
       // swipe already covers most flicks; dragend catches slower lobs
-      if ((p.vy ?? 0) < -BASKET.FLICK.MIN_UP_VEL) throwFrom(p);
+      if ((p.vy ?? 0) < -tune.FLICK.MIN_UP_VEL) throwFrom(p);
     });
   },
 
@@ -215,10 +221,10 @@ export default {
     const shot = basket
       ? { basket: true, bank: S.ball.touchedBoard, swish: !S.ball.touchedRim && !S.ball.touchedBoard }
       : { basket: false, bank: false, swish: false };
-    const moving = isMovingHoop(S.baskets);
-    const { points, swishStreak } = scoreShot(shot, S.swishStreak, moving);
+    const moving = isMovingHoop(S.baskets, S.tune);
+    const { points, swishStreak } = scoreShot(shot, S.swishStreak, moving, S.tune);
     S.swishStreak = swishStreak;
-    const rimPos = new THREE.Vector3(S.hoop.x, BASKET.RIM_Y + 0.4, S.hoop.z);
+    const rimPos = new THREE.Vector3(S.hoop.x, S.tune.RIM_Y + 0.4, S.hoop.z);
     if (basket) {
       S.baskets += 1;
       if (moving && shot.swish) S.movingSwishes += 1;
@@ -230,8 +236,8 @@ export default {
       this.floatText(`+${points}`, '#59C9B9', rimPos);
       if (shot.bank) S.ctx.hud.banner(t('mg.basket.bank'));
       else if (moving && shot.swish) S.ctx.hud.banner(t('mg.basket.movingSwish'));
-      else if (shot.swish && points > BASKET.POINTS_BASKET) S.ctx.hud.banner(t('mg.basket.swish'));
-      if (S.baskets === BASKET.SLIDE_AFTER_BASKETS) S.ctx.hud.banner(t('mg.basket.hoopMoves'));
+      else if (shot.swish && points > S.tune.POINTS_BASKET) S.ctx.hud.banner(t('mg.basket.swish'));
+      if (S.baskets === S.tune.SLIDE_AFTER_BASKETS) S.ctx.hud.banner(t('mg.basket.hoopMoves'));
       // Gooby cheers
       S.cheerT = 1.2;
       S.gooby.setEmotion('ecstatic');
@@ -249,25 +255,25 @@ export default {
       }
     }
     S.ball = null;
-    S.resetT = 0.55; // dt-timed ball respawn (pause-safe)
+    S.resetT = S.tune.SHOT_RESET_SEC; // dt-timed ball respawn (pause-safe)
   },
 
   update(dt, elapsed) {
     const S = this.S;
     if (!S || S.done) return;
     S.elapsed = elapsed;
-    S.ctx.hud.setTime(BASKET.DURATION_SEC - elapsed);
+    S.ctx.hud.setTime(S.tune.ENDLESS ? elapsed : S.tune.DURATION_SEC - elapsed);
 
     // --- hoop: distance ramp + horizontal slide after 5 baskets ---
-    if (isMovingHoop(S.baskets)) S.slideT += dt;
-    const targetZ = BASKET.SPAWN.z - hoopDistance(S.baskets);
+    if (isMovingHoop(S.baskets, S.tune)) S.slideT += dt;
+    const targetZ = S.tune.SPAWN.z - hoopDistance(S.baskets, S.tune);
     S.hoop.z += (targetZ - S.hoop.z) * Math.min(1, dt * 3);
-    S.hoop.x = hoopSlideX(S.slideT, S.baskets);
+    S.hoop.x = hoopSlideX(S.slideT, S.baskets, S.tune);
     S.hoopGrp.position.set(S.hoop.x, 0, S.hoop.z);
 
     // --- ball physics (same integrator as the tests) ---
     if (S.ball) {
-      const ev = stepBallSwept(S.ball, dt, S.hoop);
+      const ev = stepBallSwept(S.ball, dt, S.hoop, S.tune);
       if (ev.rim) {
         S.ctx.audio.play('basket.rim');
         S.shakeT = Math.max(S.shakeT, 0.25);
@@ -287,7 +293,7 @@ export default {
       // --- respawn: ball floats back to the spawn point ---
       S.resetT -= dt;
       if (S.resetT < 0) {
-        S.ballGrp.position.set(BASKET.SPAWN.x, BASKET.SPAWN.y, BASKET.SPAWN.z);
+        S.ballGrp.position.set(S.tune.SPAWN.x, S.tune.SPAWN.y, S.tune.SPAWN.z);
         S.ballGrp.rotation.set(0, 0, 0);
         S.ballReady = true;
         S.gooby.lookAt(null);
@@ -296,7 +302,7 @@ export default {
 
     // --- ready-ball idle bob (juice) ---
     if (S.ballReady) {
-      S.ballGrp.position.y = BASKET.SPAWN.y + Math.sin(elapsed * 3) * 0.05;
+      S.ballGrp.position.y = S.tune.SPAWN.y + Math.sin(elapsed * 3) * 0.05;
       const pulse = 1 + Math.sin(elapsed * 6) * 0.015;
       S.ballGrp.scale.setScalar(pulse);
     } else {
@@ -307,16 +313,20 @@ export default {
     if (S.autoplay && S.ballReady) {
       S.autoT -= dt;
       if (S.autoT <= 0) {
-        S.autoT = 0.5 + S.ctx.rng() * 0.5;
+        S.autoT = S.tune.AUTO_INTERVAL_MIN_SEC +
+          S.ctx.rng() * S.tune.AUTO_INTERVAL_RANGE_SEC;
         // two-pass aim: predict the hoop a flight-time ahead (flight time from
         // the arc solver itself), then add aim noise → competent-not-perfect
         let lead = 1.5;
         let solved = null;
         for (let pass = 0; pass < 2; pass += 1) {
-          const aimHoop = { x: hoopSlideX(S.slideT + lead, S.baskets), z: S.hoop.z };
-          solved = solveBasketVelocity(aimHoop, S.ctx.rng);
+          const aimHoop = {
+            x: hoopSlideX(S.slideT + lead, S.baskets, S.tune),
+            z: S.hoop.z,
+          };
+          solved = solveBasketVelocity(aimHoop, S.ctx.rng, S.tune);
           if (!solved) break;
-          lead = simulateShot(solved, aimHoop).flightSec;
+          lead = simulateShot(solved, aimHoop, S.tune).flightSec;
         }
         if (solved) {
           const wobble = 1 + (S.ctx.rng() - 0.5) * 0.03;
@@ -352,12 +362,12 @@ export default {
     S.ctx.camera.position.set(
       (Math.random() - 0.5) * shake,
       2.3 + (Math.random() - 0.5) * shake,
-      BASKET.SPAWN.z + 3.2
+      S.tune.SPAWN.z + 3.2
     );
     S.ctx.camera.lookAt(0, 2.1, -3);
 
     // --- round end (§C6.1 #7: 60 s) ---
-    if (elapsed >= BASKET.DURATION_SEC) {
+    if (isBasketRoundOver(elapsed, S.missStreak, S.tune)) {
       S.done = true;
       if (S.autoplay) {
         console.log(

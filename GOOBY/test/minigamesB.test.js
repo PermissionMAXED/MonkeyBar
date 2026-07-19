@@ -10,6 +10,7 @@ import {
   speedAt,
   difficultyAt,
   rowGapAt,
+  coinLineCount,
   comboMultiplier,
   runnerScore,
   actionPasses,
@@ -24,6 +25,10 @@ import {
   mysteryCoinPoints,
   magnetCollects,
   resolveRunnerHit,
+  applyDifficulty as applyRunnerDifficulty,
+  applyModifier as applyRunnerModifier,
+  finalRunnerScore,
+  simulateRunnerAutoplay,
 } from '../src/minigames/games/runner.logic.js';
 import {
   BASKET,
@@ -37,6 +42,9 @@ import {
   scoreShot,
   solveBasketVelocity,
   isMovingHoop,
+  applyDifficulty as applyBasketDifficulty,
+  isBasketRoundOver,
+  simulateBasketAutoplay,
 } from '../src/minigames/games/basketBounce.logic.js';
 import {
   PANCAKE,
@@ -52,6 +60,8 @@ import {
   wobbleTopX,
   wobbleLocalX,
   isFallenExpired,
+  applyDifficulty as applyPancakeDifficulty,
+  simulatePancakeAutoplay,
 } from '../src/minigames/games/pancakeTower.logic.js';
 import { COIN_TABLE } from '../src/data/constants.js';
 import { computeCoins } from '../src/data/minigames.js';
@@ -66,6 +76,11 @@ function rng(seed) {
     t2 = (t2 + Math.imul(t2 ^ (t2 >>> 7), 61 | t2)) | 0;
     return ((t2 ^ (t2 >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+function botMean(simulate, mode) {
+  const values = Array.from({ length: 10 }, (_, i) => simulate(mode, i + 1).score);
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 // ===========================================================================
@@ -560,4 +575,120 @@ test('V3 pancake audit: extreme slice offsets stay bounded and fallen toppings d
   assert.equal(resolveDrop(stack, stack.center + stack.width, false).landed, false);
   assert.equal(isFallenExpired(PANCAKE.FALLEN_DESPAWN_SEC - 1e-6), false);
   assert.equal(isFallenExpired(PANCAKE.FALLEN_DESPAWN_SEC), true);
+});
+
+// ===========================================================================
+// V4/G71 difficulty, endless, modifier and seeded-bot certification
+// ===========================================================================
+
+test('V4/G71 runner: scaled speed/density, scaled validator and endless ramp', () => {
+  assert.strictEqual(applyRunnerDifficulty(RUNNER, 'normal'), RUNNER, 'Mittel is identity');
+  const easy = applyRunnerDifficulty(RUNNER, 'easy');
+  const hard = applyRunnerDifficulty(RUNNER, 'hard');
+  assert.equal(easy.BASE_SPEED, RUNNER.BASE_SPEED * 0.85);
+  assert.equal(easy.DENSITY_MULT, 0.85);
+  assert.equal(easy.MAX_HITS, RUNNER.MAX_HITS + 1);
+  assert.equal(hard.BASE_SPEED, RUNNER.BASE_SPEED * 1.2);
+  assert.equal(hard.MAX_SPEED, RUNNER.MAX_SPEED * 1.2);
+  assert.equal(hard.DENSITY_MULT, 1.15);
+  assert.equal(hard.ROW_GAP_M.start, RUNNER.ROW_GAP_M.start / 1.15);
+
+  for (const tune of [hard, applyRunnerDifficulty(RUNNER, 'endless')]) {
+    for (const seed of [1, 42, 20260719]) {
+      const random = rng(seed);
+      const rows = [];
+      for (let i = 0; i < 200; i += 1) {
+        const elapsed = i * 1.4;
+        const row = generateRow(random, elapsed, rows.slice(-6), tune);
+        assert.equal(
+          isPatternSurvivable([...rows.slice(-5), row], speedAt(elapsed, tune), tune),
+          true,
+          `${tune.MODE} seed ${seed} row ${i}`
+        );
+        rows.push(row);
+      }
+    }
+  }
+
+  const endless = applyRunnerDifficulty(RUNNER, 'endless');
+  assert.equal(endless.ENDLESS, true);
+  assert.equal(endless.MAX_HITS, 3);
+  assert.equal(endless.MAX_SPEED, RUNNER.MAX_SPEED * 1.4);
+});
+
+test('V4/G71 runner: Muenzregen is +50% expected coins; Turbo and giant tune gameplay', () => {
+  const hard = applyRunnerDifficulty(RUNNER, 'hard');
+  assert.equal(coinLineCount(() => 0, hard), RUNNER.COIN_LINE);
+  const rain = applyRunnerModifier(hard, { type: 'muenzregen', coinRate: 1.5 });
+  assert.equal(rain.COIN_RATE, 1.5);
+  assert.equal(coinLineCount(() => 0.49, rain), 5);
+  assert.equal(coinLineCount(() => 0.51, rain), 4);
+  assert.equal((5 + 4) / 2, RUNNER.COIN_LINE * 1.5);
+
+  const turbo = applyRunnerModifier(hard, {
+    type: 'turbo', speedMult: 1.25, scoreMult: 1.5,
+  });
+  assert.equal(turbo.BASE_SPEED, hard.BASE_SPEED * 1.25);
+  assert.equal(turbo.MAX_SPEED, hard.MAX_SPEED * 1.25);
+  assert.equal(finalRunnerScore(100, 20, turbo), 180);
+
+  const giant = applyRunnerModifier(hard, {
+    type: 'riesenGooby', scale: 1.6, hitboxMult: 1.3,
+  });
+  assert.equal(giant.RENDER_SCALE_MULT, 1.6);
+  assert.equal(giant.PLAYER_HALF_DEPTH, hard.PLAYER_HALF_DEPTH * 1.3);
+});
+
+test('V4/G71 runner: hard target is beatable and bot means get harder', () => {
+  const hard = Array.from({ length: 5 }, (_, i) => simulateRunnerAutoplay('hard', i + 1).score);
+  assert.ok(hard.some((score) => score >= 380), `Schwer target 380 missed: ${hard}`);
+  assert.ok(botMean(simulateRunnerAutoplay, 'easy') >= botMean(simulateRunnerAutoplay, 'normal'));
+  assert.ok(botMean(simulateRunnerAutoplay, 'normal') >= botMean(simulateRunnerAutoplay, 'hard'));
+});
+
+test('V4/G71 basketBounce: timed-arena modes, hitbox guardrail and endless misses', () => {
+  assert.strictEqual(applyBasketDifficulty(BASKET, 'normal'), BASKET, 'Mittel is identity');
+  const easy = applyBasketDifficulty(BASKET, 'easy');
+  const hard = applyBasketDifficulty(BASKET, 'hard');
+  assert.equal(easy.DURATION_SEC, BASKET.DURATION_SEC * 1.2);
+  assert.equal(easy.SCORE_RADIUS_SCALE, 1.25);
+  assert.equal(easy.SHOT_RESET_SEC, BASKET.SHOT_RESET_SEC * 1.2);
+  assert.equal(hard.SCORE_RADIUS_SCALE, 0.8);
+  assert.equal(hard.SHOT_RESET_SEC, BASKET.SHOT_RESET_SEC * 0.85);
+  assert.ok(hard.SCORE_RADIUS_SCALE >= 0.55);
+
+  const endless = applyBasketDifficulty(BASKET, 'endless');
+  assert.equal(isBasketRoundOver(999, 2, endless), false);
+  assert.equal(isBasketRoundOver(1, 3, endless), true);
+});
+
+test('V4/G71 basketBounce: hard target is beatable and bot means get harder', () => {
+  const hard = Array.from({ length: 5 }, (_, i) => simulateBasketAutoplay('hard', i + 1).score);
+  assert.ok(hard.some((score) => score >= 65), `Schwer target 65 missed: ${hard}`);
+  assert.ok(botMean(simulateBasketAutoplay, 'easy') >= botMean(simulateBasketAutoplay, 'normal'));
+  assert.ok(botMean(simulateBasketAutoplay, 'normal') >= botMean(simulateBasketAutoplay, 'hard'));
+});
+
+test('V4/G71 pancakeTower: physics tolerances, guardrail and endless wobble', () => {
+  assert.strictEqual(applyPancakeDifficulty(PANCAKE, 'normal'), PANCAKE, 'Mittel is identity');
+  const easy = applyPancakeDifficulty(PANCAKE, 'easy');
+  const hard = applyPancakeDifficulty(PANCAKE, 'hard');
+  assert.equal(easy.PERFECT_EPS, PANCAKE.PERFECT_EPS * 1.25);
+  assert.equal(easy.OVERHANG_TOLERANCE_MULT, 1.25);
+  assert.equal(hard.PERFECT_EPS, PANCAKE.PERFECT_EPS * 0.8);
+  assert.equal(hard.OVERHANG_TOLERANCE_MULT, 0.8);
+  assert.ok(hard.TOLERANCE_MULT >= 0.55);
+
+  const endless = applyPancakeDifficulty(PANCAKE, 'endless');
+  assert.equal(endless.MAX_LAYERS, Number.POSITIVE_INFINITY);
+  assert.equal(isTowerDone(PANCAKE.BASE_WIDTH, 1000, endless), false);
+  const wobble = { angle: 0.1, velocity: 0.2, phase: 1 };
+  assert.deepEqual(dampWobble(wobble, endless, PANCAKE.WOBBLE_START_LAYER), wobble);
+});
+
+test('V4/G71 pancakeTower: hard target is beatable and bot means get harder', () => {
+  const hard = Array.from({ length: 5 }, (_, i) => simulatePancakeAutoplay('hard', i + 1).score);
+  assert.ok(hard.some((score) => score >= 45), `Schwer target 45 missed: ${hard}`);
+  assert.ok(botMean(simulatePancakeAutoplay, 'easy') >= botMean(simulatePancakeAutoplay, 'normal'));
+  assert.ok(botMean(simulatePancakeAutoplay, 'normal') >= botMean(simulatePancakeAutoplay, 'hard'));
 });

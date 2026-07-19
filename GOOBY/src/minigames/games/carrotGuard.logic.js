@@ -36,7 +36,41 @@ export const GUARD = Object.freeze({
   /** Reject duplicate pointer/tap delivery and throttle empty-mound spam. */
   TAP_DEBOUNCE_SEC: 0.075,
   WHIFF_COOLDOWN_SEC: 0.18,
+  /** V4/G71 §G5 timed-arena defaults (Mittel identity). */
+  SPAWN_INTERVAL_MULT: 1,
+  WINDOW_MULT: 1,
+  DURATION_MULT: 1,
+  ENDLESS: false,
+  ENDLESS_STOLEN: 3,
+  BOT_REACTION_SEC: 0.34,
 });
+
+export const GUARD_DIFFICULTY = Object.freeze({
+  easy: Object.freeze({ spawn: 1.2, window: 1.25, duration: 1.2, endless: false }),
+  normal: Object.freeze({ spawn: 1, window: 1, duration: 1, endless: false }),
+  hard: Object.freeze({ spawn: 0.85, window: 0.8, duration: 1, endless: false }),
+  endless: Object.freeze({ spawn: 0.85, window: 0.8, duration: 1, endless: true }),
+});
+
+export function applyDifficulty(tune = GUARD, mode = 'normal') {
+  const id = Object.hasOwn(GUARD_DIFFICULTY, mode) ? mode : 'normal';
+  if (id === 'normal') return tune;
+  const row = GUARD_DIFFICULTY[id];
+  return Object.freeze({
+    ...tune,
+    DURATION_SEC: tune.DURATION_SEC * row.duration,
+    SPAWN_START_SEC: tune.SPAWN_START_SEC * row.spawn,
+    SPAWN_END_SEC: tune.SPAWN_END_SEC * row.spawn,
+    UP_TIME_START: Math.max(0.35, tune.UP_TIME_START * row.window),
+    UP_TIME_END: Math.max(0.35, tune.UP_TIME_END * row.window),
+    SPAWN_INTERVAL_MULT: row.spawn,
+    WINDOW_MULT: row.window,
+    DURATION_MULT: row.duration,
+    ENDLESS: row.endless,
+    BOT_REACTION_SEC: Math.min(tune.BOT_REACTION_SEC, Math.max(0.24, tune.BOT_REACTION_SEC * row.window)),
+    MODE: id,
+  });
+}
 
 /**
  * How long a mole stays up at a moment of the round: linear 0.9 s → 0.5 s
@@ -45,9 +79,9 @@ export const GUARD = Object.freeze({
  * @param {number} [duration]
  * @returns {number} seconds
  */
-export function upTimeAt(elapsed, duration = GUARD.DURATION_SEC) {
+export function upTimeAt(elapsed, duration = GUARD.DURATION_SEC, tune = GUARD) {
   const t = Math.min(1, Math.max(0, elapsed / duration));
-  return GUARD.UP_TIME_START + (GUARD.UP_TIME_END - GUARD.UP_TIME_START) * t;
+  return tune.UP_TIME_START + (tune.UP_TIME_END - tune.UP_TIME_START) * t;
 }
 
 /**
@@ -56,9 +90,9 @@ export function upTimeAt(elapsed, duration = GUARD.DURATION_SEC) {
  * @param {number} [duration]
  * @returns {number} seconds
  */
-export function spawnIntervalAt(elapsed, duration = GUARD.DURATION_SEC) {
+export function spawnIntervalAt(elapsed, duration = GUARD.DURATION_SEC, tune = GUARD) {
   const t = Math.min(1, Math.max(0, elapsed / duration));
-  return GUARD.SPAWN_START_SEC + (GUARD.SPAWN_END_SEC - GUARD.SPAWN_START_SEC) * t;
+  return tune.SPAWN_START_SEC + (tune.SPAWN_END_SEC - tune.SPAWN_START_SEC) * t;
 }
 
 /**
@@ -67,9 +101,9 @@ export function spawnIntervalAt(elapsed, duration = GUARD.DURATION_SEC) {
  * @param {number} [duration]
  * @returns {number} 0 … DOUBLE_CHANCE_END
  */
-export function doubleChanceAt(elapsed, duration = GUARD.DURATION_SEC) {
+export function doubleChanceAt(elapsed, duration = GUARD.DURATION_SEC, tune = GUARD) {
   const t = Math.min(1, Math.max(0, elapsed / duration));
-  return GUARD.DOUBLE_CHANCE_END * t;
+  return tune.DOUBLE_CHANCE_END * t;
 }
 
 /**
@@ -119,7 +153,8 @@ export function applyWhiff(s) {
  * @param {number} [duration]
  * @returns {boolean}
  */
-export function isRoundOver(s, duration = GUARD.DURATION_SEC) {
+export function isRoundOver(s, duration = GUARD.DURATION_SEC, tune = GUARD) {
+  if (tune.ENDLESS) return tune.CARROTS - s.carrots >= tune.ENDLESS_STOLEN;
   return s.elapsed >= duration || s.carrots <= 0;
 }
 
@@ -166,4 +201,33 @@ export function applyKingTap(state) {
 export function acceptsTapAfter(sinceLastSec, cooldownSec = GUARD.TAP_DEBOUNCE_SEC) {
   return sinceLastSec === Infinity ||
     (Number.isFinite(sinceLastSec) && sinceLastSec >= cooldownSec);
+}
+
+/** Deterministic certification model for the live reaction bot. */
+export function simulateGuardAutoplay(mode = 'normal', seed = 1) {
+  const tune = applyDifficulty(GUARD, mode);
+  let a = seed >>> 0;
+  const rng = () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) | 0;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+  const accuracy = mode === 'easy' ? 0.96 : mode === 'hard' || mode === 'endless' ? 0.82 : 0.93;
+  let elapsed = 0;
+  let carrots = tune.CARROTS;
+  let state = { score: 0, combo: 0 };
+  while (!isRoundOver({ elapsed, carrots }, tune.DURATION_SEC, tune) && elapsed < 240) {
+    const count = 1 + (rng() < doubleChanceAt(elapsed, tune.DURATION_SEC, tune) ? 1 : 0);
+    for (let i = 0; i < count; i += 1) {
+      if (rng() < accuracy) state = applyBonk(state);
+      else {
+        const escaped = applyEscape({ carrots, combo: state.combo });
+        carrots = escaped.carrots;
+        state = { ...state, combo: escaped.combo };
+      }
+    }
+    elapsed += spawnIntervalAt(elapsed, tune.DURATION_SEC, tune);
+  }
+  return { score: state.score, elapsed, stolen: tune.CARROTS - carrots };
 }
