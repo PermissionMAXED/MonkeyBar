@@ -956,6 +956,177 @@ test('V3/FIX-E P1-1: loaded scene textures register in the isCachedResource guar
   assert.equal(assets.isCachedResource(map.source), true, 'map Source registered');
 });
 
+// ---------------------------------------------------------------------------
+// V4/G50 (PLAN4 §B3/§E block G50): third committed root public/assets/itch/
+// + public/assets/music/ + public/assets/splats/ + public/assets/vfx/.
+// Everything below is manifest-driven from scripts/fetch-itch.mjs (the 4.0
+// whitelist of record) — a dropped manifest entry OR a missing committed file
+// fails here.
+// ---------------------------------------------------------------------------
+
+const ITCH = path.join(ROOT, 'public', 'assets', 'itch');
+const MUSIC = path.join(ROOT, 'public', 'assets', 'music');
+const SPLATS = path.join(ROOT, 'public', 'assets', 'splats');
+const VFX = path.join(ROOT, 'public', 'assets', 'vfx');
+
+test('V4 §B3: every fetch-itch manifest output is committed', async () => {
+  // safe to import: fetch-itch only runs its copy pass when executed directly
+  const m = await import('../scripts/fetch-itch.mjs');
+  // music (§C-SYS1.7): exactly the 14 renamed OGGs + consolidated LICENSES.md
+  assert.equal(m.MUSIC_FILES.length, 14, '§C-SYS1.7 table is 14 rows');
+  for (const { out } of m.MUSIC_FILES) {
+    const f = path.join(MUSIC, out);
+    assert.ok(fs.existsSync(f), `missing music/${out}`);
+    assert.ok(fs.statSync(f).size > 0, `music/${out} is empty`);
+  }
+  assert.ok(fs.existsSync(path.join(MUSIC, 'LICENSES.md')), 'missing music/LICENSES.md');
+  // itch-sfx (§C-SYS1.9): curated ObsydianX subset, flat OGGs
+  assert.ok(m.ITCH_SFX.length >= 22, 'itch-sfx subset shrank below the §C-SYS1.9 picks');
+  for (const { out } of m.ITCH_SFX) {
+    assert.ok(
+      fs.existsSync(path.join(ITCH, 'itch-sfx', out)),
+      `missing itch/itch-sfx/${out}`
+    );
+  }
+  // vfx (§C-SYS4.5 glow + §G4.2 streaks)
+  assert.equal(m.VFX_TEXTURES.length, 6, '§C-SYS4.5 names exactly 6 glow textures');
+  for (const { out } of m.VFX_TEXTURES) {
+    assert.ok(fs.existsSync(path.join(ITCH, 'vfx', out)), `missing itch/vfx/${out}`);
+  }
+  for (const { out } of m.STREAK_TEXTURES) {
+    const f = path.join(VFX, out);
+    assert.ok(fs.existsSync(f), `missing vfx/${out}`);
+    assert.ok(fs.statSync(f).size <= 20 * 1024, `vfx/${out} exceeds the §G4.2 20 KB cap`);
+  }
+  // model packs: every whitelisted model + per-pack license note
+  for (const pack of m.MODEL_PACKS) {
+    const dir = path.join(ITCH, pack.slug);
+    for (const { key } of pack.files) {
+      const ext = pack.form === 'gltf' ? 'gltf' : 'glb';
+      assert.ok(
+        fs.existsSync(path.join(dir, `${key}.${ext}`)),
+        `missing itch/${pack.slug}/${key}.${ext}`
+      );
+    }
+    if (pack.texture) {
+      assert.ok(
+        fs.existsSync(path.join(dir, pack.texture)),
+        `missing itch/${pack.slug}/${pack.texture}`
+      );
+    }
+    assert.ok(
+      fs.existsSync(path.join(dir, 'LICENSE-NOTE.md')),
+      `missing itch/${pack.slug}/LICENSE-NOTE.md`
+    );
+  }
+  // splats (§G6.2): PLY + per-scene LICENSE txt
+  for (const scene of m.SPLAT_SCENES) {
+    assert.ok(fs.existsSync(path.join(SPLATS, scene.file)), `missing splats/${scene.file}`);
+    assert.ok(
+      fs.existsSync(path.join(SPLATS, `${scene.sceneId}.LICENSE.txt`)),
+      `missing splats/${scene.sceneId}.LICENSE.txt`
+    );
+  }
+});
+
+test('V4 §B3: itch-sfx dir contains a LICENSE-NOTE and flat OGGs only', () => {
+  const dir = path.join(ITCH, 'itch-sfx');
+  const entries = fs.readdirSync(dir);
+  assert.ok(entries.includes('LICENSE-NOTE.md'));
+  for (const e of entries) {
+    assert.ok(
+      e === 'LICENSE-NOTE.md' || e.endsWith('.ogg'),
+      `itch-sfx/${e}: unexpected file (flat .ogg layout per §B3)`
+    );
+  }
+});
+
+test('V4 §G9.3: baked-goods GLBs are valid, SELF-CONTAINED binary glTF ≤ 60 KB', () => {
+  for (const name of ['croissant', 'cupcake', 'cinnamon-roll']) {
+    const file = path.join(ITCH, 'baked-goods', `${name}.glb`);
+    const buf = fs.readFileSync(file);
+    assert.ok(buf.length <= 60 * 1024, `${name}.glb exceeds the §G9.3 60 KB cap`);
+    assert.equal(buf.toString('ascii', 0, 4), 'glTF', `${file}: bad magic`);
+    assert.equal(buf.readUInt32LE(4), 2, `${file}: unexpected glTF version`);
+    assert.equal(buf.readUInt32LE(8), buf.length, `${file}: length mismatch`);
+    const json = JSON.parse(buf.toString('utf8', 20, 20 + buf.readUInt32LE(12)));
+    assert.equal(json.asset?.version, '2.0', `${file}: bad asset.version`);
+    assert.ok((json.meshes ?? []).length > 0, `${file}: no meshes`);
+    // conversion contract: images embedded as bufferViews, single GLB buffer
+    const external = [
+      ...(json.buffers ?? []).map((b) => b.uri),
+      ...(json.images ?? []).map((i) => i.uri),
+    ].filter(Boolean);
+    assert.deepEqual(external, [], `${file}: not self-contained: ${external}`);
+    assert.ok((json.images ?? []).every((i) => i.bufferView != null), `${file}: image without bufferView`);
+  }
+});
+
+test('V4 §B3: committed itch .gltf files are valid glTF 2.0 with every dep present', () => {
+  const gltfs = walk(ITCH).filter((f) => f.endsWith('.gltf'));
+  assert.ok(gltfs.length > 0, 'no itch .gltf files committed');
+  for (const file of gltfs) {
+    const json = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(json.asset?.version, '2.0', `${file}: bad asset.version`);
+    assert.ok((json.meshes ?? []).length > 0, `${file}: no meshes`);
+    const deps = [
+      ...(json.buffers ?? []).map((b) => b.uri),
+      ...(json.images ?? []).map((i) => i.uri),
+    ].filter((uri) => uri && !uri.startsWith('data:'));
+    assert.ok(deps.length > 0, `${file}: expected external .bin/texture deps`);
+    for (const uri of deps) {
+      assert.ok(
+        fs.existsSync(path.join(path.dirname(file), decodeURIComponent(uri))),
+        `${file}: missing dep ${uri}`
+      );
+    }
+  }
+});
+
+test('V4 §B3: PACK_FORMATS + AUDIO_PACK_ROOTS route itch keys; kenney/kaykit stay untouched', async () => {
+  const assets = await import('../src/core/assets.js');
+  assert.ok(Object.isFrozen(assets.AUDIO_PACK_ROOTS), 'AUDIO_PACK_ROOTS must be frozen');
+  // itch model packs (keys stay '<pack>/<name>' — PLAN4-GAMES §G9.3's
+  // `itch/baked-goods/croissant` spelling maps to 'baked-goods/croissant';
+  // `itch` is the root, carried by PACK_FORMATS)
+  assert.equal(
+    assets.getModelUrl('pleasant-picnic/radio'), // §C-SYS1.4 verbatim
+    '/assets/itch/pleasant-picnic/radio.gltf'
+  );
+  assert.equal(
+    assets.getModelUrl('baked-goods/croissant'),
+    '/assets/itch/baked-goods/croissant.glb'
+  );
+  assert.equal(
+    assets.getModelUrl('bakery-interior/stand_mixer'),
+    '/assets/itch/bakery-interior/stand_mixer.gltf'
+  );
+  assert.equal(
+    assets.getModelUrl('aline-furniture/bookshelf'),
+    '/assets/itch/aline-furniture/bookshelf.glb'
+  );
+  // itch audio root: flat, no audio/ subdir (§B3)
+  assert.equal(
+    assets.getAudioUrl('itch-sfx/confirm_style_4_001'),
+    '/assets/itch/itch-sfx/confirm_style_4_001.ogg'
+  );
+  // v1–v3 routing unchanged
+  assert.equal(
+    assets.getModelUrl('food-kit/carrot'),
+    '/assets/kenney/food-kit/carrot.glb'
+  );
+  assert.equal(
+    assets.getModelUrl('kaykit-restaurant/oven'),
+    '/assets/kaykit/kaykit-restaurant/oven.gltf'
+  );
+  assert.equal(
+    assets.getAudioUrl('ui-audio/switch1'),
+    '/assets/kenney/ui-audio/audio/switch1.ogg'
+  );
+  // itch-sfx keys are audio keys — preload must skip them (no GLTFLoader fetch)
+  await assets.preload(['itch-sfx/confirm_style_4_001']);
+});
+
 test('assets cache: concurrent callers share one rejection, then recover', async (t) => {
   const assets = await import('../src/core/assets.js');
   t.after(() => assets._setLoaderForTests(null));

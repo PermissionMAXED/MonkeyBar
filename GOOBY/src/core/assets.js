@@ -19,9 +19,16 @@
  * handler — every .gltf of a pack shares ONE Texture/Source/GPU upload, and
  * the shared masters are isCachedResource-owned so sweeps never dispose them.
  *
+ * V4/G50 (PLAN4 §B3): a third committed root `public/assets/itch/` (see
+ * `scripts/fetch-itch.mjs`) — model packs route through PACK_FORMATS
+ * (`baked-goods`/`aline-furniture` .glb, `bakery-interior`/`pleasant-picnic`
+ * .gltf with a shared per-pack atlas); the `itch-sfx` audio pack routes
+ * through the frozen AUDIO_PACK_ROOTS table (files flat, no audio/ subdir).
+ *
  * Asset key format everywhere in the game: `'<slug>/<file-no-ext>'`,
  * e.g. `'food-kit/carrot'`, `'kaykit-restaurant/oven'`,
- * `'kaykit-characters/Knight'`, audio `'ui-audio/switch1'`.
+ * `'kaykit-characters/Knight'`, audio `'ui-audio/switch1'`,
+ * `'pleasant-picnic/radio'`, `'itch-sfx/confirm_style_4_001'`.
  */
 
 import * as THREE from 'three'; // V2/FIX-F: placeholder Group (P2-5, E18)
@@ -39,7 +46,21 @@ const AUDIO_PACK_SLUGS = new Set([
   'ui-audio',
   'ui-pack-sounds',
   'casino-audio',
+  // V4/G50 (PLAN4 §B3): itch.io root — files flat (no audio/ subdir)
+  'itch-sfx',
 ]);
+
+/**
+ * V4/G50 (PLAN4 §B3): frozen audio-root table (mirrors PACK_FORMATS).
+ * Default root `kenney` keeps the v1–v3 layout `assets/kenney/<slug>/audio/
+ * <file>.ogg`; the `itch` root resolves FLAT: `assets/itch/<slug>/<file>.ogg`
+ * (see scripts/fetch-itch.mjs for the committed whitelist). Audio key format
+ * stays `'<slug>/<file-no-ext>'`, e.g. `'itch-sfx/confirm_style_4_001'`.
+ * @type {Readonly<Record<string, string>>}
+ */
+export const AUDIO_PACK_ROOTS = Object.freeze({
+  'itch-sfx': 'itch',
+});
 
 /**
  * V3/G31 (PLAN3 §B6/§D8-3): slug → { root: 'kenney'|'kaykit', ext:
@@ -53,6 +74,16 @@ export const PACK_FORMATS = Object.freeze({
   'kaykit-restaurant': Object.freeze({ root: 'kaykit', ext: 'gltf' }),
   'kaykit-city': Object.freeze({ root: 'kaykit', ext: 'gltf' }),
   'kaykit-halloween': Object.freeze({ root: 'kaykit', ext: 'gltf' }),
+  // V4/G50 (PLAN4 §B3 + §E block G50): third committed root
+  // `public/assets/itch/` (see scripts/fetch-itch.mjs). Keys stay
+  // `'<pack>/<name>'` — e.g. `'pleasant-picnic/radio'` (§C-SYS1.4),
+  // `'baked-goods/croissant'` (PLAN4-GAMES §G9.3; the plan's
+  // `itch/baked-goods/croissant` spelling — `itch` is the ROOT segment,
+  // carried here, never part of the key).
+  'baked-goods': Object.freeze({ root: 'itch', ext: 'glb' }),
+  'bakery-interior': Object.freeze({ root: 'itch', ext: 'gltf' }),
+  'pleasant-picnic': Object.freeze({ root: 'itch', ext: 'gltf' }),
+  'aline-furniture': Object.freeze({ root: 'itch', ext: 'glb' }),
 });
 
 /** Default format for every slug not in PACK_FORMATS (v1/v2 behavior). */
@@ -235,12 +266,18 @@ export function getModelUrl(key) {
 }
 
 /**
- * URL of an audio OGG for a key (audio packs keep files under `audio/`).
- * @param {string} key e.g. 'interface-sounds/click_001'
+ * URL of an audio OGG for a key. V4/G50 (PLAN4 §B3): consults
+ * AUDIO_PACK_ROOTS — the `itch` root resolves flat
+ * (`assets/itch/<slug>/<name>.ogg`); every other slug keeps the v1–v3
+ * kenney layout (`assets/kenney/<slug>/audio/<name>.ogg`).
+ * @param {string} key e.g. 'interface-sounds/click_001', 'itch-sfx/confirm_style_4_001'
  * @returns {string}
  */
 export function getAudioUrl(key) {
   const { slug, name } = parseKey(key);
+  if (AUDIO_PACK_ROOTS[slug] === 'itch') {
+    return `${baseUrl()}assets/itch/${slug}/${name}.ogg`;
+  }
   return `${baseUrl()}assets/kenney/${slug}/audio/${name}.ogg`;
 }
 
