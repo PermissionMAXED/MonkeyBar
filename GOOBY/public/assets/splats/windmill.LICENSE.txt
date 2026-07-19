@@ -1,0 +1,25 @@
+# License note — S Windmill in Golden Gate Park
+
+- Source: https://superspl.at/scene/d5f14e49
+- Creator credited by the source page: `azadbal`
+- Source-page license: Creative Commons Attribution 4.0 International (CC BY 4.0)
+- License text: https://creativecommons.org/licenses/by/4.0/
+- Source viewer payload: 2,486,428 Gaussians, approximately 34.01 MB SOG
+- Staged derivatives:
+  - `../windmill-golden-gate.compressed.ply` — 2,486,428 splats, 38.6 MB
+  - `../windmill-golden-gate-mobile.compressed.ply` — 1,000,000 splats, 15.5 MB
+  - `../proof/windmill-proof-200k.compressed.ply` — 200,000 splats, 3.1 MB
+
+CC BY 4.0 permits copying, redistribution, adaptation, and commercial use,
+provided appropriate credit is given, the license is linked, and changes are
+identified. The staged PLY files are modified derivatives: the public SOG
+viewer payload was converted to compressed PLY; the mobile/proof variants were
+decimated and had higher-order spherical harmonics removed.
+
+Suggested in-game credit:
+
+> “S Windmill in Golden Gate Park” by azadbal, licensed CC BY 4.0. Converted,
+> SH0-filtered, and decimated for GOOBY.
+
+The license covers the scene asset, but does not independently guarantee
+clearance of trademarks, privacy, publicity, or other third-party rights.

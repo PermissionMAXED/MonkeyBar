@@ -1,0 +1,23 @@
+# License note — Ludlow - Quality Square
+
+- Source: https://superspl.at/scene/ca36efcc
+- Creator credited by the source page: `ijenko`
+- Source-page license: Creative Commons Attribution 4.0 International (CC BY 4.0)
+- License text: https://creativecommons.org/licenses/by/4.0/
+- Source viewer payload: 4,555,055 Gaussians, approximately 49.31 MB SOG
+- Staged derivative:
+  - `../ludlow-quality-square-mobile.compressed.ply` — 1,000,000 splats, 15.5 MB
+
+CC BY 4.0 permits copying, redistribution, adaptation, and commercial use,
+provided appropriate credit is given, the license is linked, and changes are
+identified. The staged PLY is a modified derivative: the public SOG viewer
+payload was converted to compressed PLY, decimated to 1,000,000 Gaussians, and
+had higher-order spherical harmonics removed.
+
+Suggested in-game credit:
+
+> “Ludlow - Quality Square” by ijenko, licensed CC BY 4.0. Converted,
+> SH0-filtered, and decimated for GOOBY.
+
+The license covers the scene asset, but does not independently guarantee
+clearance of trademarks, privacy, publicity, or other third-party rights.
