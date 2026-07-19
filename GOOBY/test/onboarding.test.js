@@ -331,11 +331,13 @@ test('sfxMap: definitions are well-formed and voice recipes exist', () => {
   assert.ok(allSfxIds().length >= 80, 'map should stay rich');
 });
 
-test('sfxMap: every Kenney sample key resolves to an ogg on disk', () => {
+test('sfxMap: every committed sample key resolves to an ogg on disk', () => {
   const missing = [];
   for (const key of allSampleKeys()) {
     const [pack, file] = key.split('/');
-    const p = path.join(ROOT, 'public', 'assets', 'kenney', pack, 'audio', `${file}.ogg`);
+    const p = pack === 'itch-sfx'
+      ? path.join(ROOT, 'public', 'assets', 'itch', pack, `${file}.ogg`)
+      : path.join(ROOT, 'public', 'assets', 'kenney', pack, 'audio', `${file}.ogg`);
     if (!fs.existsSync(p)) missing.push(key);
   }
   assert.deepEqual(missing, [], `missing ogg files: ${missing.join(', ')}`);

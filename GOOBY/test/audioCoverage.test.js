@@ -1,8 +1,8 @@
-// Audio coverage — V3/G32 (PLAN3 §A2 real-audio coverage bullets + §E G32):
-//   • 100 % of `ui.*` and `coin.*` ids are sample-backed (real files — no
-//     synth UI bleeps left after the §C3.1/§D3.5 sweep).
-//   • ≥ 65 % of ALL non-voice, non-loop sfx ids are sample-backed (baseline
-//     before 3.0: 61/129 ≈ 47 %). The exact ratio is printed for the report.
+// Audio coverage — V4/G78 (PLAN4 §C-SYS1.9 exact-set contract):
+//   • exactly the 9 frozen non-loop ids may remain synth-backed.
+//   • exactly the 3 seamless loop ids may remain synth-backed; Gooby's 15
+//     identity-voice ids remain in goobyVoice.js.
+//   • every other id is sample-backed (including all 46 replacement-table ids).
 //   • every sample key in SFX_MAP has a `src/audio/loudness.json` entry
 //     (§B2.5 — the normalization pass measured every mapped file).
 //   • the §C3.3 medley composition tables reference ONLY committed jingle
@@ -16,7 +16,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { SFX_MAP, allSampleKeys, UI_INTERACTION_SOUNDS, uiSoundFor } from '../src/audio/sfxMap.js';
+import {
+  SFX_MAP, allSampleKeys, getSfxDef, UI_INTERACTION_SOUNDS, uiSoundFor,
+} from '../src/audio/sfxMap.js';
 import { MEDLEY, MEDLEY_CONTEXTS } from '../src/audio/musicDirector.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -27,33 +29,123 @@ const LOUDNESS = JSON.parse(
 /** '<pack>/<file>' → committed ogg path (mirrors core/assets.getAudioUrl). */
 const oggPath = (key) => {
   const [pack, file] = key.split('/');
+  if (pack === 'itch-sfx') {
+    return path.join(ROOT, 'public', 'assets', 'itch', pack, `${file}.ogg`);
+  }
   return path.join(ROOT, 'public', 'assets', 'kenney', pack, 'audio', `${file}.ogg`);
 };
 
-// --------------------------------------------------------- §A2 coverage floors
+const FROZEN_NON_LOOP_SYNTH_IDS = Object.freeze([
+  'garden.water',
+  'goalie.cheer',
+  'harbor.horn',
+  'pipe.fill',
+  'rocket.pickup',
+  'toilet.flush',
+  'tramp.boost',
+  'tramp.bounce',
+  'wash.splash',
+].sort());
 
-test('§A2: 100% of ui.* and coin.* ids are sample-backed (no synth UI bleeps)', () => {
-  const offenders = [];
-  for (const [id, def] of Object.entries(SFX_MAP)) {
-    if (!id.startsWith('ui.') && !id.startsWith('coin.')) continue;
-    if (def.kind !== 'sample') offenders.push(`${id} (${def.kind}:${def.name})`);
-  }
-  assert.deepEqual(offenders, [], `synth ui/coin ids left: ${offenders.join(', ')}`);
+const FROZEN_SYNTH_LOOP_IDS = Object.freeze([
+  'ambience.birdsong',
+  'ambience.rain',
+  'rocket.thrust',
+].sort());
+
+const FROZEN_VOICE_IDS = Object.freeze([
+  'gooby.brrr',
+  'gooby.gasp',
+  'gooby.giggle',
+  'gooby.hiccup',
+  'gooby.purr',
+  'gooby.refuse',
+  'gooby.sigh',
+  'gooby.sniff',
+  'gooby.sniffle',
+  'gooby.snore',
+  'gooby.squeak',
+  'gooby.squeakDizzy',
+  'gooby.squeakHappy',
+  'gooby.yawn',
+  'health.sneeze',
+].sort());
+
+const REPLACED_IDS = Object.freeze([
+  'album.claim', 'ball.throw', 'basket.swish', 'cake.splat', 'chop.junk',
+  'chop.lob', 'chop.slice', 'dance.fever', 'dance.good', 'dance.miss',
+  'dance.perfect', 'delivery.drop', 'fish.cast', 'garden.fertilize',
+  'garden.harvest', 'garden.plant', 'goalie.dive', 'goalie.super', 'golf.bump',
+  'golf.sink', 'harbor.boost', 'hop.bell', 'hopper.gold', 'hopper.lane',
+  'hopper.shield', 'hunt.boo', 'hunt.powerup', 'mole.whiff', 'pancake.drop',
+  'pancake.slice', 'pancake.topping', 'photo.shutter', 'pipe.connect',
+  'racer.block', 'racer.boost', 'racer.shield', 'rocket.wind', 'says.pad1',
+  'says.pad2', 'says.pad3', 'says.pad4', 'sticker.get', 'throw.whoosh', 'tow',
+  'vet.cure', 'whoosh',
+].sort());
+
+/** Every audio.play('<literal>') id used anywhere in src/. */
+function collectUsedSfxIds() {
+  const ids = new Set();
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(p);
+      else if (entry.name.endsWith('.js')) {
+        const src = fs.readFileSync(p, 'utf8');
+        for (const m of src.matchAll(/audio(?:\??\.)play\(\s*'([^']+)'/g)) ids.add(m[1]);
+        for (const m of src.matchAll(/audioOnce\(\s*\w+,\s*'([^']+)'/g)) ids.add(m[1]);
+      }
+    }
+  };
+  walk(path.join(ROOT, 'src'));
+  return ids;
+}
+
+// ----------------------------------------------- §C-SYS1.9 exact-set gates
+
+test('§C-SYS1.9: EXACTLY the 9 frozen non-loop ids remain synthesized', () => {
+  const actual = Object.entries(SFX_MAP)
+    .filter(([, def]) => def.kind === 'synth' && !def.loop)
+    .map(([id]) => id)
+    .sort();
+  assert.deepEqual(actual, FROZEN_NON_LOOP_SYNTH_IDS);
 });
 
-test('§A2: ≥65% of all non-voice/non-loop ids are sample-backed', () => {
-  let eligible = 0;
-  let sampled = 0;
-  for (const def of Object.values(SFX_MAP)) {
-    if (def.kind === 'voice' || def.loop) continue; // exempt per §A2
-    eligible += 1;
-    if (def.kind === 'sample') sampled += 1;
+test('§C-SYS1.9: voice and synth-loop exemption classes are exact', () => {
+  const voices = Object.entries(SFX_MAP)
+    .filter(([, def]) => def.kind === 'voice')
+    .map(([id]) => id)
+    .sort();
+  const loops = Object.entries(SFX_MAP)
+    .filter(([, def]) => def.kind === 'synth' && def.loop)
+    .map(([id]) => id)
+    .sort();
+  assert.deepEqual(voices, FROZEN_VOICE_IDS, 'only Gooby identity voices are exempt');
+  assert.deepEqual(loops, FROZEN_SYNTH_LOOP_IDS, 'only the 3 unsourceable loop recipes are exempt');
+});
+
+test('§C-SYS1.9: all 46 table ids and every other eligible id are samples', () => {
+  assert.equal(REPLACED_IDS.length, 46, 'replacement table count stays pinned');
+  for (const id of REPLACED_IDS) {
+    assert.equal(getSfxDef(id)?.kind, 'sample', `${id}: replacement table id must use a real file`);
   }
-  const pct = (100 * sampled) / eligible;
-  // The exact ratio feeds the G32 report + CDP evidence (§E verification ⑥).
-  console.info(`[audioCoverage] sample-backed: ${sampled}/${eligible} non-voice/non-loop ids = ${pct.toFixed(1)}%`);
-  assert.ok(eligible >= 120, `map should stay rich (${eligible} eligible ids)`);
-  assert.ok(pct >= 65, `§A2 floor: ${pct.toFixed(1)}% < 65% (${sampled}/${eligible})`);
+  const exempt = new Set([...FROZEN_NON_LOOP_SYNTH_IDS, ...FROZEN_SYNTH_LOOP_IDS, ...FROZEN_VOICE_IDS]);
+  const offenders = Object.entries(SFX_MAP)
+    .filter(([id, def]) => !exempt.has(id) && def.kind !== 'sample')
+    .map(([id, def]) => `${id} (${def.kind}:${def.name})`);
+  assert.deepEqual(offenders, [], `non-sample ids outside exact exemptions: ${offenders.join(', ')}`);
+});
+
+test('§C-SYS1.9: says pads share one real sample at C-D-E-G playback rates', () => {
+  const pads = ['says.pad1', 'says.pad2', 'says.pad3', 'says.pad4'].map(getSfxDef);
+  assert.deepEqual(pads.map((def) => def.keys), Array(4).fill(['itch-sfx/cursor_style_4']));
+  assert.deepEqual(pads.map((def) => def.rate), [1, 1.125, 1.25, 1.5]);
+});
+
+test('§C-SYS1.9: zero literal audio.play ids are unmapped', () => {
+  const unmapped = [...collectUsedSfxIds()].filter((id) => !getSfxDef(id));
+  assert.deepEqual(unmapped, [], `unmapped sfx ids: ${unmapped.join(', ')}`);
 });
 
 // --------------------------------------------------------- §B2.5 loudness pass
@@ -77,7 +169,7 @@ test('§C3.5: per-id volumes are normalized multipliers in (0, 1]', () => {
   }
   // the §C3.5 offender pins (final effective volumes, verbatim)
   const pins = {
-    'eat.chomp': 0.5, 'crash': 0.6, 'mole.bonk': 0.6, 'photo.shutter': 0.6,
+    'eat.chomp': 0.5, 'crash': 0.6, 'mole.bonk': 0.6, 'photo.shutter': 0.7,
     'gooby.snore': 0.55, 'hopper.crash': 0.6, 'jingle.levelUp': 0.65,
     'jingle.daily': 0.65, 'golf.ace': 0.6, 'delivery.drop': 0.6,
     'tramp.butt': 0.55, 'dance.fever': 0.55, 'ui.go': 0.6,
@@ -89,7 +181,7 @@ test('§C3.5: per-id volumes are normalized multipliers in (0, 1]', () => {
 
 // --------------------------------------------------------- committed-file gates
 
-test('every sample key resolves to a committed ogg (zero dangling ids)', () => {
+test('§C-SYS1.9: every sample key resolves to a committed ogg (zero dangling ids)', () => {
   const missing = allSampleKeys().filter((key) => !fs.existsSync(oggPath(key)));
   assert.deepEqual(missing, [], `missing committed files: ${missing.join(', ')}`);
 });

@@ -17,14 +17,12 @@
 // single routing rule audio.js consults). Mute semantics (§C2.3): the
 // settings.sfx boolean mutes sfx+voice, settings.music mutes music+ambience.
 //
-// V3/G32 sample sweep (§C3.1/§D3.5): every ui.* and coin.* id is real-file
-// backed now; ≥65% of all non-voice/non-loop ids are samples
-// (test/audioCoverage.test.js pins the floors). Synth recipes that STAY per
-// the §C3.1 whitelist: all voice ids, the ambience loops, the four says.pad*
-// (pitch contract), danceParty's dance.perfect/good/miss blips (they sit on
-// the synth beat), and bespoke juice with no committed CC0 fit (vetSparkle,
-// harvestJoy, stickerPop, setFanfare, shutter, boing*, riser, whoosh family,
-// water/soil sounds).
+// V4/G78 sample sweep (PLAN4 §C-SYS1.9): all 46 formerly synthesized
+// non-voice one-shots in the binding replacement table are real-file backed.
+// The exact remaining synth set is pinned by test/audioCoverage.test.js:
+// 9 impossible-to-source one-shots plus the 3 seamless loop recipes. Gooby
+// voice ids remain in goobyVoice.js; danceParty's synth TRACK stays separate
+// under its BPM/PATTERN_SEED contract, but its hit blips are samples now.
 // NOTE (§C3.1 substitution): the pop family is speced to
 // impact-sounds/impactSoft_medium_* — those files were not committed by the
 // §D3 pipeline wave, so the pops map to the committed same-pack equivalent
@@ -82,6 +80,7 @@ const JIN = 'music-jingles';
 const UIA = 'ui-audio'; // V3/G32 (§D3.2)
 const UIP = 'ui-pack-sounds'; // V3/G32 (§D3.3)
 const CAS = 'casino-audio'; // V3/G32 (§D3.4)
+const ITCH = 'itch-sfx'; // V4/G78 (§C-SYS1.9): ObsydianX CC0 flat OGG root
 
 /**
  * The complete sfx id → definition table (§D6 + PLAN3 §C3.1/§D3.5: ui taps
@@ -147,17 +146,17 @@ export const SFX_MAP = Object.freeze({
   'wash.scrub': sample(seq(`${UI}/scratch`, 5), { volume: 0.35 }),
   'wash.splash': synth('splash', { volume: 0.7 }),
   'toilet.flush': synth('flush', { volume: 0.7 }),
-  'ball.throw': synth('whoosh', { volume: 0.6 }),
+  'ball.throw': sample(seq(`${IMP}/footstep_snow`, 5, 0), { volume: 0.5, rate: 1.15 }),
   'ball.bounce': sample(seq(`${IMP}/impactGeneric_light`, 5, 0), { volume: 0.55, haptic: 'light' }),
 
   // --- city drive (§C4/§C6.1 #1) ---
   bump: sample(seq(`${IMP}/impactGeneric_light`, 5, 0), { volume: 0.7 }),
   crash: sample(seq(`${IMP}/impactMetal_heavy`, 5, 0), { volume: 0.6, haptic: 'medium' }), // §C3.5: 0.8→0.6
   bonk: sample(seq(`${IMP}/impactPlank_medium`, 5, 0), { volume: 0.65, haptic: 'light' }),
-  tow: synth('sad', { volume: 0.7 }),
+  tow: sample(seq(`${ITCH}/back_style_3`, 3), { volume: 0.6 }),
 
   // --- runner ---
-  whoosh: synth('whoosh', { volume: 0.5 }),
+  whoosh: sample(seq(`${IMP}/footstep_snow`, 5, 0), { volume: 0.5, rate: 1 }),
   // V3/G32 §C3.1: real grass footstep pitched up 1.3× via playbackRate
   jump: sample(seq(`${IMP}/footstep_grass`, 5, 0), { volume: 0.8, rate: 1.3 }),
   slide: sample(seq(`${UI}/scratch`, 5), { volume: 0.4 }),
@@ -178,7 +177,7 @@ export const SFX_MAP = Object.freeze({
   // --- carrotGuard ---
   'mole.bonk': sample(seq(`${IMP}/impactPunch_heavy`, 5, 0), { volume: 0.6, haptic: 'light' }), // §C3.5: 0.8→0.6
   'mole.pop': sample(seq(`${IMP}/impactGeneric_light`, 5, 0), { volume: 0.5 }), // V3/G32 §C3.1 pop family
-  'mole.whiff': synth('whoosh', { volume: 0.35 }),
+  'mole.whiff': sample(seq(`${IMP}/footstep_snow`, 5, 0), { volume: 0.3, rate: 1.3 }),
   'mole.steal': sample(seq(`${UI}/minimize`, 3), { volume: 0.5 }), // V3/G32 sweep: descending UI slide
   'mole.combo': sample(seq(`${UI}/glass`, 6), { volume: 0.6 }),
 
@@ -188,32 +187,31 @@ export const SFX_MAP = Object.freeze({
   'card.nomatch': sample(seq(`${UI}/error`, 4), { volume: 0.35 }),
 
   // --- basketBounce ---
-  'throw.whoosh': synth('whoosh', { volume: 0.6 }),
+  'throw.whoosh': sample(seq(`${IMP}/footstep_snow`, 5, 0), { volume: 0.55, rate: 1.1 }),
   'basket.rim': sample(seq(`${IMP}/impactMetal_light`, 5, 0), { volume: 0.6 }),
   'basket.board': sample(seq(`${IMP}/impactPlank_medium`, 5, 0), { volume: 0.6 }),
   'basket.score': sample(seq(`${UI}/confirmation`, 4), { volume: 0.7, haptic: 'light' }),
-  'basket.swish': synth('sparkle', { volume: 0.7, haptic: 'light' }),
+  'basket.swish': sample(seq(`${ITCH}/confirm_style_1`, 3), { volume: 0.7, haptic: 'light' }),
 
   // --- pancakeTower ---
-  'pancake.drop': synth('whooshDown', { volume: 0.55 }),
+  'pancake.drop': sample(seq(`${UI}/minimize`, 3, 4), { volume: 0.5 }),
   'pancake.land': sample(seq(`${IMP}/footstep_carpet`, 5, 0), { volume: 0.7, haptic: 'light' }),
-  'pancake.slice': synth('slice', { volume: 0.6 }),
+  'pancake.slice': sample(seq(`${UI}/scratch`, 5), { volume: 0.6, rate: 1.3 }),
   'pancake.perfect': sample(seq(`${UI}/glass`, 6), { volume: 0.7, haptic: 'light' }),
-  'pancake.topping': synth('sparkle', { volume: 0.6 }),
+  'pancake.topping': sample(seq(`${UI}/glass`, 6), { volume: 0.6 }),
   'pancake.miss': sample(seq(`${UI}/error`, 4), { volume: 0.4 }),
 
-  // --- danceParty (kept snappy — they play over the 100 BPM track; the three
-  // hit blips STAY synth per the §C3.4 ruling: they sit on the synth beat) ---
-  'dance.perfect': synth('blipHigh', { volume: 0.6, haptic: 'light' }),
-  'dance.good': synth('blipMid', { volume: 0.5 }),
-  'dance.miss': synth('sadBlip', { volume: 0.35 }),
+  // --- danceParty (real hit samples over the unchanged 100 BPM synth TRACK) ---
+  'dance.perfect': sample([`${ITCH}/cursor_style_2`], { volume: 0.6, rate: 1.2, haptic: 'light' }),
+  'dance.good': sample([`${ITCH}/cursor_style_2`], { volume: 0.5, rate: 1 }),
+  'dance.miss': sample(seq(`${ITCH}/back_style_2`, 3), { volume: 0.35 }),
   'dance.tapEmpty': sample(seq(`${UI}/click`, 5), { volume: 0.25 }), // §C3.1: stays sample
   'dance.tierUp': sample(seq(`${UI}/maximize`, 9), { volume: 0.55 }),
   'dance.tierUpAccent': sample([`${JIN}/jingles_HIT00`], { volume: 0.6 }), // V3/G32 §C3.4: HIT00 accent (sfx bus)
-  'dance.fever': synth('riser', { volume: 0.55, haptic: 'medium' }), // §C3.5: 0.7→0.55 (masks the track)
+  'dance.fever': sample(seq(`${UI}/maximize`, 4), { volume: 0.55, haptic: 'medium' }),
 
   // --- fishingPond ---
-  'fish.cast': synth('plop', { volume: 0.6 }),
+  'fish.cast': sample(seq(`${UI}/drop`, 4), { volume: 0.6, rate: 0.8 }),
   'fish.hook': sample([`${UI}/pluck_001`, `${UI}/pluck_002`], { volume: 0.7, haptic: 'light' }),
   'fish.reelTap': sample([`${UI}/tick_001`, `${UI}/tick_002`, `${UI}/tick_004`], { volume: 0.5 }),
   'fish.catch': sample(seq(`${UI}/confirmation`, 4), { volume: 0.7, haptic: 'light' }),
@@ -241,50 +239,44 @@ export const SFX_MAP = Object.freeze({
   // --- V2/G20: sickness & care (§C3.3/§C3.4) ---
   'health.sneeze': voice('sneeze', { volume: 0.9 }), // V2/G29: real sneeze (windup+achoo+sniffle tail)
 
-  // --- V2/G21: vet clinic + landmarks (§C9; V3/G32 sweep: real bell/chime/
-  // stinger files replace the doorbell/checkup/discovery synths — vet.cure
-  // stays bespoke per the §C3.1 whitelist) ---
+  // --- V2/G21: vet clinic + landmarks (§C9; all real samples after V4/G78) ---
   'vet.doorbell': sample(seq(`${IMP}/impactBell_heavy`, 5, 0), { volume: 0.5 }), // V3/G32 sweep: real bell
-  'vet.cure': synth('vetSparkle', { volume: 0.75, haptic: 'light' }), // §C3.1 whitelist: healing shimmer
+  'vet.cure': sample(seq(`${ITCH}/confirm_style_6`, 2), { volume: 0.75, haptic: 'light' }),
   'vet.checkup': sample(seq(`${UI}/question`, 4), { volume: 0.45 }), // V3/G32 sweep: friendly two-tone chime
   'landmark.found': sample([`${JIN}/jingles_HIT01`], { volume: 0.65, haptic: 'light' }), // V3/G32 sweep: HIT stinger
 
-  // --- V2/G19: garden (§C2.2; V3/G32 sweep: sell/ready flip to real files,
-  // the soil/water juice stays bespoke — no committed CC0 fit) ---
-  'garden.plant': synth('seedPlant', { volume: 0.65, haptic: 'light' }), // V2/G29: soil plop + paw pats
+  // --- V2/G19: garden (§C2.2; V4/G78 real soil/harvest samples) ---
+  'garden.plant': sample(seq(`${IMP}/footstep_grass`, 5, 0), { volume: 0.65, rate: 0.7, haptic: 'light' }),
   'garden.water': synth('trickle', { volume: 0.6 }), // V2/G29: watering-can burbles + droplets
-  'garden.fertilize': synth('fertilizerPuff', { volume: 0.6 }), // V2/G29: dust puffs + growth sparkle
-  'garden.harvest': synth('harvestJoy', { volume: 0.75, haptic: 'light' }), // §C3.1 whitelist: pluck-pop + gasp
+  'garden.fertilize': sample(seq(`${IMP}/footstep_snow`, 5, 0), { volume: 0.5, rate: 0.5 }),
+  'garden.harvest': sample(seq(`${IMP}/impactGeneric_light`, 5, 0), { volume: 0.65, rate: 1.15, haptic: 'light' }),
   'garden.harvestReady': sample(seq(`${UI}/glass`, 6), { volume: 0.4 }), // V3/G32 sweep: gentle glisten ding
   'garden.buy': sample(seq(`${UI}/drop`, 4), { volume: 0.6 }),
   'garden.sell': sample(seqN(`${CAS}/chips-stack-`, 2), { volume: 0.85, haptic: 'light' }), // V3/G32 sweep: chip cash-in
 
-  // --- V2/G23: progression UI (§C5/§C6/§C12; V3/G32 sweep: quest.claim flips
-  // to a real HIT stinger — sticker/album/shutter stay per §C3.1 whitelist) ---
+  // --- V2/G23: progression UI (§C5/§C6/§C12; real samples throughout) ---
   'quest.claim': sample([`${JIN}/jingles_HIT02`], { volume: 0.7, haptic: 'light' }), // V3/G32 sweep: real triumph
-  'sticker.get': synth('stickerPop', { volume: 0.7, haptic: 'light' }), // §C3.1 whitelist: peel + up-pop + ping
-  'album.claim': synth('setFanfare', { volume: 0.75, haptic: 'light' }), // §C3.1 whitelist: set-complete fanfare
-  'photo.shutter': synth('shutter', { volume: 0.6, haptic: 'medium' }), // §C3.5: 0.8→0.6 (overdriven synth)
+  'sticker.get': sample(seq(`${ITCH}/confirm_style_4`, 3), { volume: 0.7, haptic: 'light' }),
+  'album.claim': sample([`${JIN}/jingles_HIT13`], { volume: 0.75, haptic: 'light' }),
+  'photo.shutter': sample([`${UIA}/mouseclick1`], { volume: 0.7, rate: 0.9, haptic: 'medium' }),
 
-  // --- V2/G24: goobySays pads (§C1.2 #1 — §C3.1 pitch contract: the four
-  // pads STAY on the shared pitched 'saysPad' recipe) ---
-  'says.pad1': synth('saysPad', { volume: 0.7, pitch: 1, haptic: 'light' }), // C5
-  'says.pad2': synth('saysPad', { volume: 0.7, pitch: 1.125, haptic: 'light' }), // D5
-  'says.pad3': synth('saysPad', { volume: 0.7, pitch: 1.25, haptic: 'light' }), // E5
-  'says.pad4': synth('saysPad', { volume: 0.7, pitch: 1.5, haptic: 'light' }), // G5
+  // --- V2/G24: goobySays pads — ONE real sample, playbackRate-pitched C-D-E-G ---
+  'says.pad1': sample([`${ITCH}/cursor_style_4`], { volume: 0.7, rate: 1, haptic: 'light' }), // C5
+  'says.pad2': sample([`${ITCH}/cursor_style_4`], { volume: 0.7, rate: 1.125, haptic: 'light' }), // D5
+  'says.pad3': sample([`${ITCH}/cursor_style_4`], { volume: 0.7, rate: 1.25, haptic: 'light' }), // E5
+  'says.pad4': sample([`${ITCH}/cursor_style_4`], { volume: 0.7, rate: 1.5, haptic: 'light' }), // G5
   // --- end V2/G24 ---
 
-  // --- V2/G25: starHopper + pipeFlow (§C1.2 #8/#9; V3/G32 sweep: star ping +
-  // shield pop flip to real files, gold/riser/water juice stays) ---
-  'hopper.lane': synth('whoosh', { volume: 0.45 }),
+  // --- V2/G25: starHopper + pipeFlow (§C1.2 #8/#9; only water stays synth) ---
+  'hopper.lane': sample(seq(`${IMP}/footstep_snow`, 5, 0), { volume: 0.4, rate: 1.25 }),
   'hopper.star': sample(seq(`${IMP}/impactPlate_light`, 5, 0), { volume: 0.6, haptic: 'light' }), // V3/G32 sweep: crystal ding
-  'hopper.gold': synth('goldenPing', { volume: 0.7, haptic: 'light' }), // V2/G29: coin dyad + sparkle triplet
-  'hopper.shield': synth('riser', { volume: 0.6, haptic: 'light' }), // §C3.1 whitelist: riser
+  'hopper.gold': sample(seq(`${UI}/glass`, 6), { volume: 0.7, rate: 1.3, haptic: 'light' }),
+  'hopper.shield': sample(seq(`${UI}/maximize`, 4, 5), { volume: 0.6, haptic: 'light' }),
   'hopper.shieldPop': sample(seq(`${IMP}/impactGeneric_light`, 5, 0), { volume: 0.7, haptic: 'medium' }), // V3/G32 §C3.1 pop family
   'hopper.warning': sample(seq(`${UI}/error`, 4), { volume: 0.4 }),
   'hopper.crash': sample(seq(`${IMP}/impactPunch_heavy`, 5, 0), { volume: 0.6, haptic: 'medium' }), // §C3.5: 0.75→0.6
   'pipe.rotate': sample(seq(`${UI}/scroll`, 5), { volume: 0.5, haptic: 'light' }),
-  'pipe.connect': synth('pipeConnect', { volume: 0.7, haptic: 'light' }), // V2/G29: click + bloops + gurgle
+  'pipe.connect': sample(seq(`${ITCH}/confirm_style_5`, 3), { volume: 0.7, haptic: 'light' }),
   'pipe.fill': synth('trickle', { volume: 0.4, pitch: 0.8 }), // V2/G29: water fill (no CC0 fit)
   // --- end V2/G25 ---
 
@@ -296,60 +288,55 @@ export const SFX_MAP = Object.freeze({
   'ambience.birdsong': synth('birdsong', { loop: true, volume: 0.8, bus: 'ambience' }),
   // --- end V2/G26 ---
 
-  // --- V2/G27: veggieChop + goalieGooby (§C1.2 #4/#7; V3/G32 sweep: the two
-  // sad blips flip to real descending slides, chop/splat/dive/cheer stay) ---
-  'chop.lob': synth('whoosh', { volume: 0.35 }),
-  'chop.slice': synth('chop', { volume: 0.7, haptic: 'light' }), // V2/G29: knife slice + board thunk
+  // --- V2/G27: veggieChop + goalieGooby (§C1.2 #4/#7; only cheer stays synth) ---
+  'chop.lob': sample(seq(`${IMP}/footstep_snow`, 5, 0), { volume: 0.3, rate: 1.2 }),
+  'chop.slice': sample(seq(`${IMP}/impactPlank_medium`, 5, 0), { volume: 0.7, rate: 1.25, haptic: 'light' }),
   'chop.combo': sample(seq(`${UI}/glass`, 6), { volume: 0.6, haptic: 'light' }),
-  'chop.junk': synth('splat', { volume: 0.65, haptic: 'medium' }), // V2/G29: wet junk splat
+  'chop.junk': sample(seq(`${IMP}/footstep_grass`, 5, 0), { volume: 0.65, rate: 0.55, haptic: 'medium' }),
   'chop.miss': sample(seq(`${UI}/minimize`, 3, 4), { volume: 0.5 }), // V3/G32 sweep
-  'goalie.dive': synth('diveWhoosh', { volume: 0.65 }), // V2/G29: save-dive sweep (no CC0 fit)
+  'goalie.dive': sample(seq(`${IMP}/footstep_snow`, 5, 0), { volume: 0.6, rate: 0.7 }),
   'goalie.kick': sample(seq(`${IMP}/impactPunch_medium`, 5, 0), { volume: 0.55 }),
   'goalie.save': sample(seq(`${IMP}/impactGeneric_light`, 5, 0), { volume: 0.7, haptic: 'light' }),
-  'goalie.super': synth('riser', { volume: 0.7, haptic: 'medium' }), // §C3.1 whitelist: riser
+  'goalie.super': sample(seq(`${UI}/maximize`, 4), { volume: 0.7, haptic: 'medium' }),
   'goalie.goal': sample(seq(`${UI}/minimize`, 3, 7), { volume: 0.55 }), // V3/G32 sweep: crowd deflates
   'goalie.cheer': synth('bunnyCheer', { volume: 0.7, haptic: 'light' }), // V2/G29: bunny crowd (no CC0 fit)
   // --- end V2/G27 ---
 
-  // --- V2/G29: audio & reactions 2.0 ids (voice set + bespoke keepers; V3/G32
-  // sweep: golf.putt + both doorbells flip to real files) ---
-  'hop.bell': synth('bellJingle', { volume: 0.6, haptic: 'light' }), // tiny collar jingle (no CC0 fit)
+  // --- V2/G29: audio & reactions 2.0 ids (voice set + real object samples) ---
+  'hop.bell': sample(seq(`${IMP}/impactBell_heavy`, 5, 0), { volume: 0.35, rate: 1.8, haptic: 'light' }),
   'gooby.hiccup': voice('hiccup', { volume: 0.8 }),
   'gooby.sniffle': voice('sniffle', { volume: 0.65 }),
   'gooby.sigh': voice('contentSigh', { volume: 0.7 }),
   'gooby.brrr': voice('brrr', { volume: 0.75 }),
   'gooby.gasp': voice('delightedGasp', { volume: 0.8 }),
   'golf.putt': sample(seq(`${IMP}/footstep_wood`, 5, 0), { volume: 0.55, haptic: 'light' }), // V3/G32 sweep: wooden tock
-  'golf.sink': synth('golfSink', { volume: 0.75, haptic: 'light' }), // ball-in-cup rattle (no CC0 fit)
-  'delivery.drop': synth('confettiPop', { volume: 0.6, haptic: 'medium' }), // §C3.5: 0.75→0.6 (pop ×3)
+  'golf.sink': sample(seqN(`${CAS}/chip-lay-`, 3), { volume: 0.7, rate: 0.85, haptic: 'light' }),
+  'delivery.drop': sample(seq(`${IMP}/impactPlate_light`, 5, 0), { volume: 0.6, rate: 1.1, haptic: 'medium' }),
   'delivery.doorbell': sample(seq(`${IMP}/impactBell_heavy`, 5, 0), { volume: 0.55 }), // V3/G32 sweep: real bell
   // --- end V2/G29 ---
 
   // --- V2/G28: miniGolf extras (§C1.2 #6) ---
   'golf.ace': sample([`${JIN}/jingles_NES11`], { volume: 0.6, haptic: 'medium' }), // §C3.5: 0.75→0.6 (NES11 is hot)
   'golf.bank': sample(seq(`${IMP}/impactPlank_medium`, 5, 0), { volume: 0.4 }),
-  'golf.bump': synth('boing', { volume: 0.5, haptic: 'light' }), // §C3.1 whitelist: boing*
+  'golf.bump': sample(seq(`${IMP}/impactPlank_medium`, 5, 0), { volume: 0.5, rate: 1.35, haptic: 'light' }),
   // --- end V2/G28 ---
 
-  // --- V3/G36: purblePlace / Tortenwerkstatt (PLAN3 §C9 — §E0.1-4 append:
-  // committed sample keys + the existing 'splat' synth recipe only) ---
+  // --- V3/G36: purblePlace / Tortenwerkstatt (PLAN3 §C9; real samples) ---
   'cake.apply': sample(seq(`${IMP}/impactGeneric_light`, 5, 0), { volume: 0.6, haptic: 'light' }), // component lands on the belt cake
   'cake.ovenDing': sample(seq(`${IMP}/impactBell_heavy`, 5, 0), { volume: 0.5 }), // oven release ding (real bell)
-  'cake.splat': synth('splat', { volume: 0.65, haptic: 'medium' }), // rejected cake splats (§C9.4 — chop.junk recipe)
+  'cake.splat': sample(seq(`${IMP}/footstep_grass`, 5, 0), { volume: 0.65, rate: 0.55, haptic: 'medium' }),
   'cake.serve': sample(seqN(`${CAS}/chips-stack-`, 2), { volume: 0.8, haptic: 'light' }), // accepted serve cash-in
   'cake.candle': sample([`${UI}/tick_001`, `${UI}/tick_002`, `${UI}/tick_004`], { volume: 0.55 }), // candle dropper tick
   'cake.order': sample(seq(`${UI}/question`, 4), { volume: 0.5 }), // new customer order chime
   // --- end V3/G36 ---
 
-  // --- V3/G41: toyRacer + ghostHunt (PLAN3 §C10.1 #1/#2 — §E0.1-4 append:
-  // committed ui/impact/casino sample keys + existing synth recipes only;
-  // 15 of 20 ids sample-backed per the §C3.1 majority arithmetic) ---
+  // --- V3/G41: toyRacer + ghostHunt (PLAN3 §C10.1 #1/#2; real samples) ---
   'racer.putter': sample(seq(`${IMP}/footstep_carpet`, 5, 0), { volume: 0.22, rate: 1.5, throttleMs: 120 }), // toy engine put-put
   'racer.drift': sample(seq(`${UI}/scratch`, 5), { volume: 0.3, throttleMs: 260 }), // tyre squeal on the rug
-  'racer.boost': synth('riser', { volume: 0.6, haptic: 'light' }), // §C3.1 whitelist: riser (drift release + turbo)
+  'racer.boost': sample(seq(`${UI}/maximize`, 4, 5), { volume: 0.6, haptic: 'light' }),
   'racer.item': sample(seqN(`${CAS}/card-slide-`, 3), { volume: 0.7, haptic: 'light' }), // item-box roulette
-  'racer.shield': synth('sparkle', { volume: 0.6 }), // bumper-shield up / pop shimmer
-  'racer.block': synth('whooshDown', { volume: 0.55 }), // toy-block drop behind
+  'racer.shield': sample(seq(`${UI}/glass`, 6), { volume: 0.6 }),
+  'racer.block': sample(seq(`${UI}/minimize`, 3), { volume: 0.55 }),
   'racer.blockHit': sample(seq(`${IMP}/impactPlank_medium`, 5, 0), { volume: 0.65, haptic: 'medium' }), // kart bonks a block
   'racer.lap': sample(seq(`${UI}/confirmation`, 4), { volume: 0.6 }),
   'racer.overtake': sample(seq(`${UI}/glass`, 6), { volume: 0.55 }),
@@ -359,15 +346,14 @@ export const SFX_MAP = Object.freeze({
   'hunt.chain': sample(seq(`${UI}/glass`, 6), { volume: 0.55 }), // chain-link ding
   'hunt.decoy': sample(seq(`${UI}/error`, 4), { volume: 0.45, haptic: 'medium' }), // decoy penalty
   'hunt.gone': sample(seq(`${UI}/minimize`, 3), { volume: 0.28 }), // missed peek sinks away
-  'hunt.boo': synth('riser', { volume: 0.5 }), // boo-wave sting
+  'hunt.boo': sample(seq(`${UI}/maximize`, 4), { volume: 0.5, rate: 0.8 }),
   'hunt.booBonus': sample(seqN(`${CAS}/chips-stack-`, 2), { volume: 0.8, haptic: 'light' }), // ≥4-catch payout
-  'hunt.powerup': synth('sparkle', { volume: 0.7, haptic: 'light' }), // Laterne/Netz activates
+  'hunt.powerup': sample(seq(`${ITCH}/confirm_style_1`, 3, 4), { volume: 0.7, haptic: 'light' }),
   'hunt.token': sample([`${UI}/pluck_001`, `${UI}/pluck_002`], { volume: 0.55 }), // token appears
   // --- end V3/G41 ---
 
-  // --- V3/G42: rocketRescue + harborHopper (PLAN3 §C10.1 #3/#4 — §E0.1-4
-  // append: committed ui/impact sample keys + existing synth/loop recipes
-  // only; 12 of 16 non-loop ids sample-backed per the §C3.1 arithmetic) ---
+  // --- V3/G42: rocketRescue + harborHopper (PLAN3 §C10.1 #3/#4; only the
+  // seamless thrust loop, bunny pickup voice-crowd and ship horn stay synth) ---
   'rocket.thrust': synth('rainLoop', { loop: true, volume: 0.45 }), // brown-noise rumble reads as engine thrust (existing loop recipe; sfx bus — not ambience.*)
   'rocket.land.soft': sample(seq(`${UI}/drop`, 4), { volume: 0.55, haptic: 'light' }), // skids touch down
   'rocket.land.hard': sample(seq(`${IMP}/impactMetal_heavy`, 5, 0), { volume: 0.5, haptic: 'medium' }), // hull clang + bounce
@@ -376,11 +362,11 @@ export const SFX_MAP = Object.freeze({
   'rocket.fuel': sample(seq(`${UI}/glass`, 6), { volume: 0.55 }), // canister clink
   'rocket.fuelLow': sample(seq(`${UI}/error`, 4), { volume: 0.4 }), // ≤20 fuel warning
   'rocket.tow': sample(seq(`${UI}/minimize`, 3), { volume: 0.4 }), // fuel-out power-down → tow
-  'rocket.wind': synth('whoosh', { volume: 0.6 }), // gust telegraph (§C3.1 whitelist: whoosh family)
+  'rocket.wind': sample(seq(`${IMP}/footstep_snow`, 5, 0), { volume: 0.6, rate: 0.85 }),
   'harbor.crate': sample(seq(`${IMP}/impactPlank_medium`, 5, 0), { volume: 0.55, haptic: 'light' }), // wooden crate on deck
   'harbor.ring': sample(seq(`${UI}/select`, 8), { volume: 0.5 }), // net ring chime
   'harbor.bump': sample(seq(`${IMP}/impactMetal_light`, 5, 0), { volume: 0.6, haptic: 'medium' }), // buoy/pier clonk
-  'harbor.boost': synth('diveWhoosh', { volume: 0.65 }), // crest surf-boost whoosh (whitelist family)
+  'harbor.boost': sample(seq(`${IMP}/footstep_snow`, 5, 0), { volume: 0.6, rate: 0.7 }),
   'harbor.horn': synth('doorbell', { pitch: 0.3, volume: 0.9, haptic: 'medium' }), // Fischkutter-Horn: low two-tone blast (pitched existing recipe)
   'harbor.hornEmpty': sample(seq(`${UI}/back`, 4), { volume: 0.4 }), // out of charges
   'harbor.gullWarn': sample(seq(`${UI}/question`, 4), { volume: 0.6 }), // honk warning chirp

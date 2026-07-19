@@ -3,8 +3,8 @@
 //     (SYNTH_RECIPES for one-shots, LOOP_RECIPES for loop:true ids) — audio.js
 //     is scanned as SOURCE TEXT because the module itself pulls browser-bound
 //     imports; sfxMap/goobyVoice/emotions/goobyAnims are pure and imported.
-//   • the goobySays pad family is ONE pitched recipe at 4 rising pentatonic
-//     pitches (the §E pad-pitch upgrade over G24's 4-ogg placeholder).
+//   • the goobySays pad family is ONE real sample at 4 rising pentatonic
+//     playback rates (V4/G78 keeps the pitch contract without oscillators).
 //   • the 2.0 bespoke remaps landed (garden/health/vet/progression/photo/
 //     bell/new-game ids) and the new voice recipes exist.
 //   • the idle-variety rotation (emotions.js) is well-formed: clips exist in
@@ -76,46 +76,30 @@ test('sfxMap synth pitch fields are sane multipliers', () => {
 
 // -------------------------------------------- goobySays pitched pad family
 
-test('says.pad1–4: one pitched recipe, 4 rising pentatonic pitches (§C1.2 #1)', () => {
+test('says.pad1–4: one real sample, 4 rising pentatonic rates (§C1.2 #1)', () => {
   const pads = ['says.pad1', 'says.pad2', 'says.pad3', 'says.pad4'].map(getSfxDef);
-  const pitches = [];
+  const rates = [];
   for (const def of pads) {
-    assert.equal(def.kind, 'synth', 'pads are synth defs now (G24 ogg placeholder upgraded)');
-    assert.equal(def.name, 'saysPad', 'all four pads share the saysPad recipe');
-    pitches.push(def.pitch ?? 1);
+    assert.equal(def.kind, 'sample', 'V4/G78 removes the saysPad oscillator');
+    assert.deepEqual(def.keys, ['itch-sfx/cursor_style_4'], 'all four pads share one real sample');
+    rates.push(def.rate ?? 1);
   }
-  // rising C-D-E-G major-pentatonic ratios over the recipe's C5 base
-  assert.deepEqual(pitches, [1, 1.125, 1.25, 1.5]);
-  for (let i = 1; i < pitches.length; i += 1) {
-    assert.ok(pitches[i] > pitches[i - 1], 'pad pitches strictly rising');
+  // rising C-D-E-G major-pentatonic ratios over the sample's C5 base
+  assert.deepEqual(rates, [1, 1.125, 1.25, 1.5]);
+  for (let i = 1; i < rates.length; i += 1) {
+    assert.ok(rates[i] > rates[i - 1], 'pad rates strictly rising');
   }
 });
 
 // ------------------------------------------------------- 2.0 bespoke remaps
 
-test('2.0 feature ids map to their bespoke recipes (§E G29 consolidation, V3/G32 sweep)', () => {
-  // V3/G32 (PLAN3 §C3.1): the ids kept on their bespoke recipes — the §C3.1
-  // whitelist (voice, ambience loops, water/soil juice, whoosh/sparkle family).
+test('2.0 feature ids preserve only the V4 exact exemptions; replacements use real files', () => {
+  // V4/G78 (PLAN4 §C-SYS1.9): only identity voice/water/crowd exemptions stay.
   /** id → [kind, recipe name] */
   const expected = {
     'health.sneeze': ['voice', 'sneeze'],
-    'vet.cure': ['synth', 'vetSparkle'],
-    'garden.plant': ['synth', 'seedPlant'],
     'garden.water': ['synth', 'trickle'],
-    'garden.fertilize': ['synth', 'fertilizerPuff'],
-    'garden.harvest': ['synth', 'harvestJoy'],
-    'sticker.get': ['synth', 'stickerPop'],
-    'album.claim': ['synth', 'setFanfare'],
-    'photo.shutter': ['synth', 'shutter'],
-    'hop.bell': ['synth', 'bellJingle'],
-    'golf.sink': ['synth', 'golfSink'],
-    'chop.slice': ['synth', 'chop'],
-    'chop.junk': ['synth', 'splat'],
-    'goalie.dive': ['synth', 'diveWhoosh'],
     'goalie.cheer': ['synth', 'bunnyCheer'],
-    'delivery.drop': ['synth', 'confettiPop'],
-    'hopper.gold': ['synth', 'goldenPing'],
-    'pipe.connect': ['synth', 'pipeConnect'],
     'pipe.fill': ['synth', 'trickle'],
   };
   for (const [id, [kind, name]] of Object.entries(expected)) {
@@ -124,9 +108,24 @@ test('2.0 feature ids map to their bespoke recipes (§E G29 consolidation, V3/G3
     assert.equal(def.kind, kind, `'${id}' kind`);
     assert.equal(def.name, name, `'${id}' recipe`);
   }
-  // V3/G32 (§C3.1 sweep): these v2 bespoke-synth ids flipped to REAL files.
+  // V3/G32 + V4/G78: these v2 bespoke-synth ids flipped to REAL files.
   /** id → a key fragment every mapped sample key must contain */
   const flipped = {
+    'vet.cure': 'itch-sfx/confirm_style_6',
+    'garden.plant': 'footstep_grass',
+    'garden.fertilize': 'footstep_snow',
+    'garden.harvest': 'impactGeneric_light',
+    'sticker.get': 'itch-sfx/confirm_style_4',
+    'album.claim': 'jingles_HIT13',
+    'photo.shutter': 'mouseclick1',
+    'hop.bell': 'impactBell_heavy',
+    'golf.sink': 'chip-lay-',
+    'chop.slice': 'impactPlank_medium',
+    'chop.junk': 'footstep_grass',
+    'goalie.dive': 'footstep_snow',
+    'delivery.drop': 'impactPlate_light',
+    'hopper.gold': 'glass_',
+    'pipe.connect': 'itch-sfx/confirm_style_5',
     'vet.doorbell': 'impactBell_heavy',
     'vet.checkup': 'question_',
     'landmark.found': 'jingles_HIT01',
