@@ -3247,3 +3247,450 @@
 }
 
 /* =============================== end V4/G56 =============================== */
+
+/* ========= V4/G68 — arcade cover grid + pre-game screen + modifier glow ===
+   (PLAN4-GAMES §G7.1–7.3 + §G5.6, PLAN4 §C-SYS4.5 chrome. Append-only marked
+   block per §E0.1-9; rem-based declarations only — px-audit stays green.
+   Shared cover classes live HERE (not in the component-injected arcade CSS)
+   because mgPregame must render without the arcade screen ever mounting.) */
+
+/* --- §G7.1 cover art (grid tile + pre-game): gradient+icon fallback under
+       an <img> that reveals on load and removes itself on error --- */
+.g68-cover-art {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.g68-cover-fallback {
+  color: #fff;
+  opacity: 0.92;
+  filter: drop-shadow(0 2px 4px rgba(74, 59, 54, 0.28));
+}
+
+.g68-cover-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.g68-cover-img.g68-cover-loaded {
+  opacity: 1;
+}
+
+/* --- §G7.2 lock overlay (dim 55 % brown + 🔒 + „ab Level N") --- */
+.g68-cover-lock {
+  position: absolute;
+  inset: 0;
+  background: rgba(74, 59, 54, 0.55);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 800;
+  backdrop-filter: blur(1px);
+  z-index: 2;
+}
+
+.g68-cover-lock svg {
+  opacity: 0.9;
+}
+
+/* --- §G7.2 goobyWelt SPECIAL: gold-dashed 2px border + gold ribbon --- */
+.g68-special {
+  outline: 2px dashed #e8b23a;
+  outline-offset: -2px;
+}
+
+.g68-special-ribbon {
+  position: absolute;
+  z-index: 3;
+  right: -0.3125rem;
+  top: 0.375rem;
+  padding: 0.1875rem 0.4375rem;
+  border-radius: 999px;
+  background: linear-gradient(120deg, #f7b84b, #e8b23a);
+  color: #fff;
+  font-size: 0.625rem;
+  font-weight: 900;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  box-shadow: 0 0.125rem 0 rgba(74, 59, 54, 0.16);
+  transform: rotate(7deg);
+  pointer-events: none;
+  max-width: 86%;
+  text-align: center;
+}
+
+/* --- §C-SYS4.5 modifier glow chrome (canvas overlay + box-shadow pulse +
+       „N× ✨" badge with mm:ss + icon chip; tint via --modifier-color) --- */
+.g68-glow-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.g68-modified,
+.g68-pre-banner {
+  --modifier-color: #ffd34d;
+
+  animation: g68pulse 2s ease infinite;
+}
+
+@keyframes g68pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px var(--modifier-color), 0 0 14px var(--modifier-color), var(--shadow-soft);
+  }
+
+  50% {
+    box-shadow: 0 0 0 3px var(--modifier-color), 0 0 26px var(--modifier-color), var(--shadow-soft);
+  }
+}
+
+.g68-mod-badge {
+  position: absolute;
+  z-index: 4;
+  right: 0.375rem;
+  top: 0.375rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.125rem;
+  pointer-events: none;
+}
+
+.g68-mod-plays {
+  background: var(--modifier-color, #ffd34d);
+  color: var(--brown);
+  border-radius: 999px;
+  padding: 0.1875rem 0.4375rem;
+  font-size: 0.625rem;
+  font-weight: 900;
+  line-height: 1.2;
+  box-shadow: 0 0.125rem 0 rgba(74, 59, 54, 0.16);
+}
+
+.g68-mod-count {
+  background: rgba(74, 59, 54, 0.7);
+  color: #fff;
+  border-radius: 999px;
+  padding: 0.0625rem 0.375rem;
+  font-size: 0.5625rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.g68-mod-chip {
+  position: absolute;
+  z-index: 3;
+  right: 0.375rem;
+  bottom: 0.375rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 999px;
+  background: var(--modifier-color, #ffd34d);
+  color: #fff;
+  box-shadow: 0 0.125rem 0 rgba(74, 59, 54, 0.2);
+  pointer-events: none;
+}
+
+.g68-mod-chip b {
+  position: absolute;
+  bottom: -0.3125rem;
+  right: -0.25rem;
+  font-size: 0.5625rem;
+  font-weight: 900;
+  background: var(--white);
+  color: var(--brown);
+  border-radius: 999px;
+  padding: 0 0.1875rem;
+  box-shadow: 0 1px 0 rgba(74, 59, 54, 0.2);
+}
+
+/* --- §G5.6/§G7.3 pre-game screen (screen id mgPregame) --- */
+.screen-mgPregame {
+  justify-content: flex-start;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.g68-pre-head {
+  width: 100%;
+  max-width: 27.5rem;
+  display: flex;
+  align-items: center;
+  margin: 0.375rem 0 0.5rem;
+  flex: none;
+}
+
+.g68-pre-cover {
+  position: relative;
+  width: min(86vw, 22rem);
+  aspect-ratio: 4 / 3;
+  border-radius: 1.25rem;
+  overflow: hidden;
+  box-shadow: var(--shadow-soft);
+  flex: none;
+}
+
+.g68-pre-name {
+  margin: 0.75rem 0 0;
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: var(--brown);
+  text-align: center;
+  max-width: min(86vw, 22rem);
+  overflow-wrap: anywhere;
+  flex: none;
+}
+
+.g68-pre-sub {
+  margin-top: 0.125rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--brown);
+  opacity: 0.6;
+  text-align: center;
+  max-width: min(86vw, 22rem);
+  flex: none;
+}
+
+.g68-pre-info {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: min(86vw, 22rem);
+  flex: none;
+}
+
+.g68-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: var(--white);
+  border-radius: 999px;
+  padding: 0.25rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: var(--brown);
+  box-shadow: var(--shadow-soft);
+}
+
+.g68-pre-diff,
+.g68-pre-welt {
+  width: min(86vw, 22rem);
+  margin-top: 0.875rem;
+  flex: none;
+}
+
+.g68-pills {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 0.25rem;
+  background: rgba(74, 59, 54, 0.08);
+  border-radius: 999px;
+  padding: 0.25rem;
+}
+
+.g68-pill {
+  min-width: 0;
+  height: 3rem;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  font-family: inherit;
+  /* vw cap: 4 pills must fit 320 px even at uiScale 130 % (rem grows, vw doesn't) */
+  font-size: min(0.6875rem, 3.1vw);
+  font-weight: 800;
+  color: var(--brown);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.125rem;
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  padding: 0 0.25rem;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.g68-pill-on {
+  background: var(--teal);
+  color: #fff;
+  box-shadow: 0 0.125rem 0 rgba(74, 59, 54, 0.14);
+}
+
+.g68-pill-locked {
+  opacity: 0.55;
+}
+
+.g68-pill-tick {
+  display: inline-flex;
+  align-items: center;
+}
+
+.g68-modeline {
+  margin-top: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--brown);
+  opacity: 0.7;
+  text-align: center;
+  min-height: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.g68-modeline-lock {
+  opacity: 0.9;
+}
+
+.g68-pre-welt {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.g68-welt-label {
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: var(--brown);
+  opacity: 0.7;
+  text-align: center;
+}
+
+.g68-pre-banner-host {
+  width: min(86vw, 22rem);
+  flex: none;
+}
+
+.g68-pre-banner {
+  min-height: 2.75rem;
+  margin-top: 0.875rem;
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  background: var(--white);
+  border-radius: 1rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--brown);
+}
+
+.g68-banner-icon {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  background: var(--modifier-color, #ffd34d);
+  color: #fff;
+}
+
+.g68-banner-icon b {
+  position: absolute;
+  bottom: -0.25rem;
+  right: -0.375rem;
+  font-size: 0.625rem;
+  font-weight: 900;
+  background: var(--white);
+  color: var(--brown);
+  border-radius: 999px;
+  padding: 0 0.1875rem;
+  box-shadow: 0 1px 0 rgba(74, 59, 54, 0.2);
+}
+
+.g68-banner-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.g68-banner-name {
+  font-size: 0.8125rem;
+  font-weight: 900;
+}
+
+.g68-banner-effect {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  opacity: 0.7;
+  overflow-wrap: anywhere;
+}
+
+.g68-banner-meta {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.125rem;
+}
+
+.g68-banner-plays {
+  font-size: 0.6875rem;
+  font-weight: 900;
+  background: var(--modifier-color, #ffd34d);
+  color: var(--brown);
+  border-radius: 999px;
+  padding: 0.125rem 0.5rem;
+  white-space: nowrap;
+}
+
+.g68-banner-count {
+  font-size: 0.625rem;
+  font-weight: 800;
+  opacity: 0.65;
+  font-variant-numeric: tabular-nums;
+}
+
+.g68-pre-play {
+  width: min(86vw, 22rem);
+  margin-top: 1rem;
+  padding-bottom: 0.5rem;
+  flex: none;
+}
+
+.g68-play-btn {
+  width: 100%;
+  min-height: 3.5rem;
+  font-size: 1.125rem;
+  font-weight: 800;
+}
+
+.g68-play-locked {
+  min-height: 3.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(74, 59, 54, 0.12);
+  border-radius: 1rem;
+  font-size: 0.875rem;
+  font-weight: 800;
+  color: var(--brown);
+  opacity: 0.75;
+  text-align: center;
+  padding: 0 0.75rem;
+}
+
+/* =============================== end V4/G68 =============================== */
