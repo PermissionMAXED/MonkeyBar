@@ -27,6 +27,16 @@ import { icon } from './icons.js';
 /** Set id → tab icon (icons.js names — reuse per §E0.2). */
 const SET_ICONS = { fish: 'fish', veggies: 'carrot', landmarks: 'home', treats: 'hunger' };
 
+/** V3/FIX-C: make long DE compounds line-breakable. Chrome's hyphens:auto
+ * (a) skips words that already contain a hyphen („Stadt-Sehenswürdigkeiten"
+ * stays one unbreakable token) and (b) never hyphenates a word that starts
+ * mid-line — so a zero-width space re-tokenizes hard hyphens and soft
+ * hyphens (rendered only at an actual break) give ≥10-char words mid-line
+ * break points. Display-only (never fed back into state). */
+const hy = (s) => String(s)
+  .replace(/-/g, '-\u200B')
+  .replace(/[A-Za-zÀ-ÿ]{10,}/g, (w) => w.replace(/(.{6})(?=.{3})/g, '$1\u00AD'));
+
 /** Deterministic pastel tint per sticker id (procedural art, §D4). */
 function tintOf(setId, entryId) {
   let h = 0;
@@ -38,11 +48,14 @@ function tintOf(setId, entryId) {
 const ALBUM_CSS = `
 .screen-album{justify-content:flex-start;overflow-y:auto;-webkit-overflow-scrolling:touch;}
 .g23-al-head{width:100%;max-width:440px;display:flex;align-items:center;gap:10px;margin:6px 0 6px;flex:none;}
-.g23-al-title{flex:1;min-width:0;margin:0;font-size:clamp(17px,6vw,30px);font-weight:800;color:var(--brown);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.g23-al-title{flex:1;min-width:0;margin:0;font-size:clamp(15px,5.5vw,30px);font-weight:800;color:var(--brown);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;} /* V3/FIX-C: 6vw→5.5vw — "Sticker Album" beside the n/28 pill at 320px @ 130% */
 .g23-al-count{flex:none;background:var(--white);border-radius:999px;padding:8px 12px;font-size:15px;font-weight:800;color:var(--teal-dark);box-shadow:var(--shadow-soft);font-variant-numeric:tabular-nums;}
-.g23-al-tabs{width:100%;max-width:440px;display:flex;gap:6px;flex:none;margin-bottom:8px;}
-.g23-al-tab{flex:1;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:5px;border:none;border-radius:14px;min-height:44px;padding:9px 4px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;background:rgba(255,255,255,.6);color:var(--brown);box-shadow:var(--shadow-soft);-webkit-tap-highlight-color:transparent;} /* V2 fix (E16): >=44px hit target */
-.g23-al-tab span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* V3/FIX-C (E9/E13 P1): a single 4-tab row can never hold the DE set names
+   („Stadt-Sehenswürdigkeiten") at 320px — the strip wraps into a 2×2 grid and
+   labels wrap to 2 hyphenated lines instead of ellipsizing („Stadt-…"). */
+.g23-al-tabs{width:100%;max-width:440px;display:flex;flex-wrap:wrap;gap:6px;flex:none;margin-bottom:8px;}
+.g23-al-tab{flex:1 1 40%;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:5px;border:none;border-radius:14px;min-height:44px;padding:9px 4px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;background:rgba(255,255,255,.6);color:var(--brown);box-shadow:var(--shadow-soft);-webkit-tap-highlight-color:transparent;} /* V2 fix (E16): >=44px hit target */
+.g23-al-tab span{min-width:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:break-word;hyphens:auto;text-align:center;line-height:1.15;}
 .g23-al-tab.g23-active{background:var(--teal);color:#fff;}
 .g23-al-page{width:100%;max-width:440px;background:var(--white);border-radius:18px;box-shadow:var(--shadow-soft);padding:14px;flex:none;margin-bottom:18px;}
 .g23-al-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(76px,1fr));gap:10px;}
@@ -64,9 +77,12 @@ const ALBUM_CSS = `
 
 /* ── V3/G34: top-level album tabs + Stickerbuch (§C5.3 — rem-based) ─────── */
 .g34-al-toptabs{width:100%;max-width:440px;display:flex;gap:0.375rem;flex:none;margin-bottom:0.5rem;}
-.g34-al-toptab{flex:1;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:0.3125rem;border:none;border-radius:0.875rem;min-height:max(44px,2.75rem);padding:0.5625rem 0.25rem;font-family:inherit;font-size:0.8125rem;font-weight:800;cursor:pointer;background:rgba(255,255,255,.6);color:var(--brown);box-shadow:var(--shadow-soft);-webkit-tap-highlight-color:transparent;position:relative;}
+/* V3/FIX-C (E8 P2): vw-capped font + inline (non-absolute) count badge — the
+   absolutely-positioned badge used to sit ON the tab text at 320px @ 130% DE. */
+.g34-al-toptab{flex:1;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:0.3125rem;border:none;border-radius:0.875rem;min-height:max(44px,2.75rem);padding:0.5625rem 0.25rem;font-family:inherit;font-size:min(0.8125rem,4vw);font-weight:800;cursor:pointer;background:rgba(255,255,255,.6);color:var(--brown);box-shadow:var(--shadow-soft);-webkit-tap-highlight-color:transparent;position:relative;}
 .g34-al-toptab.g34-active{background:var(--pink);color:#fff;}
-.g34-al-toptab .g34-sb-newdot{position:absolute;top:0.375rem;right:0.5rem;}
+.g34-al-toptab>span:not(.g34-sb-newdot){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g34-al-toptab .g34-sb-newdot{position:static;flex:none;}
 .g34-sb-pager{width:100%;max-width:440px;flex:none;display:flex;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;scrollbar-width:none;border-radius:1.125rem;}
 .g34-sb-pager::-webkit-scrollbar{display:none;}
 .g34-sb-page{flex:0 0 100%;min-width:100%;scroll-snap-align:center;scroll-snap-stop:always;background:var(--white);border-radius:1.125rem;box-shadow:var(--shadow-soft);padding:0.875rem;box-sizing:border-box;}
@@ -81,8 +97,10 @@ const ALBUM_CSS = `
 .g34-sb-slot .g34-sb-newdot{position:absolute;top:0.25rem;right:0.375rem;}
 .g34-sb-pop{animation:g34-sb-pop 300ms cubic-bezier(.34,1.56,.64,1);} /* §C5.3 300 ms pop-in */
 @keyframes g34-sb-pop{0%{transform:scale(.2);opacity:0;}100%{transform:scale(1);opacity:1;}}
-.g34-sb-dots{width:100%;display:flex;justify-content:center;gap:0.125rem;flex:none;margin:0.25rem 0 0.75rem;}
-.g34-sb-dot{border:none;background:none;padding:0;width:max(44px,2.75rem);height:max(28px,1.75rem);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+/* V3/FIX-C (E9 P1-3): pager dot hit areas were 28-30px tall — ≥44px effective
+   at every scale now (44px real-px floor); tighter margins compensate. */
+.g34-sb-dots{width:100%;display:flex;justify-content:center;gap:0.125rem;flex:none;margin:0 0 0.5rem;}
+.g34-sb-dot{border:none;background:none;padding:0;width:max(44px,2.75rem);height:max(44px,2.75rem);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent;}
 .g34-sb-dot::after{content:'';width:0.5rem;height:0.5rem;border-radius:999px;background:rgba(74,59,54,.22);transition:background 150ms ease,transform 150ms ease;}
 .g34-sb-dot.g34-active::after{background:var(--pink);transform:scale(1.35);}
 .g34-sb-sheet{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:rgba(42,26,60,.45);padding:1rem;}
@@ -132,6 +150,12 @@ export function registerAlbumScreen({ store, ui, audio }) {
     /** @type {HTMLElement|null} open detail sheet (rebuilt on re-render) */
     let sheetEl = null;
     let sheetStickerId = null;
+    /** V3/FIX-C (E8 P2): sheet state at open time — re-renders only rebuild
+     * the sheet when these change, so the §C5.3 first-view pop-in + confetti
+     * survive the markSeen store-write (which used to re-render and replace
+     * the card within a frame, killing the animation). */
+    let sheetUnlockedAtOpen = null;
+    let sheetLangAtOpen = null;
 
     const head = document.createElement('div');
     head.className = 'g23-al-head';
@@ -173,6 +197,8 @@ export function registerAlbumScreen({ store, ui, audio }) {
       const unlocked = !!c?.stickers?.unlocked?.[def.id];
       const firstView = unlocked && c?.stickers?.seen?.[def.id] !== true;
       sheetStickerId = def.id;
+      sheetUnlockedAtOpen = unlocked; // V3/FIX-C: rebuild guard state
+      sheetLangAtOpen = getLang();
       sheetEl = document.createElement('div');
       sheetEl.className = 'g34-sb-sheet';
       const card = document.createElement('div');
@@ -220,9 +246,10 @@ export function registerAlbumScreen({ store, ui, audio }) {
       for (const set of COLLECTION_SETS) {
         const tab = document.createElement('button');
         tab.className = `g23-al-tab${set.id === activeSet ? ' g23-active' : ''}`;
-        tab.innerHTML = `${icon(SET_ICONS[set.id] ?? 'star', 14)}<span>${t(set.nameKey)}</span>`;
+        // V3/FIX-C: lang attr drives hyphens:auto for the wrapped DE names
+        tab.innerHTML = `${icon(SET_ICONS[set.id] ?? 'star', 14)}<span lang="${getLang()}">${hy(t(set.nameKey))}</span>`;
         tab.addEventListener('click', () => {
-          audio.play('ui.tap');
+          audio.play('ui.tabSwitch'); // V3/FIX-C (E19): tab strips use the tab cue
           activeSet = set.id;
           flavorKey = null;
           render();
@@ -422,10 +449,17 @@ export function registerAlbumScreen({ store, ui, audio }) {
       if (activeTab === 'book') renderBook();
       else renderCollections();
 
-      // Keep an open detail sheet alive across re-renders (fresh strings/state).
+      // Keep an open detail sheet alive across re-renders. V3/FIX-C (E8 P2):
+      // the sheet DOM lives on `el` (outside `body`), so it survives the wipe
+      // above — only REBUILD it when its unlock state or the language changed
+      // (a blind rebuild killed the first-view pop-in/confetti within a frame,
+      // because openSheet's markSeen store-write re-rendered immediately).
       if (sheetStickerId) {
         const def = STICKERS.find((s) => s.id === sheetStickerId);
-        if (def) openSheet(def);
+        const nowUnlocked = !!state?.stickers?.unlocked?.[sheetStickerId];
+        if (def && (nowUnlocked !== sheetUnlockedAtOpen || getLang() !== sheetLangAtOpen)) {
+          openSheet(def);
+        }
       }
     }
 

@@ -2275,3 +2275,26 @@
 }
 
 /* ---------- end V3/G47 ---------- */
+
+/* ---------- V3/FIX-C: layout package 1 (E9/E13/E8 fixes) ---------- */
+
+/* E9 P1-1: at 320×568 @ 115/130 % (+notch) the results card outgrows the
+   viewport and the bottom "Home"/„Nach Hause" button was cut off — the screen
+   never scrolled (overflow visible). Settings pattern: flex-start + scroll;
+   margin:auto keeps the card vertically centered when there IS room, and the
+   .screen safe-bottom padding keeps the buttons clear of the home bar. */
+.screen-mgResults {
+  justify-content: flex-start;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.screen-mgResults .card {
+  flex: none; /* never squash — overflow scrolls instead */
+  margin-top: auto;
+  margin-bottom: auto;
+}
+.screen-mgResults .mg-btn-row {
+  flex-wrap: wrap; /* long DE labels stack instead of running offscreen */
+}
+
+/* ---------- end V3/FIX-C ---------- */

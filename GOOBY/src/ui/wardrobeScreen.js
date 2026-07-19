@@ -24,7 +24,7 @@ import {
   outfitsForSlot,
 } from '../data/outfits.js';
 import { SKINS, DEFAULT_SKIN, getSkin } from '../data/skins.js'; // V2/G22 (§C8.5)
-import { t } from '../data/strings.js';
+import { t, getLang } from '../data/strings.js'; // V3/FIX-C: getLang for hyphens:auto lang tagging
 import { icon } from './icons.js';
 import { createGooby } from '../character/gooby.js';
 import {
@@ -48,17 +48,21 @@ const WARDROBE_CSS = `
    body scrolls, so the back button is always reachable after a deep scroll. */
 .g12-wr-body{flex:1;min-height:0;width:100%;display:flex;flex-direction:column;align-items:center;overflow-y:auto;-webkit-overflow-scrolling:touch;}
 .g12-wr-head{width:100%;max-width:27.5rem;display:flex;align-items:center;gap:0.625rem;margin:0.375rem 0 0.625rem;flex:none;}
-/* F3: the title shrinks/ellipsizes at narrow widths — never the coins pill */
-.g12-wr-title{flex:1;min-width:0;margin:0;font-size:clamp(1.3125rem,7.5vw,1.875rem);font-weight:800;color:var(--brown);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.g12-wr-coins{flex:none;display:inline-flex;align-items:center;gap:0.375rem;background:var(--white);border-radius:999px;padding:0.5rem 0.875rem;font-size:1rem;font-weight:800;color:var(--brown);box-shadow:var(--shadow-soft);}
+/* F3: the title shrinks/ellipsizes at narrow widths — never the coins pill.
+   V3/FIX-C (E9/E13 P1): vw-compressed title + coins pill so „Garderobe" stays
+   readable beside the pill at 320px × 115/130 % (was „Garder…"/„W…"). */
+.g12-wr-title{flex:1;min-width:0;margin:0;font-size:min(1.875rem,6.5vw);font-weight:800;color:var(--brown);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.g12-wr-coins{flex:none;display:inline-flex;align-items:center;gap:0.375rem;background:var(--white);border-radius:999px;padding:0.5rem min(0.875rem,2.5vw);font-size:min(1rem,4.5vw);font-weight:800;color:var(--brown);box-shadow:var(--shadow-soft);}
 .g12-wr-coins svg{color:var(--yellow);}
 .g12-wr-stage{position:relative;width:100%;max-width:27.5rem;height:${PREVIEW_H}px;border-radius:1.5rem;overflow:hidden;background:linear-gradient(#DFF3F0,#FFF6EC);box-shadow:var(--shadow-soft);flex:none;}
 .g12-wr-stage canvas{display:block;width:100%;height:100%;}
 .g12-wr-tryon{position:absolute;top:0.625rem;left:0.75rem;background:rgba(255,255,255,.9);border-radius:999px;padding:0.375rem 0.75rem;font-size:0.8125rem;font-weight:800;color:var(--pink-dark);box-shadow:var(--shadow-soft);}
 .g12-wr-tabs{width:100%;max-width:27.5rem;display:flex;gap:0.375rem;margin:0.75rem 0 0.625rem;flex:none;}
-.g12-wr-tabs .g12-wr-tab{flex:1;min-width:0;border:none;border-radius:1rem;background:rgba(255,255,255,.75);border-bottom:0.25rem solid rgba(74,59,54,.12);color:var(--brown);font-family:inherit;font-size:clamp(0.5625rem,2.8vw,0.75rem);font-weight:800;line-height:1.05;white-space:normal;overflow:hidden;text-overflow:clip;overflow-wrap:anywhere;word-break:break-word;min-height:max(44px, 2.875rem);padding:0.25rem 0.125rem;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+.g12-wr-tabs .g12-wr-tab{flex:1;min-width:0;border:none;border-radius:1rem;background:rgba(255,255,255,.75);border-bottom:0.25rem solid rgba(74,59,54,.12);color:var(--brown);font-family:inherit;font-size:min(0.75rem,max(3.25vw,0.5rem));font-weight:800;line-height:1.05;white-space:normal;overflow:hidden;text-overflow:clip;overflow-wrap:break-word;hyphens:auto;min-height:max(44px, 2.875rem);padding:0.25rem 0.0625rem;cursor:pointer;-webkit-tap-highlight-color:transparent;} /* V3/FIX-C: hyphenate DE tab labels; vw-capped font so „schmuck" fits at 320@130 */
 .g12-wr-tab.g12-on{background:var(--pink);border-bottom-color:var(--pink-dark);color:#fff;}
-.g12-wr-grid{width:100%;max-width:27.5rem;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0.625rem;padding-bottom:1.125rem;flex:none;}
+/* V3/FIX-C (E9 P1-2): auto-fit columns — cards keep a readable min width, so
+   320px @ 115/130 % drops to 2 columns instead of clipping item names. */
+.g12-wr-grid{width:100%;max-width:27.5rem;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(6.25rem,27vw),1fr));gap:0.625rem;padding-bottom:1.125rem;flex:none;}
 .g12-wr-item{position:relative;display:flex;flex-direction:column;align-items:center;gap:0.25rem;min-width:0;border:0.1875rem solid transparent;border-radius:1.125rem;background:var(--white);box-shadow:var(--shadow-soft);font-family:inherit;color:var(--brown);cursor:pointer;padding:0.5rem 0.25rem 0.625rem;-webkit-tap-highlight-color:transparent;transition:transform 90ms ease;}
 .g12-wr-item:active{transform:scale(.95);}
 .g12-wr-item.g12-equipped{border-color:var(--pink);}
@@ -67,7 +71,9 @@ const WARDROBE_CSS = `
 .g40-level-badge{display:inline-flex;align-items:center;justify-content:center;gap:0.1875rem;min-height:1.375rem;padding:0.125rem 0.375rem;border-radius:999px;background:var(--brown);color:#fff;font-size:0.625rem;font-weight:900;line-height:1;}
 .g40-level-badge svg{color:var(--yellow);}
 .g12-wr-item img{width:${THUMB_SIZE / 2}px;height:${THUMB_SIZE / 2}px;border-radius:0.75rem;background:#FDF3E7;}
-.g12-wr-item-name{font-size:0.7188rem;font-weight:800;line-height:1.15;text-align:center;max-width:100%;max-height:1.6875rem;overflow:hidden;overflow-wrap:anywhere;}
+/* V3/FIX-C (E9 P1-2): 2-line clamp with full words (hyphenated via the card's
+   lang attr) — the old max-height cut „Pearl Necklace" & co. mid-glyph. */
+.g12-wr-item-name{font-size:0.7188rem;font-weight:800;line-height:1.15;text-align:center;max-width:100%;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:break-word;hyphens:auto;}
 .g12-wr-item-sub{display:inline-flex;align-items:center;gap:0.1875rem;font-size:0.6875rem;font-weight:800;opacity:.75;min-height:1rem;}
 .g12-wr-item-sub svg{color:var(--yellow);}
 .g12-wr-item-sub.g12-sub-equipped{color:var(--pink-dark);opacity:1;}
@@ -317,9 +323,10 @@ export function registerWardrobe({ store, ui, audio }) {
       for (const slot of WR_TABS) {
         const b = document.createElement('button');
         b.className = `g12-wr-tab${slot === tab ? ' g12-on' : ''}`;
+        b.lang = getLang(); // V3/FIX-C: language-correct hyphenation
         b.textContent = t(`wardrobe.slot.${slot}`);
         b.addEventListener('click', () => {
-          audio.play('ui.tap');
+          audio.play('ui.tabSwitch'); // V3/FIX-C (E19): tab strips use the tab cue
           tab = slot;
           tryOn = null;
           furTryOn = null;
@@ -436,7 +443,7 @@ export function registerWardrobe({ store, ui, audio }) {
             : `<span class="g12-wr-item-sub">${icon('coin', 13)}${def.price}</span>`;
         card.innerHTML = `
           <span class="g22-skin-chip" style="background:linear-gradient(135deg,${def.colors.body} 0 55%,${def.colors.belly} 55% 80%,${def.colors.earInner} 80% 100%);"></span>
-          <span class="g12-wr-item-name">${t(def.nameKey)}</span>
+          <span class="g12-wr-item-name" lang="${getLang()}">${t(def.nameKey)}</span>
           ${sub}`;
         card.addEventListener('click', () => onSkinTap(def));
         if (buyMode && !isOwned) {
@@ -483,7 +490,7 @@ export function registerWardrobe({ store, ui, audio }) {
             : `<span class="g12-wr-item-sub">${icon('coin', 13)}${def.price}</span>`;
         card.innerHTML = `
           ${thumb ? `<img src="${thumb}" alt="">` : ''}
-          <span class="g12-wr-item-name">${t(def.nameKey)}</span>
+          <span class="g12-wr-item-name" lang="${getLang()}">${t(def.nameKey)}</span>
           ${sub}`;
         card.addEventListener('click', () => onItemTap(def));
         if (buyMode && !isOwned && !isLocked) {

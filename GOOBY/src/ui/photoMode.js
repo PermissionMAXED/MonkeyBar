@@ -15,7 +15,7 @@
 
 import { PHOTO } from '../data/constants.js';
 import { getAchievementsEngine } from '../systems/achievementsEngine.js';
-import { t } from '../data/strings.js';
+import { t, getLang } from '../data/strings.js'; // V3/FIX-C: getLang for hyphens:auto lang tagging
 import { icon } from './icons.js';
 
 // ── pure catalogs (§C12.2 — tested for integrity) ──────────────────────────
@@ -139,12 +139,16 @@ body.g23-photo .g23-sick-chip{display:none!important;}
 .g23-ph-flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity 90ms ease;}
 .g23-ph-flash.g23-on{opacity:.92;}
 .g23-ph-bar{position:relative;display:flex;align-items:center;gap:0.375rem;padding:0.5rem calc(0.5rem + var(--safe-right)) calc(0.5rem + var(--safe-bottom)) calc(0.5rem + var(--safe-left));background:rgba(42,26,60,.78);backdrop-filter:blur(6px);}
-.g23-ph-exit{flex:none;display:inline-flex;align-items:center;justify-content:center;width:2.75rem;height:2.75rem;border:none;border-radius:50%;background:rgba(255,255,255,.16);color:#fff;cursor:pointer;-webkit-tap-highlight-color:transparent;} /* V2 fix (E16): >=44px hit target */
+/* V3/FIX-C (E9 P1-3): 2.75rem is 37.4px at 85% scale — the exit button keeps
+   a real 44px floor at EVERY scale (max() per the §B3 tap-target rule). */
+.g23-ph-exit{flex:none;display:inline-flex;align-items:center;justify-content:center;width:clamp(44px,2.75rem,3rem);height:clamp(44px,2.75rem,3rem);border:none;border-radius:50%;background:rgba(255,255,255,.16);color:#fff;cursor:pointer;-webkit-tap-highlight-color:transparent;} /* V2 fix (E16): >=44px hit target — the px cap frees toolbar width for the pickers at 130% (bar space is viewport-, not scale-bound) */
 .g23-ph-pickers{flex:1;min-width:0;display:flex;gap:0.375rem;}
 .g23-ph-pick{flex:1;min-width:0;min-height:max(44px, 2.75rem);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;border:none;border-radius:0.75rem;padding:0.375rem 0.25rem;background:rgba(255,255,255,.14);color:#fff;font-family:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;} /* V2 fix (E16): >=44px hit target */
-.g23-ph-pick-k{font-size:0.5313rem;font-weight:800;opacity:.6;text-transform:uppercase;letter-spacing:0.025rem;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.g23-ph-pick-v{font-size:0.6875rem;font-weight:800;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.g23-ph-shutter{flex:none;width:3.5rem;height:3.5rem;border-radius:50%;border:0.25rem solid #fff;background:var(--pink);box-shadow:0 0 0 3px rgba(42,26,60,.4);cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform 90ms ease;}
+/* V3/FIX-C (E9 P2): picker key/value truncated at 320px @ 130% — vw-capped
+   fonts + the value wraps to 2 hyphenated lines instead of ellipsizing. */
+.g23-ph-pick-k{font-size:min(0.5313rem,2.6vw);font-weight:800;opacity:.6;text-transform:uppercase;letter-spacing:0.025rem;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g23-ph-pick-v{font-size:min(0.6875rem,3.4vw);font-weight:800;max-width:100%;text-align:center;line-height:1.1;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3;overflow:hidden;overflow-wrap:break-word;hyphens:auto;} /* 3 lines: „Über-glück-lich" at 320px @ 130% */
+.g23-ph-shutter{flex:none;width:min(3.5rem,60px);height:min(3.5rem,60px);border-radius:50%;border:0.25rem solid #fff;background:var(--pink);box-shadow:0 0 0 3px rgba(42,26,60,.4);cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform 90ms ease;} /* V3/FIX-C: px cap at ≥115% keeps picker text readable at 320px */
 .g23-ph-shutter:active{transform:scale(.92);}
 .g23-ph-shutter[disabled]{opacity:.5;}
 `;
@@ -262,6 +266,7 @@ export function initPhotoMode({ ui, audio, sceneManager }) {
   function picker(labelKey, valueOf, onCycle) {
     const b = document.createElement('button');
     b.className = 'g23-ph-pick';
+    b.lang = getLang(); // V3/FIX-C: language-correct hyphenation of values
     const sync = () => {
       b.innerHTML = `<span class="g23-ph-pick-k">${t(labelKey)}</span>
         <span class="g23-ph-pick-v">${valueOf()}</span>`;

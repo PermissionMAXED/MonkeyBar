@@ -123,6 +123,7 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
       againBtn.className = 'btn btn-teal';
       againBtn.innerHTML = `${icon('replay', 20)} ${t('mg.results.playAgain')}`;
       againBtn.addEventListener('click', async () => {
+        audio.play('ui.confirmBig'); // V3/FIX-C (E19): results CTAs were silent
         ui.closeAll();
         await launch(r.gameId, r.launchParams);
       });
@@ -134,6 +135,9 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
         ? `${icon('cart', 20)} ${t('trip.shopTitle')}`
         : `${icon('home', 20)} ${t('mg.results.home')}`;
       homeBtn.addEventListener('click', () => {
+        // V3/FIX-C (E19): silent before — trip results continue INTO the shop
+        // (confirm), plain results leave to home (close/back semantics).
+        audio.play(isTrip ? 'ui.confirmBig' : 'ui.close');
         ui.closeAll();
         exitToHome(r.launchParams);
       });

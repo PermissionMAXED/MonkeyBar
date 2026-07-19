@@ -52,7 +52,8 @@ const PROFILE_CSS = `
 .g23-pr-grid{display:grid;grid-template-columns:1fr 1fr;gap:0.375rem 0.875rem;}
 @media (max-width:340px){.g23-pr-grid{grid-template-columns:1fr;}}
 .g23-pr-rowline{display:flex;align-items:baseline;gap:0.5rem;min-width:0;}
-.g23-pr-k{flex:1;min-width:0;font-size:0.75rem;font-weight:700;color:var(--brown);opacity:.6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* V3/FIX-C: totals keys („Münzen ausgegeben") wrap to 2 lines at 130% */
+.g23-pr-k{flex:1;min-width:0;font-size:0.75rem;font-weight:700;color:var(--brown);opacity:.6;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:break-word;hyphens:auto;line-height:1.2;}
 .g23-pr-v{flex:none;font-size:0.8125rem;font-weight:800;color:var(--brown);font-variant-numeric:tabular-nums;}
 .g23-pr-games{display:flex;flex-direction:column;gap:0.25rem;max-height:17.5rem;overflow-y:auto;-webkit-overflow-scrolling:touch;}
 .g23-pr-game{display:flex;align-items:center;gap:0.5rem;padding:0.3125rem 0.375rem;border-radius:0.75rem;}
@@ -60,15 +61,28 @@ const PROFILE_CSS = `
 .g23-pr-game svg{flex:none;color:var(--teal);}
 .g23-pr-game.g23-locked{opacity:.45;}
 .g23-pr-game.g23-locked svg{color:rgba(74,59,54,.4);}
-.g23-pr-game-name{flex:1;min-width:0;font-size:0.75rem;font-weight:800;color:var(--brown);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* V3/FIX-C (E13 P1): long DE game titles („Gießkannen-Wirbel", …) wrap to 2
+   hyphenated lines instead of ellipsizing at 320px. */
+.g23-pr-game-name{flex:1;min-width:0;font-size:0.75rem;font-weight:800;color:var(--brown);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:break-word;hyphens:auto;line-height:1.2;}
 .g23-pr-game-n{flex:none;font-size:0.75rem;font-weight:800;color:var(--brown);opacity:.7;font-variant-numeric:tabular-nums;}
 .g23-pr-sets{display:flex;flex-direction:column;gap:0.5rem;}
 .g23-pr-set{display:flex;align-items:center;gap:0.625rem;}
-.g23-pr-set-name{flex:none;width:6.875rem;font-size:0.75rem;font-weight:800;color:var(--brown);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* V3/FIX-C (E13 P1): „Stadt-Sehenswürdigkeiten" wraps to 2 lines, no ellipsis */
+.g23-pr-set-name{flex:none;width:6.875rem;font-size:0.75rem;font-weight:800;color:var(--brown);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:break-word;hyphens:auto;line-height:1.2;}
 .g23-pr-set-bar{flex:1;height:0.5625rem;border-radius:999px;background:rgba(74,59,54,.1);overflow:hidden;}
 .g23-pr-set-fill{display:block;height:100%;border-radius:999px;background:var(--teal);}
 .g23-pr-set-n{flex:none;font-size:0.75rem;font-weight:800;opacity:.6;font-variant-numeric:tabular-nums;}
 `;
+
+/** V3/FIX-C: make long DE compounds line-breakable. Chrome's hyphens:auto
+ * (a) skips words that already contain a hyphen („Stadt-Sehenswürdigkeiten"
+ * stays one unbreakable token) and (b) never hyphenates a word that starts
+ * mid-line — so a zero-width space re-tokenizes hard hyphens and soft
+ * hyphens (rendered only at an actual break) give ≥10-char words mid-line
+ * break points. Display-only (never fed back into state). */
+const hy = (s) => String(s)
+  .replace(/-/g, '-\u200B')
+  .replace(/[A-Za-zÀ-ÿ]{10,}/g, (w) => w.replace(/(.{6})(?=.{3})/g, '$1\u00AD'));
 
 /** profile.playtimeMin → "h:mm". */
 function fmtPlaytime(min) {
@@ -204,7 +218,7 @@ export function registerProfileScreen({ store, ui, audio, sceneManager }) {
           <h2>${t('profile.totals')}</h2>
           <div class="g23-pr-grid">
             ${totals.map(([k, v]) => `
-              <span class="g23-pr-rowline"><span class="g23-pr-k">${t(k)}</span>
+              <span class="g23-pr-rowline"><span class="g23-pr-k" lang="${getLang()}">${hy(t(k))}</span>
                 <span class="g23-pr-v">${v}</span></span>`).join('')}
           </div>
         </div>
@@ -216,7 +230,7 @@ export function registerProfileScreen({ store, ui, audio, sceneManager }) {
               return `
                 <span class="g23-pr-game${locked ? ' g23-locked' : ''}">
                   ${icon(locked ? 'lock' : m.icon, 16)}
-                  <span class="g23-pr-game-name">${t(m.titleKey)}</span>
+                  <span class="g23-pr-game-name" lang="${getLang()}">${hy(t(m.titleKey))}</span>
                   <span class="g23-pr-game-n">${locked
                     ? t('profile.lockedRow', { level: m.minLevel })
                     : `${t('profile.best')} ${best[m.id] ?? 0} · ${t('profile.plays')} ${plays[m.id] ?? 0}`}</span>
@@ -231,7 +245,7 @@ export function registerProfileScreen({ store, ui, audio, sceneManager }) {
               const p = setProgress(state.collections ?? {}, set);
               return `
                 <span class="g23-pr-set">
-                  <span class="g23-pr-set-name">${t(set.nameKey)}</span>
+                  <span class="g23-pr-set-name" lang="${getLang()}">${hy(t(set.nameKey))}</span>
                   <span class="g23-pr-set-bar"><span class="g23-pr-set-fill"
                     style="width:${Math.round((p.have / p.total) * 100)}%"></span></span>
                   <span class="g23-pr-set-n">${p.have}/${p.total}</span>
