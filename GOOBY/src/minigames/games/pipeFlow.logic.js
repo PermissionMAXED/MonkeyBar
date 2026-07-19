@@ -33,7 +33,42 @@ export const PIPE = Object.freeze({
   LEAK_FROM_PUZZLE: 3,
   LEAK_SEC: 25,
   LEAK_PENALTY: 5,
+  /** §G5 derived-tune fields used by both scene and certification bot. */
+  PREVIEW_SPEED_MULT: 1,
+  ROTATE_SEC: 0.16,
+  FILL_STEP_SEC: 0.09,
+  FILL_END_DELAY_SEC: 1.1,
+  ENDLESS: false,
+  ENDLESS_FAILURE_LIMIT: 3,
 });
+
+/** §G5 sequence/puzzle difficulty; normal returns PIPE unchanged. */
+export function applyDifficulty(tune = PIPE, mode = 'normal') {
+  if (mode === 'normal' || !['easy', 'hard', 'endless'].includes(mode)) return tune;
+  const hard = mode === 'hard' || mode === 'endless';
+  const previewMult = hard ? 1.15 : 0.85;
+  const windowMult = hard ? 0.8 : 1.25;
+  return Object.freeze({
+    ...tune,
+    PREVIEW_SPEED_MULT: previewMult,
+    ROTATE_SEC: tune.ROTATE_SEC / previewMult,
+    FILL_STEP_SEC: tune.FILL_STEP_SEC / previewMult,
+    FILL_END_DELAY_SEC: tune.FILL_END_DELAY_SEC / previewMult,
+    LEAK_SEC: Math.max(0.35, tune.LEAK_SEC * windowMult),
+    LEAK_FROM_PUZZLE: Math.max(1, tune.LEAK_FROM_PUZZLE + (hard ? -1 : 1)),
+    ENDLESS: mode === 'endless',
+  });
+}
+
+export function createPipeEndlessState(limit = PIPE.ENDLESS_FAILURE_LIMIT) {
+  return { failures: 0, limit, ended: false };
+}
+
+export function recordPipeFailure(state, kind) {
+  if ((kind === 'unsolved' || kind === 'leak') && !state.ended) state.failures += 1;
+  state.ended = state.failures >= state.limit;
+  return state.ended;
+}
 
 /** Directions: 0=N (up), 1=E, 2=S (down), 3=W. Row 0 is the top row. */
 export const DIRS = Object.freeze({ N: 0, E: 1, S: 2, W: 3 });
@@ -518,4 +553,36 @@ export function pipeScore(solved, totalTaps, optimalTaps, tune = PIPE, leakPenal
       tapEfficiencyBonus(totalTaps, optimalTaps, tune) -
       Math.max(0, leakPenalties) * tune.LEAK_PENALTY
   );
+}
+
+/** Solver-backed deterministic certification bot using the derived tune. */
+export function simulatePipeAutoplay(seed, mode = 'normal') {
+  const tune = applyDifficulty(PIPE, mode);
+  const duration = tune.ENDLESS ? 150 : tune.DURATION_SEC;
+  let elapsed = 0;
+  let puzzle = 0;
+  let solved = 0;
+  let failures = 0;
+  let taps = 0;
+  let optimal = 0;
+  while (elapsed < duration && failures < tune.ENDLESS_FAILURE_LIMIT) {
+    puzzle += 1;
+    const board = generateBoard(seed * 1009 + puzzle, tune);
+    const solution = solveBoard(board);
+    // Faster previews shorten the time available to inspect each tile. The
+    // bot reads that derived speed as extra study/tap pressure, not as a free
+    // throughput boost, so Leicht ≥ Mittel ≥ Schwer remains meaningful.
+    const solveSec = (3.2 + solution.taps.length * 0.34) * tune.PREVIEW_SPEED_MULT;
+    const leaking = puzzle >= tune.LEAK_FROM_PUZZLE && solveSec >= tune.LEAK_SEC;
+    elapsed += solveSec + tune.FILL_END_DELAY_SEC;
+    if (elapsed > duration) {
+      if (tune.ENDLESS) failures += 1;
+      break;
+    }
+    if (leaking) failures += 1;
+    solved += 1;
+    taps += solution.taps.length;
+    optimal += solution.taps.length;
+  }
+  return { score: pipeScore(solved, taps, optimal, tune, failures), solved, failures, tune };
 }

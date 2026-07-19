@@ -26,6 +26,8 @@ import { applyEquippedOutfits } from '../../character/outfitAttach.js';
 import { clampFloatTextToView } from '../framework.js';
 import {
   HOPPER,
+  applyDifficulty,
+  withHopperRuntime,
   speedAt,
   hopperScore,
   laneAfterGesture,
@@ -182,6 +184,17 @@ export default {
   /** @param {object} ctx §E8 game context */
   init(ctx) {
     this.ctx = ctx;
+    const modifier = ctx.params?.modifier ?? {};
+    this.tune = withHopperRuntime(
+      applyDifficulty(HOPPER, ctx.params?.difficulty ?? 'normal'),
+      {
+        speedMult: modifier.speedMult ?? 1,
+        scoreMult: modifier.scoreMult ?? 1,
+        coinRate: modifier.coinRate ?? 1,
+        hitboxMult: modifier.hitboxMult ?? 1,
+        goobyScale: modifier.type === 'riesenGooby' ? 1.6 : 1,
+      }
+    );
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
 
@@ -189,6 +202,7 @@ export default {
     this.traveled = 0; // track meters climbed
     this.distPoints = 0;
     this.pickupPoints = 0;
+    this.displayedScore = 0;
     this.lane = 1;
     this.craftX = 0;
     this.shielded = false;
@@ -199,7 +213,7 @@ export default {
     this.swipeTapSuppressT = 0;
     this.wormhole = { spawned: false, active: false, t: 0, stars: 0, gate: null };
     // shower state machine: 'idle' | 'telegraph' | 'active'
-    this.shower = { state: 'idle', t: 0, lanes: null, dropT: 0, nextAt: HOPPER.SHOWER_EVERY_SEC };
+    this.shower = { state: 'idle', t: 0, lanes: null, dropT: 0, nextAt: this.tune.SHOWER_EVERY_SEC };
     this.lastRowM = 26; // first row spawns a friendly bit ahead
     /** @type {import('./starHopper.logic.js').MeteorRow[]} */
     this.recentRows = [];
@@ -290,7 +304,7 @@ export default {
     this.craft.add(speeder);
     this.gooby = createGooby({ particles: this.particles });
     applyEquippedOutfits(this.gooby);
-    this.gooby.group.scale.setScalar(0.42);
+    this.gooby.group.scale.setScalar(0.42 * this.tune.GOOBY_SCALE);
     this.gooby.group.position.set(0, -0.05, 0.45);
     this.gooby.play('sitDrive');
     this.gooby.setEmotion('happy');
@@ -384,12 +398,20 @@ export default {
     });
 
     ctx.hud.setScore(0);
-    ctx.hud.setTime(HOPPER.DURATION_SEC);
+    ctx.hud.setTime(this.tune.ENDLESS ? 0 : this.tune.DURATION_SEC);
   },
 
   /** Current round score (§C1.2 #8: distanceM/10 + pickups). */
   score() {
-    return hopperScore(this.traveled, this.pickupPoints);
+    return hopperScore(this.traveled, this.pickupPoints, this.tune);
+  },
+
+  syncScore() {
+    const score = this.score();
+    if (score !== this.displayedScore) {
+      this.ctx.onScore(score - this.displayedScore);
+      this.displayedScore = score;
+    }
   },
 
   /** @param {number} target lane 0..2 */
@@ -445,7 +467,7 @@ export default {
       glow.scale.set(0.85, 0.85, 1);
       glow.position.z = -0.05;
       holder.add(glow, mesh);
-      points = HOPPER.STAR_POINTS;
+      points = this.tune.STAR_POINTS;
     } else if (kind === 'gold') {
       holder = fitModel(assets.getModel('food-kit/carrot'), 0.55);
       holder.traverse((obj) => {
@@ -462,7 +484,7 @@ export default {
       glow.scale.set(1.1, 1.1, 1);
       glow.position.z = -0.1;
       holder.add(glow);
-      points = HOPPER.GOLD_POINTS;
+      points = this.tune.GOLD_POINTS;
     } else {
       holder = new THREE.Group();
       const ring = new THREE.Mesh(this.shieldRingGeo, this.shieldRingMat);
@@ -516,7 +538,7 @@ export default {
   spawnAhead(elapsed) {
     if (this.shower.state !== 'idle' || this.wormhole.active) return; // special sequences own the sky
     while (this.lastRowM < this.traveled + LOOKAHEAD_M) {
-      const row = generateRow(this.ctx.rng, elapsed, this.recentRows);
+      const row = generateRow(this.ctx.rng, elapsed, this.recentRows, this.tune);
       this.recentRows.push(row);
       if (this.recentRows.length > 6) this.recentRows.shift();
       this.lastRowM += row.gap;
@@ -527,14 +549,15 @@ export default {
         this.ctx.rng,
         elapsed,
         this.wormhole.spawned,
-        this.wormhole.active
+        this.wormhole.active,
+        this.tune
       )) {
         const safe = row.blocked.map((blocked, lane) => ({ blocked, lane }))
           .filter((entry) => !entry.blocked);
         const pick = safe[Math.floor(this.ctx.rng() * safe.length)]?.lane ?? 1;
         this.spawnWormhole(pick, this.lastRowM + row.gap * 0.45);
       }
-      const roll = rollPickup(this.ctx.rng);
+      const roll = rollPickup(this.ctx.rng, this.tune);
       if (roll) this.spawnPickup(roll.kind, this.lastRowM + row.gap * 0.5);
     }
   },
@@ -553,7 +576,7 @@ export default {
     wh.gate = null;
     wh.active = true;
     wh.t = 0;
-    this.invulnT = HOPPER.WORMHOLE_SEC;
+    this.invulnT = this.tune.WORMHOLE_SEC;
     this.setLane(1);
     for (const ring of this.tunnelRings) ring.visible = true;
     this.ctx.audio.play('hopper.shield');
@@ -564,12 +587,12 @@ export default {
     const wh = this.wormhole;
     if (!wh.active) return;
     const before = wh.t;
-    wh.t = Math.min(HOPPER.WORMHOLE_SEC, wh.t + dt);
-    const awards = wormholeAwards(before, wh.t);
+    wh.t = Math.min(this.tune.WORMHOLE_SEC, wh.t + dt);
+    const awards = wormholeAwards(before, wh.t, this.tune);
     if (awards > 0) {
       wh.stars += awards;
       this.pickupPoints += awards;
-      this.ctx.onScore(awards);
+      this.syncScore();
       this.particles.emit('sparkles', this.craft.position.clone(), { count: awards * 2 });
     }
     for (let i = 0; i < this.tunnelRings.length; i += 1) {
@@ -579,7 +602,7 @@ export default {
       ring.scale.setScalar(0.65 + phase * 1.25);
       ring.rotation.z += dt * (i % 2 ? 1.8 : -1.8);
     }
-    if (wh.t >= HOPPER.WORMHOLE_SEC) {
+    if (wh.t >= this.tune.WORMHOLE_SEC) {
       wh.active = false;
       this.invulnT = Math.max(this.invulnT, 0.5);
       for (const ring of this.tunnelRings) ring.visible = false;
@@ -594,9 +617,9 @@ export default {
       if (elapsed >= sh.nextAt && this.phase === 'play') {
         sh.state = 'telegraph';
         sh.t = 0;
-        sh.lanes = pickShowerLanes(this.ctx.rng);
+        sh.lanes = pickShowerLanes(this.ctx.rng, this.tune);
         // clear normal meteors that would trap the safe lane mid-shower
-        const windowEnd = this.traveled + speed * (HOPPER.SHOWER_TELEGRAPH_SEC + HOPPER.SHOWER_DURATION_SEC + 1.5) + LOOKAHEAD_M;
+        const windowEnd = this.traveled + speed * (this.tune.SHOWER_TELEGRAPH_SEC + this.tune.SHOWER_DURATION_SEC + 1.5) + LOOKAHEAD_M;
         for (const meteor of this.meteors) {
           if (meteor.active && meteor.lane === sh.lanes.safe && meteor.m <= windowEnd) this.despawnMeteor(meteor);
         }
@@ -611,7 +634,7 @@ export default {
       for (let i = 0; i < HOPPER.LANES; i += 1) {
         this.stripes[i].material.opacity = sh.lanes.danger.includes(i) ? pulse : 0;
       }
-      if (sh.t >= HOPPER.SHOWER_TELEGRAPH_SEC) {
+      if (sh.t >= this.tune.SHOWER_TELEGRAPH_SEC) {
         sh.state = 'active';
         sh.t = 0;
         sh.dropT = 0;
@@ -623,15 +646,15 @@ export default {
     for (let i = 0; i < HOPPER.LANES; i += 1) {
       this.stripes[i].material.opacity = sh.lanes.danger.includes(i) ? 0.16 : 0;
     }
-    if (sh.t < HOPPER.SHOWER_DURATION_SEC) {
+    if (sh.t < this.tune.SHOWER_DURATION_SEC) {
       sh.dropT -= dt;
       if (sh.dropT <= 0) {
-        sh.dropT = HOPPER.SHOWER_DROP_EVERY_SEC;
+        sh.dropT = this.tune.SHOWER_DROP_EVERY_SEC;
         for (const lane of sh.lanes.danger) this.spawnMeteor(lane, this.traveled + LOOKAHEAD_M, true);
       }
     } else if (!this.meteors.some((m2) => m2.active && m2.fall > 0 && m2.m > this.traveled - 6)) {
       sh.state = 'idle';
-      sh.nextAt = elapsed + HOPPER.SHOWER_EVERY_SEC;
+      sh.nextAt = elapsed + this.tune.SHOWER_EVERY_SEC;
       for (const stripe of this.stripes) stripe.material.opacity = 0;
       // restart the row chain a clean gap after the last shower meteor
       this.lastRowM = Math.max(this.lastRowM, this.traveled + LOOKAHEAD_M + 14);
@@ -648,12 +671,12 @@ export default {
     for (const meteor of this.meteors) {
       if (meteor.active) threats.push({ lane: meteor.lane, m: meteor.m, approach: speed + meteor.fall });
     }
-    const horizonSec = HOPPER.BOT_WINDOW_SEC + HOPPER.LANE_CHANGE_SEC + HOPPER.BOT_GUARD_SEC;
-    const outlook = laneOutlook(threats, this.traveled, horizonSec, HOPPER.BOT_TRANSIT_GUARD_SEC);
+    const horizonSec = this.tune.BOT_WINDOW_SEC + this.tune.LANE_CHANGE_SEC + this.tune.BOT_GUARD_SEC;
+    const outlook = laneOutlook(threats, this.traveled, horizonSec, this.tune.BOT_TRANSIT_GUARD_SEC, this.tune);
     // reflex: dodge NOW if the current lane gets hit before the next window
-    const panic = outlook.enter[this.lane] < HOPPER.BOT_PANIC_SEC;
+    const panic = outlook.enter[this.lane] < this.tune.BOT_PANIC_SEC;
     if (this.botT > 0 && !panic) return;
-    this.botT = HOPPER.BOT_WINDOW_SEC;
+    this.botT = this.tune.BOT_WINDOW_SEC;
     const sh = this.shower;
     const valueHorizon = this.traveled + speed * 2.6;
     const lanes = [];
@@ -675,7 +698,7 @@ export default {
       }
       lanes.push({ safe, value, transitSafe: outlook.transit[i], enter: outlook.enter[i] });
     }
-    this.setLane(planMove(this.lane, lanes));
+    this.setLane(planMove(this.lane, lanes, this.tune));
   },
 
   /** A meteor connected (§C1.2 #8: one hit = end, shield eats the first). */
@@ -712,7 +735,7 @@ export default {
     this.floats.update(dt);
 
     // starfield always drifts (parallax) — even on the end screen beat
-    const speed = this.phase === 'play' ? speedAt(elapsed) : 4;
+    const speed = this.phase === 'play' ? speedAt(elapsed, this.tune) : 4;
     for (const layer of this.starLayers) {
       const arr = layer.arr;
       const drop = speed * WU_PER_M * layer.speed * dt;
@@ -760,8 +783,8 @@ export default {
       return;
     }
 
-    const remaining = HOPPER.DURATION_SEC - elapsed;
-    ctx.hud.setTime(remaining);
+    const remaining = this.tune.DURATION_SEC - elapsed;
+    ctx.hud.setTime(this.tune.ENDLESS ? elapsed : remaining);
     if (this.invulnT > 0) this.invulnT -= dt;
     this.swipeTapSuppressT = Math.max(0, this.swipeTapSuppressT - dt);
     this.updateWormhole(dt);
@@ -774,8 +797,8 @@ export default {
     this.traveled += dm;
     const distNow = Math.floor(this.traveled / HOPPER.DISTANCE_PER_POINT_M);
     if (distNow > this.distPoints) {
-      ctx.onScore(distNow - this.distPoints);
       this.distPoints = distNow;
+      this.syncScore();
     }
 
     // craft slides toward its lane; slight bank while moving
@@ -808,7 +831,7 @@ export default {
       const hit =
         this.invulnT <= 0 &&
         !this.wormhole.active &&
-        sweepHitsMeteor({ lane: colLane, m: prevM }, meteor, rel);
+        sweepHitsMeteor({ lane: colLane, m: prevM }, meteor, rel, this.tune);
       meteor.m -= fallDist;
       const h = meteor.holder;
       h.position.y = this.yFor(meteor.m);
@@ -846,7 +869,7 @@ export default {
           this.particles.emit('sparkles', pos, { count: 8 });
         } else {
           this.pickupPoints += p.points;
-          ctx.onScore(p.points);
+          this.syncScore();
           ctx.audio.play(p.kind === 'gold' ? 'hopper.gold' : 'hopper.star');
           this.floats.spawn(`+${p.points}`, pos, p.kind === 'gold' ? '#FFC93C' : '#FFE066');
           this.particles.emit('sparkles', pos, { count: p.kind === 'gold' ? 10 : 5 });
@@ -873,7 +896,7 @@ export default {
       }
     }
 
-    if (remaining <= 0) {
+    if (!this.tune.ENDLESS && remaining <= 0) {
       this.phase = 'ending';
       this.win = true;
       ctx.audio.play('ui.win');
@@ -921,6 +944,7 @@ export default {
     this.ownedMats = [];
     this.ownedTexs = [];
     this.goldMats = [];
+    this.tune = null;
   },
 };
 export const controls = Object.freeze({ invertible: true }); // V4/G57 (§G2.1 rule 4, §G3.3): global „Steuerung invertieren“ applies (G56 proxy / carController invertSteer param)

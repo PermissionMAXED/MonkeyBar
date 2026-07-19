@@ -41,6 +41,11 @@ import { applyEquippedOutfits } from '../../character/outfitAttach.js';
 import { createParticles } from '../../gfx/particles.js';
 import {
   DELIVERY,
+  applyDifficulty,
+  withDeliveryCoinRate,
+  createDeliveryEndlessState,
+  recordDeliveryExpiry,
+  parcelExpired,
   pickDeliveries,
   pickFragileParcel,
   fragileCrashPenalty,
@@ -69,6 +74,13 @@ export default {
   /** @param {object} ctx §E8 game context */
   init(ctx) {
     this.ctx = ctx;
+    const modifier = ctx.params?.modifier ?? {};
+    this.tune = withDeliveryCoinRate(
+      applyDifficulty(DELIVERY, ctx.params?.difficulty ?? 'normal'),
+      modifier.coinRate ?? 1
+    );
+    this.coinRainActive = modifier.type === 'muenzregen' && this.tune.COIN_RATE > 1;
+    this.endlessState = createDeliveryEndlessState(this.tune.ENDLESS_EXPIRED_LIMIT);
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
 
@@ -90,6 +102,10 @@ export default {
     buildVetClinic(scene, ctx.assets, layout);
     buildLandmarkDressing(scene, ctx.assets, layout);
     this.particles = createParticles(scene);
+    this.coinGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.12, 18);
+    this.coinMat = new THREE.MeshStandardMaterial({
+      color: '#FFD34D', emissive: '#6B4D00', metalness: 0.45, roughness: 0.3,
+    });
 
     // --- the delivery run (§C9.4: shop start, landmark curbside drops) -----
     this.deliveries = pickDeliveries(ctx.rng, layout.landmarks.map((l) => l.id));
@@ -108,6 +124,10 @@ export default {
     this.landmarksHit = new Set();
     this.distanceM = 0;
     this.distanceSent = false;
+    this.legElapsed = 0;
+    this.batchElapsed = 0;
+    this.coinT = this.tune.COIN_INTERVAL_SEC;
+    this.coinPickups = [];
 
     // curbside drop points (§C9.4): anchors pushed out of building colliders
     // so the 4 m ring is always reachable (sticker triggers keep the anchors)
@@ -157,10 +177,14 @@ export default {
       this.parcels.push(box);
     }
     const fragileBox = this.parcels[DELIVERY.PARCELS - 1 - this.fragileParcel];
+    this.fragileStrapGeos = [];
+    this.fragileStrapMat = null;
     if (fragileBox) {
       const strapMat = new THREE.MeshBasicMaterial({ color: '#FF4F81' });
       const strapGeoA = new THREE.BoxGeometry(0.08, 0.08, 0.8);
       const strapGeoB = new THREE.BoxGeometry(0.8, 0.08, 0.08);
+      this.fragileStrapGeos.push(strapGeoA, strapGeoB);
+      this.fragileStrapMat = strapMat;
       const strapA = new THREE.Mesh(strapGeoA, strapMat);
       const strapB = new THREE.Mesh(strapGeoB, strapMat);
       strapA.position.y = 0.35;
@@ -182,7 +206,7 @@ export default {
     this.buildLeg();
 
     ctx.hud.setScore(0);
-    ctx.hud.setTime(DELIVERY.TIME_BONUS_FROM_SEC);
+    ctx.hud.setTime(this.tune.ENDLESS ? 0 : this.tune.TIME_BONUS_FROM_SEC);
     this.car.updateChaseCam(camera, 10);
   },
 
@@ -225,6 +249,7 @@ export default {
       shop: { parking: { x: dest.x, z: dest.z } }, // ring = the 4 m drop ring
     };
     this.progress = 0;
+    this.legElapsed = 0;
     this.guides = buildRouteGuides(this.ctx.scene, this.legLayout);
     // Audit fix: route ribbon sits nearly coplanar with the road. Polygon
     // offset + render order removes dusk-road z-fighting without touching the
@@ -278,13 +303,14 @@ export default {
     this.invuln = T.CRASH_INVULN_SEC;
     this.shake = 1;
     this.car.applyCrashPenalty();
-    this.setScore(applyCrash(this.score));
+    const protectedCrash = this.crashes <= this.tune.CRASH_ALLOWANCE;
+    if (!protectedCrash) this.setScore(applyCrash(this.score));
     const fragilePenalty = fragileCrashPenalty(
       this.fragileParcel,
       this.drops,
       this.fragileDamaged
     );
-    if (fragilePenalty > 0) {
+    if (fragilePenalty > 0 && !protectedCrash) {
       this.fragileDamaged = true;
       this.setScore(Math.max(0, this.score - fragilePenalty));
       this.ctx.hud.banner(t('v3.depth.delivery.broken', { n: fragilePenalty }));
@@ -326,7 +352,7 @@ export default {
       return;
     }
     // 3rd drop: time bonus + fanfare → results (§C1.2 #5)
-    const bonus = timeBonus(elapsed);
+    const bonus = timeBonus(this.tune.ENDLESS ? this.batchElapsed : elapsed, this.tune);
     if (bonus > 0) {
       this.setScore(this.score + bonus);
       this.ctx.hud.banner(t('mg.delivery.timeBonus', { n: bonus }));
@@ -335,6 +361,10 @@ export default {
     }
     this.updateChip();
     this.disposeGuides();
+    if (this.tune.ENDLESS) {
+      this.resetDeliveryBatch();
+      return;
+    }
     this.phase = 'fanfare';
     this.phaseT = 0;
     this.car.setFrozen(true);
@@ -342,6 +372,50 @@ export default {
     if (this.autoplay) {
       console.log(`[deliveryRush] run complete — drops 3, crashes ${this.crashes}, bonus ${bonus}, score ${this.score}`);
     }
+  },
+
+  /** Endlos chains delivery batches; regular arcade still ends after parcel 3. */
+  resetDeliveryBatch() {
+    this.deliveries = pickDeliveries(this.ctx.rng, this.layout.landmarks.map((l) => l.id));
+    this.drops = 0;
+    this.batchElapsed = 0;
+    this.fragileParcel = pickFragileParcel(this.ctx.rng);
+    this.fragileDamaged = false;
+    for (const parcel of this.parcels) parcel.visible = true;
+    this.car.setFrozen(false);
+    this.phase = 'drive';
+    this.buildLeg();
+  },
+
+  expireParcel() {
+    if (!this.tune.ENDLESS || this.phase !== 'drive') return;
+    const parcel = this.parcels[DELIVERY.PARCELS - this.drops - 1];
+    if (parcel) parcel.visible = false;
+    this.drops += 1;
+    const ended = recordDeliveryExpiry(this.endlessState);
+    this.ctx.audio.play('delivery.drop');
+    if (ended) {
+      this.disposeGuides();
+      this.phase = 'fanfare';
+      this.phaseT = 0;
+      this.car.setFrozen(true);
+      return;
+    }
+    if (this.drops >= this.tune.PARCELS) this.resetDeliveryBatch();
+    else this.buildLeg();
+  },
+
+  spawnCoinPickup() {
+    if (!this.coinRainActive || !this.legLayout) return;
+    const q = pointAtLength(
+      this.legLayout.lane,
+      Math.min(this.legLayout.laneLength, this.progress + 16 + this.ctx.rng() * 12)
+    );
+    const mesh = new THREE.Mesh(this.coinGeo, this.coinMat);
+    mesh.rotation.z = Math.PI / 2;
+    mesh.position.set(q.x, T.ROAD_Y + 1.1, q.z);
+    this.ctx.scene.add(mesh);
+    this.coinPickups.push(mesh);
   },
 
   /** F4 P1-1 pattern: wedged off-road → veil dip + teleport back to the leg. */
@@ -442,10 +516,16 @@ export default {
     if (this.phase !== 'drive') return;
 
     // --- driving --------------------------------------------------------------
+    this.legElapsed += dt;
+    this.batchElapsed += dt;
+    if (parcelExpired(this.legElapsed, this.tune)) {
+      this.expireParcel();
+      return;
+    }
     if (this.autoplay) this.drivePilot();
     const frameStart = { x: this.car.position.x, z: this.car.position.z };
-    this.car.update(dt);
-    this.traffic.update(dt);
+    this.car.update(dt * this.tune.SPEED_MULT);
+    this.traffic.update(dt * this.tune.TRAFFIC_DENSITY_MULT);
     this.particles.update?.(dt);
     const wheelOmega = (this.car.speed() / T.CAR_SCALE / 0.3) * dt;
     for (const w of this.vanWheels) w.rotation.x += wheelOmega;
@@ -490,6 +570,24 @@ export default {
       if (this.phase !== 'drive') return;
     }
 
+    if (this.coinRainActive) {
+      this.coinT -= dt;
+      if (this.coinT <= 0) {
+        this.coinT = this.tune.COIN_INTERVAL_SEC;
+        this.spawnCoinPickup();
+      }
+      for (let i = this.coinPickups.length - 1; i >= 0; i -= 1) {
+        const coin = this.coinPickups[i];
+        coin.rotation.y += dt * 4;
+        if (Math.hypot(coin.position.x - p.x, coin.position.z - p.z) < 2.5) {
+          this.setScore(this.score + this.tune.COIN_POINTS);
+          this.particles.emit?.('sparkles', coin.position, { count: 7 });
+          this.ctx.scene.remove(coin);
+          this.coinPickups.splice(i, 1);
+        }
+      }
+    }
+
     // --- guidance (arrow/route-line reuse) -------------------------------------
     if (this.guides) {
       hideNearbyArrows(this.guides, p.x, p.z);
@@ -507,7 +605,9 @@ export default {
     }
 
     // HUD countdown = the §C1.2 #5 time-bonus window (0 = bonus gone)
-    ctx.hud.setTime(Math.max(0, DELIVERY.TIME_BONUS_FROM_SEC - elapsed));
+    ctx.hud.setTime(
+      this.tune.ENDLESS ? elapsed : Math.max(0, this.tune.TIME_BONUS_FROM_SEC - elapsed)
+    );
 
     // --- camera + §E10 budget log ----------------------------------------------
     this.car.updateChaseCam(ctx.camera, dt, this.shake);
@@ -545,10 +645,15 @@ export default {
   dispose() {
     this.sendDistance(); // quit-from-pause still books the odometer
     this.disposeGuides();
+    for (const geo of this.fragileStrapGeos ?? []) geo.dispose();
+    this.fragileStrapMat?.dispose();
     this.car?.dispose();
     this.traffic?.dispose();
     this.gooby?.dispose();
     this.particles?.dispose?.();
+    for (const coin of this.coinPickups ?? []) coin.parent?.remove(coin);
+    this.coinGeo?.dispose();
+    this.coinMat?.dispose();
     this.chip?.remove();
     this.chip = null;
     this.veil?.remove();
@@ -562,6 +667,11 @@ export default {
     this.dropAnchors = null;
     this.colliders = null;
     this.fragileParcel = null;
+    this.fragileStrapGeos = [];
+    this.fragileStrapMat = null;
+    this.coinPickups = [];
+    this.tune = null;
+    this.endlessState = null;
   },
 };
 export const controls = Object.freeze({ invertible: true }); // V4/G57 (§G2.1 rule 4, §G3.3): global „Steuerung invertieren“ applies (G56 proxy / carController invertSteer param)

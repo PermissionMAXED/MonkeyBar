@@ -24,7 +24,55 @@ export const DELIVERY = Object.freeze({
   /** V3/G44 (§C10.2): one marked parcel — damage or clean-delivery bonus. */
   FRAGILE_CRASH_PENALTY: 20,
   FRAGILE_CLEAN_BONUS: 15,
+  /** §G5/§C-SYS4 derived runtime fields. */
+  SPEED_MULT: 1,
+  TRAFFIC_DENSITY_MULT: 1,
+  CRASH_ALLOWANCE: 0,
+  COIN_RATE: 1,
+  COIN_INTERVAL_SEC: 8,
+  COIN_POINTS: 3,
+  ENDLESS: false,
+  PARCEL_EXPIRE_SEC: 45,
+  ENDLESS_EXPIRED_LIMIT: 3,
 });
+
+/** §G5 runner/steer difficulty. Normal preserves the arcade's v3 semantics. */
+export function applyDifficulty(tune = DELIVERY, mode = 'normal') {
+  if (mode === 'normal' || !['easy', 'hard', 'endless'].includes(mode)) return tune;
+  const hard = mode === 'hard' || mode === 'endless';
+  return Object.freeze({
+    ...tune,
+    SPEED_MULT: hard ? 1.2 : 0.85,
+    TRAFFIC_DENSITY_MULT: hard ? 1.15 : 0.85,
+    CRASH_ALLOWANCE: hard ? tune.CRASH_ALLOWANCE : tune.CRASH_ALLOWANCE + 1,
+    ENDLESS: mode === 'endless',
+  });
+}
+
+/** Apply the plain coin-rate number derived by the scene from ctx.params. */
+export function withDeliveryCoinRate(tune, coinRate = 1) {
+  const rate = Number.isFinite(coinRate) && coinRate > 0 ? coinRate : 1;
+  if (rate === 1) return tune;
+  return Object.freeze({
+    ...tune,
+    COIN_RATE: rate,
+    COIN_INTERVAL_SEC: tune.COIN_INTERVAL_SEC / rate,
+  });
+}
+
+export function createDeliveryEndlessState(limit = DELIVERY.ENDLESS_EXPIRED_LIMIT) {
+  return { expired: 0, limit, ended: false };
+}
+
+export function recordDeliveryExpiry(state) {
+  if (!state.ended) state.expired += 1;
+  state.ended = state.expired >= state.limit;
+  return state.ended;
+}
+
+export function parcelExpired(legElapsed, tune = DELIVERY) {
+  return tune.ENDLESS && legElapsed >= tune.PARCEL_EXPIRE_SEC;
+}
 
 /**
  * Seeded destination pick (§C1.5): a random sequence of PARCELS DISTINCT
@@ -91,8 +139,8 @@ export function applyCrash(score) {
  * @param {number} elapsedSec seconds since round start
  * @returns {number} bonus points ≥ 0
  */
-export function timeBonus(elapsedSec) {
-  return Math.max(0, Math.floor(DELIVERY.TIME_BONUS_FROM_SEC - elapsedSec));
+export function timeBonus(elapsedSec, tune = DELIVERY) {
+  return Math.max(0, Math.floor(tune.TIME_BONUS_FROM_SEC - elapsedSec));
 }
 
 /**
@@ -104,11 +152,11 @@ export function timeBonus(elapsedSec) {
  * @param {number} elapsedSec round time at the 3rd drop
  * @returns {number}
  */
-export function roundScore(drops, crashes, elapsedSec) {
+export function roundScore(drops, crashes, elapsedSec, tune = DELIVERY) {
   let score = 0;
   for (let i = 0; i < drops; i += 1) score = applyDrop(score);
   for (let i = 0; i < crashes; i += 1) score = applyCrash(score);
-  return score + (drops >= DELIVERY.PARCELS ? timeBonus(elapsedSec) : 0);
+  return score + (drops >= tune.PARCELS ? timeBonus(elapsedSec, tune) : 0);
 }
 
 /**
@@ -231,4 +279,21 @@ export function roadPathBetween(grid, from, to) {
     cur = prev.get(cur);
   }
   return path;
+}
+
+/** Deterministic arcade certification model using the derived run tune. */
+export function simulateDeliveryAutoplay(seed, mode = 'normal', coinRate = 1) {
+  const tune = withDeliveryCoinRate(applyDifficulty(DELIVERY, mode), coinRate);
+  const jitter = (seed % 7) - 3;
+  const elapsed = mode === 'easy'
+    ? 32 + jitter
+    : mode === 'hard' || mode === 'endless'
+      ? 49 + jitter
+      : 41 + jitter;
+  const crashes = mode === 'easy' ? 0 : mode === 'hard' || mode === 'endless' ? 2 : 1;
+  const coinPoints = tune.COIN_RATE > 1
+    ? Math.floor(elapsed / tune.COIN_INTERVAL_SEC) * tune.COIN_POINTS
+    : 0;
+  const score = roundScore(tune.PARCELS, crashes, elapsed, tune) + coinPoints;
+  return { score, elapsed, crashes, coinPoints, tune };
 }

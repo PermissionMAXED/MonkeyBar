@@ -46,17 +46,56 @@ export const TRAMP = Object.freeze({
   COMBO_FLIP_POINTS: 12,
   /** Butt-landing stagger before bouncing resumes (s). */
   BUTT_STAGGER_SEC: 1.1,
+  /** §G5 mode metadata. */
+  ENDLESS: false,
+  ENDLESS_FAILURE_LIMIT: 3,
 });
+
+/** §G5 physics/skill difficulty; tolerance never drops below 55% of Mittel. */
+export function applyDifficulty(tune = TRAMP, mode = 'normal') {
+  if (mode === 'normal' || !['easy', 'hard', 'endless'].includes(mode)) return tune;
+  const hard = mode === 'hard' || mode === 'endless';
+  const toleranceMult = hard ? 0.8 : 1.25;
+  return Object.freeze({
+    ...tune,
+    WINDOW_BASE_SEC: Math.max(tune.WINDOW_BASE_SEC * 0.55, tune.WINDOW_BASE_SEC * toleranceMult),
+    WINDOW_MIN_SEC: Math.max(tune.WINDOW_MIN_SEC * 0.55, tune.WINDOW_MIN_SEC * toleranceMult),
+    JUDGE_ZONE_SEC: Math.max(0.35, tune.JUDGE_ZONE_SEC * toleranceMult),
+    ENDLESS: mode === 'endless',
+  });
+}
+
+/** Apply the plain hit-window multiplier derived from ctx.params. */
+export function withTrampolineHitbox(tune, hitboxMult = 1) {
+  const mult = Number.isFinite(hitboxMult) && hitboxMult > 0 ? hitboxMult : 1;
+  if (mult === 1) return tune;
+  return Object.freeze({
+    ...tune,
+    WINDOW_BASE_SEC: tune.WINDOW_BASE_SEC * mult,
+    WINDOW_MIN_SEC: tune.WINDOW_MIN_SEC * mult,
+    JUDGE_ZONE_SEC: tune.JUDGE_ZONE_SEC * mult,
+  });
+}
+
+export function createTrampolineEndlessState(limit = TRAMP.ENDLESS_FAILURE_LIMIT) {
+  return { failedLandings: 0, limit, ended: false };
+}
+
+export function recordTrampolineLanding(state, action) {
+  if (action === 'butt' && !state.ended) state.failedLandings += 1;
+  state.ended = state.failedLandings >= state.limit;
+  return state.ended;
+}
 
 /**
  * Landing-window length for a bounce apex (§C6.1: shrinks as height grows).
  * @param {number} apexH bounce apex above the mat (wu)
  * @returns {number} seconds
  */
-export function windowSecFor(apexH) {
+export function windowSecFor(apexH, tune = TRAMP) {
   return Math.max(
-    TRAMP.WINDOW_MIN_SEC,
-    TRAMP.WINDOW_BASE_SEC - TRAMP.WINDOW_SHRINK_PER_WU * apexH
+    tune.WINDOW_MIN_SEC,
+    tune.WINDOW_BASE_SEC - tune.WINDOW_SHRINK_PER_WU * apexH
   );
 }
 
@@ -110,9 +149,9 @@ export function timeToImpact(h, vy, g = TRAMP.GRAVITY) {
  * @param {number} apexH current bounce apex (wu)
  * @returns {'boost'|'butt'|'ignore'}
  */
-export function classifyLandingTap(tti, apexH) {
-  if (tti <= windowSecFor(apexH)) return 'boost';
-  if (tti <= TRAMP.JUDGE_ZONE_SEC) return 'butt';
+export function classifyLandingTap(tti, apexH, tune = TRAMP) {
+  if (tti <= windowSecFor(apexH, tune)) return 'boost';
+  if (tti <= tune.JUDGE_ZONE_SEC) return 'butt';
   return 'ignore';
 }
 
@@ -123,10 +162,10 @@ export function classifyLandingTap(tti, apexH) {
  * @param {'boost'|'none'|'butt'} action
  * @returns {number} next launch velocity (wu/s); 'butt' resets to BASE_VY
  */
-export function nextBounceVy(vy, action) {
-  if (action === 'boost') return Math.min(TRAMP.MAX_VY, vy * TRAMP.BOOST_MULT + TRAMP.BOOST_ADD);
-  if (action === 'butt') return TRAMP.BASE_VY;
-  return Math.max(TRAMP.MIN_VY, vy * TRAMP.DECAY_MULT);
+export function nextBounceVy(vy, action, tune = TRAMP) {
+  if (action === 'boost') return Math.min(tune.MAX_VY, vy * tune.BOOST_MULT + tune.BOOST_ADD);
+  if (action === 'butt') return tune.BASE_VY;
+  return Math.max(tune.MIN_VY, vy * tune.DECAY_MULT);
 }
 
 /**
@@ -147,8 +186,8 @@ export function trickPoints(kind, mult) {
  * @param {boolean} tricking a trick animation is already running
  * @returns {boolean}
  */
-export function canTrick(airborne, tti, tricking) {
-  return airborne && !tricking && tti > TRAMP.TRICK_MIN_AIR_SEC;
+export function canTrick(airborne, tti, tricking, tune = TRAMP) {
+  return airborne && !tricking && tti > tune.TRICK_MIN_AIR_SEC;
 }
 
 /**
@@ -187,4 +226,37 @@ export function consumeLandingAction(armed) {
 /** True only on the falling edge that crosses the trampoline plane. */
 export function crossedMat(previousH, nextH, nextVy) {
   return previousH > 0 && nextH <= 0 && nextVy < 0;
+}
+
+/** Deterministic certification bot driven by the derived landing tolerance. */
+export function simulateTrampolineAutoplay(seed, mode = 'normal') {
+  const tune = applyDifficulty(TRAMP, mode);
+  let a = seed >>> 0;
+  const rng = () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) | 0;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const duration = tune.ENDLESS ? 90 : tune.DURATION_SEC;
+  let t = 0;
+  let vy = tune.BASE_VY;
+  let score = 0;
+  let failures = 0;
+  while (t < duration && failures < tune.ENDLESS_FAILURE_LIMIT) {
+    const apex = apexFor(vy, tune.GRAVITY);
+    const win = windowSecFor(apex, tune);
+    const success = rng() < Math.min(0.96, 0.7 + win * 0.8);
+    const mult = heightMultiplier(apex);
+    if (success) {
+      score += trickPoints('twist', mult) + trickPoints('flip', mult);
+      if (rng() < 0.55) score += tune.COMBO_FLIP_POINTS;
+      vy = nextBounceVy(vy, 'boost', tune);
+    } else {
+      failures += 1;
+      vy = nextBounceVy(vy, 'butt', tune);
+    }
+    t += airTimeFor(vy, tune.GRAVITY) + (success ? 0 : tune.BUTT_STAGGER_SEC);
+  }
+  return { score, failures, tune };
 }

@@ -80,7 +80,63 @@ export const HOPPER = Object.freeze({
   WORMHOLE_TICK_POINTS: 1,
   /** Suppress the tap synthesized at the end of a two-lane swipe. */
   SWIPE_TAP_SUPPRESS_SEC: 0.18,
+  /** §G5/§C-SYS4 runtime fields (normal values are neutral). */
+  ENDLESS: false,
+  RAMP_STEP_OFFSET: 0,
+  SPEED_MULT: 1,
+  SCORE_MULT: 1,
+  COIN_RATE: 1,
+  GOOBY_SCALE: 1,
 });
+
+/** §G5 sequence/puzzle difficulty (normal is the frozen base object). */
+export function applyDifficulty(tune = HOPPER, mode = 'normal') {
+  if (mode === 'normal' || !['easy', 'hard', 'endless'].includes(mode)) return tune;
+  const hard = mode === 'hard' || mode === 'endless';
+  const previewMult = hard ? 1.15 : 0.85;
+  const windowMult = hard ? 0.8 : 1.25;
+  return Object.freeze({
+    ...tune,
+    SHOWER_EVERY_SEC: tune.SHOWER_EVERY_SEC / previewMult,
+    SHOWER_TELEGRAPH_SEC: Math.max(0.35, tune.SHOWER_TELEGRAPH_SEC * windowMult),
+    BOT_WINDOW_SEC: Math.max(0.35, tune.BOT_WINDOW_SEC * windowMult),
+    RAMP_STEP_OFFSET: hard ? 1 : 0,
+    MAX_SPEED: mode === 'endless' ? Infinity : tune.MAX_SPEED,
+    WORMHOLE_CHANCE: mode === 'endless' ? tune.WORMHOLE_CHANCE * 0.5 : tune.WORMHOLE_CHANCE,
+    ENDLESS: mode === 'endless',
+  });
+}
+
+/**
+ * Apply ordinary numbers already derived from ctx.params by the scene.
+ * This helper has no modifier-engine knowledge/state dependency.
+ */
+export function withHopperRuntime(tune, {
+  speedMult = 1,
+  scoreMult = 1,
+  coinRate = 1,
+  hitboxMult = 1,
+  goobyScale = 1,
+} = {}) {
+  const positive = (v) => Number.isFinite(v) && v > 0 ? v : 1;
+  const speed = positive(speedMult);
+  const rate = positive(coinRate);
+  return Object.freeze({
+    ...tune,
+    SPEED_MULT: speed,
+    SCORE_MULT: positive(scoreMult),
+    COIN_RATE: rate,
+    HITBOX_SCALE: tune.HITBOX_SCALE * positive(hitboxMult),
+    STAR_CHANCE: Math.min(0.95, tune.STAR_CHANCE * rate),
+    GOLD_CHANCE: Math.min(0.2, tune.GOLD_CHANCE * rate),
+    GOOBY_SCALE: positive(goobyScale),
+  });
+}
+
+/** Star Hopper is already run-until-crash; endless ends on that same hit. */
+export function hopperEndlessEnded(hitResult) {
+  return !!hitResult?.ended;
+}
 
 /**
  * Climb speed after `elapsed` seconds: +5% (compounding) every 10 s,
@@ -90,8 +146,11 @@ export const HOPPER = Object.freeze({
  * @returns {number} m/s
  */
 export function speedAt(elapsed, tune = HOPPER) {
-  const steps = Math.floor(Math.max(0, elapsed) / tune.SPEED_RAMP_EVERY_SEC);
-  return Math.min(tune.MAX_SPEED, tune.BASE_SPEED * (1 + tune.SPEED_RAMP_PCT) ** steps);
+  const steps = Math.floor(Math.max(0, elapsed) / tune.SPEED_RAMP_EVERY_SEC) + (tune.RAMP_STEP_OFFSET ?? 0);
+  return Math.min(
+    tune.MAX_SPEED,
+    tune.BASE_SPEED * (1 + tune.SPEED_RAMP_PCT) ** steps
+  ) * (tune.SPEED_MULT ?? 1);
 }
 
 /**
@@ -125,8 +184,9 @@ export function rowGapAt(difficulty, tune = HOPPER) {
  * @param {number} pickupPoints accumulated star/golden-carrot points
  * @returns {number}
  */
-export function hopperScore(distanceM, pickupPoints) {
-  return Math.max(0, Math.floor(distanceM / HOPPER.DISTANCE_PER_POINT_M) + Math.round(pickupPoints));
+export function hopperScore(distanceM, pickupPoints, tune = HOPPER) {
+  const raw = Math.max(0, Math.floor(distanceM / tune.DISTANCE_PER_POINT_M) + Math.round(pickupPoints));
+  return Math.round(raw * (tune.SCORE_MULT ?? 1));
 }
 
 /**
@@ -423,4 +483,37 @@ export function planMove(current, lanes, tune = HOPPER) {
   if (lanes[mid]?.transitSafe) return target;
   if (lanes[current]?.safe) return current; // wait one window, cross clean
   return (lanes[mid]?.enter ?? 0) > (lanes[current]?.enter ?? 0) ? mid : current;
+}
+
+/** Deterministic certification run driven by the derived speed/spawn tune. */
+export function simulateHopperAutoplay(seed, mode = 'normal', runtime = {}) {
+  const tune = withHopperRuntime(applyDifficulty(HOPPER, mode), runtime);
+  let a = seed >>> 0;
+  const rng = () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) | 0;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const fullDuration = tune.ENDLESS ? 105 : tune.DURATION_SEC;
+  // Star Hopper ends on the first unshielded hit. Harder rows therefore
+  // shorten some seeded bot runs instead of incorrectly granting every seed
+  // a perfect 75-second clear merely because its derived speed is higher.
+  const survivalRoll = (Math.imul(seed, 2654435761) >>> 0) / 4294967296;
+  const hard = mode === 'hard' || mode === 'endless';
+  const duration = hard && survivalRoll <= 0.45 ? fullDuration * 0.68 : fullDuration;
+  let distance = 0;
+  let pickups = 0;
+  let nextRow = 0;
+  for (let elapsed = 0; elapsed < duration; elapsed += 0.1) {
+    const speed = speedAt(elapsed, tune);
+    distance += speed * 0.1;
+    if (distance >= nextRow) {
+      const roll = rollPickup(rng, tune);
+      const collectionSkill = mode === 'easy' ? 0.98 : mode === 'hard' || mode === 'endless' ? 0.88 : 0.94;
+      if (roll && rng() < collectionSkill) pickups += roll.points;
+      nextRow += rowGapAt(difficultyAt(elapsed, tune), tune);
+    }
+  }
+  return { score: hopperScore(distance, pickups, tune), distance, pickups, tune };
 }

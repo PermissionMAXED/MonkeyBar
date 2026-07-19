@@ -18,6 +18,9 @@ import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: 
 import { clampFloatTextToView } from '../framework.js'; // F4 P2-3
 import {
   FISHING,
+  applyDifficulty,
+  createFishingEndlessState,
+  recordFishingFailure,
   lowerDepth,
   catchValue,
   needsReel,
@@ -130,6 +133,9 @@ export default {
   /** @param {object} ctx §E8 game context */
   init(ctx) {
     this.ctx = ctx;
+    this.tune = applyDifficulty(FISHING, ctx.params?.difficulty ?? 'normal');
+    this.endlessState = createFishingEndlessState(this.tune.ENDLESS_FAILURE_LIMIT);
+    this.respawns = [];
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
     this.disposed = false;
@@ -354,7 +360,7 @@ export default {
     this.bot = { target: null, waitT: 0, tapT: 0, fumble: false, releaseEps: 0, overshootAt: 0 };
 
     ctx.hud.setScore(0);
-    ctx.hud.setTime(FISHING.DURATION_SEC);
+    ctx.hud.setTime(this.tune.ENDLESS ? 0 : this.tune.DURATION_SEC);
   },
 
   /** Spawn (or respawn) one fish at a random depth/side. */
@@ -482,7 +488,7 @@ export default {
     if (this.state !== 'lowering') return;
     const pool = [...this.swimmers.filter((f) => f.active)];
     if (this.boot) pool.push(this.boot);
-    const idx = nearestCatch(pool, FISHING.HOOK_X, this.hookDepth);
+    const idx = nearestCatch(pool, this.tune.HOOK_X, this.hookDepth, this.tune.CATCH_RADIUS);
     if (idx === -1) {
       this.state = 'raising';
       this.hooked = null;
@@ -542,6 +548,9 @@ export default {
       this.ctx.audio.play('fish.boot');
       this.floats.spawn(t('mg.fish.boot', { pts: Math.abs(value) }), pos, '#D64570');
       this.reactGooby('grumpy', 'refuse');
+      if (this.tune.ENDLESS && recordFishingFailure(this.endlessState, 'boot')) {
+        this.finishRound();
+      }
     } else {
       this.ctx.audio.play('fish.catch');
       // ── V2/G23: §C6 species meta — record the catch + species float text ──
@@ -583,10 +592,25 @@ export default {
     if (kind !== 'boot') {
       const i = this.swimmers.findIndex((f) => f.holder === holder);
       if (i >= 0) this.swimmers.splice(i, 1);
-      this.spawnFish(false);
+      this.queueFishRespawn();
     }
     this.hooked = null;
     this.state = 'idle';
+  },
+
+  /** Preserve Mittel's instant respawn; derived modes consume their interval. */
+  queueFishRespawn() {
+    if (this.tune === FISHING) this.spawnFish(false);
+    else this.respawns.push(this.tune.RESPAWN_SEC);
+  },
+
+  finishRound() {
+    if (this.phase !== 'play') return;
+    this.phase = 'ending';
+    this.endT = 0;
+    this.ctx.audio.play('ui.win');
+    this.gooby.setEmotion('ecstatic');
+    this.gooby.play('happyBounce');
   },
 
   /** Brief Gooby reaction, then back to fishing (seated). */
@@ -618,7 +642,7 @@ export default {
         if (!f.active) continue;
         const toLine = (FISHING.HOOK_X - f.x) / (f.dir * f.speed);
         if (toLine <= 0 || toLine > 3.5) continue;
-        const lowerT = f.depth / FISHING.LOWER_SPEED;
+        const lowerT = f.depth / this.tune.LOWER_SPEED;
         if (Math.abs(toLine - lowerT) < 0.3) {
           bot.target = f;
           bot.releaseEps = (rng() - 0.5) * 0.24; // aim wobble
@@ -645,8 +669,8 @@ export default {
       const near =
         !whiffing &&
         Math.abs(this.hookDepth - f.depth - bot.releaseEps) < 0.1 &&
-        Math.abs(f.x - FISHING.HOOK_X) < FISHING.CATCH_RADIUS * 0.8;
-      const overshot = this.hookDepth > bot.overshootAt || this.hookDepth >= FISHING.MAX_DEPTH - 0.01;
+        Math.abs(f.x - this.tune.HOOK_X) < this.tune.CATCH_RADIUS * 0.8;
+      const overshot = this.hookDepth > bot.overshootAt || this.hookDepth >= this.tune.MAX_DEPTH - 0.01;
       if (near || overshot) {
         this.release();
         bot.target = null;
@@ -692,10 +716,18 @@ export default {
       return;
     }
 
-    const remaining = FISHING.DURATION_SEC - elapsed;
-    ctx.hud.setTime(remaining);
+    const remaining = this.tune.DURATION_SEC - elapsed;
+    ctx.hud.setTime(this.tune.ENDLESS ? elapsed : remaining);
 
     if (this.autoplay) this.autoplayTick(dt, elapsed);
+
+    for (let i = this.respawns.length - 1; i >= 0; i -= 1) {
+      this.respawns[i] -= dt;
+      if (this.respawns[i] <= 0) {
+        this.respawns.splice(i, 1);
+        this.spawnFish(false);
+      }
+    }
 
     // --- swimmers ---
     for (const f of this.swimmers) {
@@ -726,7 +758,7 @@ export default {
       this.bootRollT -= dt;
       if (this.bootRollT <= 0) {
         this.bootRollT = 1;
-        if (shouldSpawnBoot(ctx.rng, this.sinceBoot)) {
+        if (shouldSpawnBoot(ctx.rng, this.sinceBoot, this.tune)) {
           this.spawnBoot();
           this.sinceBoot = 0;
         }
@@ -735,16 +767,16 @@ export default {
 
     // --- hook state machine ---
     if (this.state === 'lowering') {
-      if (this.held) this.hookDepth = lowerDepth(this.hookDepth, dt);
-      if (this.hookDepth >= FISHING.MAX_DEPTH && !this.autoplay) {
+      if (this.held) this.hookDepth = lowerDepth(this.hookDepth, dt, this.tune);
+      if (this.hookDepth >= this.tune.MAX_DEPTH && !this.autoplay) {
         // bottomed out — auto release so the hook never sticks
         this.release();
       }
     } else if (this.state === 'raising') {
-      this.hookDepth = Math.max(0, this.hookDepth - FISHING.RAISE_SPEED * dt);
+      this.hookDepth = Math.max(0, this.hookDepth - this.tune.RAISE_SPEED * dt);
       if (this.hookDepth <= 0) this.landCatch();
     } else if (this.state === 'reeling') {
-      this.reel.t = advanceReelElapsed(this.reel.t, dt);
+      this.reel.t = advanceReelElapsed(this.reel.t, dt, this.tune);
       // hooked big fish thrashes at depth
       const f = this.reel.fish;
       f.holder.position.set(
@@ -752,7 +784,7 @@ export default {
         depthToY(this.hookDepth) - 0.1,
         SWIM_Z
       );
-      const res = reelResolve(this.reel.taps, this.reel.t);
+      const res = reelResolve(this.reel.taps, this.reel.t, this.tune);
       if (res === 'caught') {
         this.hookItem(f);
         this.state = 'raising';
@@ -764,11 +796,14 @@ export default {
         const i = this.swimmers.indexOf(f);
         if (i >= 0) this.swimmers.splice(i, 1);
         f.holder.parent?.remove(f.holder);
-        this.spawnFish(false);
+        this.queueFishRespawn();
         this.reactGooby('sad', 'sadSlump');
         this.reel = null;
         this.hooked = null;
         this.state = 'raising';
+        if (this.tune.ENDLESS && recordFishingFailure(this.endlessState, 'lineBreak')) {
+          this.finishRound();
+        }
       }
     }
 
@@ -783,7 +818,7 @@ export default {
     lp.setXYZ(1, FISHING.HOOK_X, bobY + 0.06, SWIM_Z);
     lp.needsUpdate = true;
 
-    if (remaining <= 0) {
+    if (!this.tune.ENDLESS && remaining <= 0) {
       this.phase = 'ending';
       ctx.audio.play('ui.win');
       this.gooby.setEmotion('ecstatic');
@@ -822,6 +857,9 @@ export default {
     this.hooked = null;
     this.reel = null;
     this.bot = null;
+    this.tune = null;
+    this.endlessState = null;
+    this.respawns = [];
     this.gooby = null;
     this.particles = null;
     this.floats = null;

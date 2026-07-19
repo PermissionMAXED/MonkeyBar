@@ -22,6 +22,9 @@ import { applyEquippedOutfits } from '../../character/outfitAttach.js';
 import { buildNougatschleuse } from '../../home/nougatMesh.js';
 import {
   GOLF,
+  applyDifficulty,
+  createGolfEndlessState,
+  recordGolfHole,
   holeScore,
   powerFromDrag,
   powerForDistance,
@@ -125,10 +128,12 @@ export default {
   /** @param {object} ctx §E8 game context */
   init(ctx) {
     this.ctx = ctx;
+    this.tune = applyDifficulty(GOLF, ctx.params?.difficulty ?? 'normal');
+    this.endlessState = createGolfEndlessState(this.tune.ENDLESS_OVER_PAR_LIMIT);
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
 
-    this.course = generateCourse(ctx.rng);
+    this.course = generateCourse(ctx.rng, this.tune);
     this.holeIdx = 0;
     this.strokes = 0; // current hole
     this.totalStrokes = 0;
@@ -504,7 +509,7 @@ export default {
   /** Ball holed (§C1.2 #6 scoring) or 10-stroke cap: score + caddy reaction. */
   finishHole(holed) {
     const hole = this.hole();
-    const points = holed ? holeScore(this.strokes, hole.par) : GOLF.SCORE_OTHER;
+    const points = holed ? holeScore(this.strokes, hole.par, this.tune) : this.tune.SCORE_OTHER;
     const ace = holed && this.strokes === 1;
     this.holeResults.push({ strokes: this.strokes, par: hole.par, holed });
     if (ace) this.holeInOnes += 1;
@@ -542,6 +547,12 @@ export default {
     }
     if (this.autoplay) {
       console.log(`[miniGolf] hole ${this.holeIdx + 1} done — strokes ${this.strokes}, +${points}${ace ? ' (ACE)' : ''}, score ${this.score}`);
+    }
+    if (this.tune.ENDLESS && recordGolfHole(this.endlessState, this.strokes, hole.par)) {
+      this.state = 'ending';
+      this.stateT = 0;
+      this.ctx.audio.play('ui.win');
+      return;
     }
     this.state = 'celebrate';
     this.stateT = 0;
@@ -629,16 +640,19 @@ export default {
       this.stateT += dt;
       if (this.stateT >= 1.25) {
         if (
+          !this.tune.ENDLESS &&
           this.holeIdx === GOLF.HOLE_COUNT - 1 &&
           this.course.length === GOLF.HOLE_COUNT &&
           qualifiesNougatLoop(this.holeResults)
         ) {
-          const bonus = createNougatLoopHole(this.ctx.rng);
+          const bonus = createNougatLoopHole(this.ctx.rng, this.tune);
           this.course.push(bonus);
           this.buildHoleView(bonus, GOLF.HOLE_COUNT, this.own);
           this.bonusUnlocked = true;
           this.ctx.hud.banner(t('v3.depth.golf.unlocked'));
           this.setupHole(GOLF.HOLE_COUNT, false);
+        } else if (this.holeIdx + 1 >= this.course.length && this.tune.ENDLESS) {
+          this.setupHole(0, false);
         } else if (this.holeIdx + 1 >= this.course.length) {
           this.state = 'ending';
           this.stateT = 0;
@@ -661,7 +675,7 @@ export default {
 
     if (this.state === 'rolling') {
       const hole = this.hole();
-      const events = stepBall(hole, this.ball, dt, this.theta);
+      const events = stepBall(hole, this.ball, dt, this.theta, this.tune);
       for (const ev of events) {
         if (ev === 'holed') {
           this.finishHole(true);
@@ -716,6 +730,8 @@ export default {
     this.course = null;
     this.holeResults = [];
     this.resourceTrack = null;
+    this.tune = null;
+    this.endlessState = null;
     this.own = null;
     this.ctx = null;
     this.gooby = null;

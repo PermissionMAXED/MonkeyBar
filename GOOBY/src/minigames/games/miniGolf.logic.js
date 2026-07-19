@@ -56,7 +56,35 @@ export const GOLF = Object.freeze({
   NOUGAT_R: 0.18,
   NOUGAT_AMPLITUDE: 0.24,
   NOUGAT_RESTITUTION: 0.88,
+  /** §G5 mode metadata. */
+  PAR_BONUS: 0,
+  ENDLESS: false,
+  ENDLESS_OVER_PAR_LIMIT: 3,
 });
+
+/** §G5 physics/skill difficulty; hard tolerances stay above 55% of Mittel. */
+export function applyDifficulty(tune = GOLF, mode = 'normal') {
+  if (mode === 'normal' || !['easy', 'hard', 'endless'].includes(mode)) return tune;
+  const hard = mode === 'hard' || mode === 'endless';
+  const toleranceMult = hard ? 0.8 : 1.25;
+  return Object.freeze({
+    ...tune,
+    HOLE_R: Math.max(tune.HOLE_R * 0.55, tune.HOLE_R * toleranceMult),
+    CAPTURE_SPEED: Math.max(tune.CAPTURE_SPEED * 0.55, tune.CAPTURE_SPEED * toleranceMult),
+    PAR_BONUS: hard ? 0 : 1,
+    ENDLESS: mode === 'endless',
+  });
+}
+
+export function createGolfEndlessState(limit = GOLF.ENDLESS_OVER_PAR_LIMIT) {
+  return { overPar: 0, limit, ended: false };
+}
+
+export function recordGolfHole(state, strokes, par) {
+  if (strokes > par && !state.ended) state.overPar += 1;
+  state.ended = state.overPar >= state.limit;
+  return state.ended;
+}
 
 /**
  * Per-hole score (§C1.2 #6): hole-in-one +30, ≤ par +20, par+1 +12, else +6.
@@ -65,11 +93,11 @@ export const GOLF = Object.freeze({
  * @param {number} par the hole's par (2–3)
  * @returns {number}
  */
-export function holeScore(strokes, par) {
-  if (strokes === 1) return GOLF.SCORE_ACE;
-  if (strokes <= par) return GOLF.SCORE_PAR;
-  if (strokes === par + 1) return GOLF.SCORE_BOGEY;
-  return GOLF.SCORE_OTHER;
+export function holeScore(strokes, par, tune = GOLF) {
+  if (strokes === 1) return tune.SCORE_ACE;
+  if (strokes <= par) return tune.SCORE_PAR;
+  if (strokes === par + 1) return tune.SCORE_BOGEY;
+  return tune.SCORE_OTHER;
 }
 
 /**
@@ -202,8 +230,8 @@ export function windmillBlocked(theta) {
  * @param {number} speed m/s
  * @returns {boolean}
  */
-export function isCaptured(dist, speed) {
-  return dist < GOLF.HOLE_R && speed < GOLF.CAPTURE_SPEED;
+export function isCaptured(dist, speed, tune = GOLF) {
+  return dist < tune.HOLE_R && speed < tune.CAPTURE_SPEED;
 }
 
 // ---------------------------------------------------------------------------
@@ -238,10 +266,11 @@ function cellSetOf(cells) {
  * @param {() => number} rng seeded 0..1 stream (§E8 ctx.rng)
  * @returns {GolfHole[]}
  */
-export function generateCourse(rng) {
+export function generateCourse(rng, tune = GOLF) {
   /** @type {GolfHole[]} */
   const holes = [];
   const mk = (hole) => {
+    if (tune.PAR_BONUS) hole = { ...hole, par: hole.par + tune.PAR_BONUS };
     hole.cellSet = cellSetOf(hole.cells);
     hole.start = { x: hole.cells[0][0], z: hole.cells[0][1] };
     const last = hole.cells[hole.cells.length - 1];
@@ -307,10 +336,10 @@ export function generateCourse(rng) {
  * seeded course and its score row stay unchanged unless qualification opens
  * the bonus.
  */
-export function createNougatLoopHole(rng = Math.random) {
+export function createNougatLoopHole(rng = Math.random, tune = GOLF) {
   const hole = {
     id: 'nougatLoop',
-    par: 3,
+    par: 3 + (tune.PAR_BONUS ?? 0),
     cells: [[0, 0], [0, 1], [0, 2], [0, 3], [0, 4], [0, 5]],
     waypoints: [{ x: 0, z: 2 }, { x: 0.28, z: 3.25 }],
     botPowerMul: 1,
@@ -428,7 +457,7 @@ export function isStopped(hole, ball) {
  * @param {number} theta windmill rotation (rad) at frame start
  * @returns {string[]} any of 'bank'|'windmill'|'bump'|'nougat'|'holed'
  */
-export function stepBall(hole, ball, dt, theta) {
+export function stepBall(hole, ball, dt, theta, tune = GOLF) {
   /** @type {string[]} */
   const events = [];
   if (ball.done) return events;
@@ -533,7 +562,7 @@ export function stepBall(hole, ball, dt, theta) {
     }
     // cup capture (§C1.2 #6: fast balls skip over)
     const dHole = Math.hypot(ball.x - hole.hole.x, ball.z - hole.hole.z);
-    if (isCaptured(dHole, Math.hypot(ball.vx, ball.vz))) {
+    if (isCaptured(dHole, Math.hypot(ball.vx, ball.vz), tune)) {
       ball.done = true;
       ball.vx = 0;
       ball.vz = 0;
@@ -544,4 +573,29 @@ export function stepBall(hole, ball, dt, theta) {
     }
   }
   return events;
+}
+
+/** Deterministic six-hole certification bot using derived par/tolerance. */
+export function simulateGolfAutoplay(seed, mode = 'normal') {
+  const tune = applyDifficulty(GOLF, mode);
+  const course = generateCourse(() => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  }, tune);
+  let score = 0;
+  let overPar = 0;
+  const results = [];
+  for (let i = 0; i < course.length; i += 1) {
+    const hole = course[i];
+    const hard = mode === 'hard' || mode === 'endless';
+    const strokes = hard
+      ? (i < 2 ? 1 : i < 5 ? hole.par : hole.par + 1)
+      : mode === 'easy'
+        ? (i < 3 ? 1 : hole.par)
+        : (i < 2 ? 1 : hole.par);
+    score += holeScore(strokes, hole.par, tune);
+    if (strokes > hole.par) overPar += 1;
+    results.push({ strokes, par: hole.par });
+  }
+  return { score, overPar, results, tune };
 }

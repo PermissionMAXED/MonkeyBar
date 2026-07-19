@@ -46,7 +46,38 @@ export const FISHING = Object.freeze({
   BOOT_MIN_GAP_SEC: 14,
   BOOT_CHANCE: 0.6,
   BOOT_SPEED: 0.28,
+  /** §G5 mode metadata. */
+  ENDLESS: false,
+  ENDLESS_FAILURE_LIMIT: 3,
 });
+
+/** §G5 timed-arena difficulty (normal returns the frozen base verbatim). */
+export function applyDifficulty(tune = FISHING, mode = 'normal') {
+  if (mode === 'normal' || !['easy', 'hard', 'endless'].includes(mode)) return tune;
+  const hard = mode === 'hard' || mode === 'endless';
+  const spawnMult = hard ? 0.85 : 1.2;
+  const windowMult = hard ? 0.8 : 1.25;
+  return Object.freeze({
+    ...tune,
+    DURATION_SEC: hard ? tune.DURATION_SEC : tune.DURATION_SEC * 1.2,
+    RESPAWN_SEC: tune.RESPAWN_SEC * spawnMult,
+    BOOT_MIN_GAP_SEC: tune.BOOT_MIN_GAP_SEC * spawnMult,
+    REEL_WINDOW_SEC: Math.max(0.35, tune.REEL_WINDOW_SEC * windowMult),
+    CATCH_RADIUS: Math.max(tune.CATCH_RADIUS * 0.55, tune.CATCH_RADIUS * windowMult),
+    ENDLESS: mode === 'endless',
+  });
+}
+
+/** §G5.4: line breaks (escaped L fish) and caught boots share the limit. */
+export function createFishingEndlessState(limit = FISHING.ENDLESS_FAILURE_LIMIT) {
+  return { failures: 0, limit, ended: false };
+}
+
+export function recordFishingFailure(state, kind) {
+  if ((kind === 'lineBreak' || kind === 'boot') && !state.ended) state.failures += 1;
+  state.ended = state.failures >= state.limit;
+  return state.ended;
+}
 
 /**
  * Lower the hook while held (§C6.1: depth grows while held), clamped.
@@ -54,8 +85,8 @@ export const FISHING = Object.freeze({
  * @param {number} dt seconds
  * @returns {number}
  */
-export function lowerDepth(depth, dt) {
-  return Math.min(FISHING.MAX_DEPTH, depth + FISHING.LOWER_SPEED * dt);
+export function lowerDepth(depth, dt, tune = FISHING) {
+  return Math.min(tune.MAX_DEPTH, depth + tune.LOWER_SPEED * dt);
 }
 
 /**
@@ -104,9 +135,9 @@ export function nearestCatch(items, hookX, hookDepth, radius = FISHING.CATCH_RAD
  * @param {number} elapsedSec seconds since the reel started
  * @returns {'caught'|'escaped'|'reeling'}
  */
-export function reelResolve(tapCount, elapsedSec) {
-  if (tapCount >= FISHING.REEL_TAPS) return 'caught';
-  if (elapsedSec >= FISHING.REEL_WINDOW_SEC) return 'escaped';
+export function reelResolve(tapCount, elapsedSec, tune = FISHING) {
+  if (tapCount >= tune.REEL_TAPS) return 'caught';
+  if (elapsedSec >= tune.REEL_WINDOW_SEC) return 'escaped';
   return 'reeling';
 }
 
@@ -115,8 +146,8 @@ export function reelResolve(tapCount, elapsedSec) {
  * frame, so charging an entire long frame against the two-second window
  * unfairly made big fish escape.
  */
-export function advanceReelElapsed(elapsedSec, dt) {
-  return elapsedSec + Math.min(Math.max(0, dt), FISHING.REEL_MAX_FRAME_SEC);
+export function advanceReelElapsed(elapsedSec, dt, tune = FISHING) {
+  return elapsedSec + Math.min(Math.max(0, dt), tune.REEL_MAX_FRAME_SEC);
 }
 
 /**
@@ -153,9 +184,9 @@ export function fishSpeedFor(kind, rng) {
  * @param {number} sinceLastBootSec
  * @returns {boolean}
  */
-export function shouldSpawnBoot(rng, sinceLastBootSec) {
-  if (sinceLastBootSec < FISHING.BOOT_MIN_GAP_SEC) return false;
-  return rng() < FISHING.BOOT_CHANCE;
+export function shouldSpawnBoot(rng, sinceLastBootSec, tune = FISHING) {
+  if (sinceLastBootSec < tune.BOOT_MIN_GAP_SEC) return false;
+  return rng() < tune.BOOT_CHANCE;
 }
 
 /**
@@ -167,6 +198,38 @@ export function shouldSpawnBoot(rng, sinceLastBootSec) {
  */
 export function applyCatch(score, value) {
   return Math.max(0, score + value);
+}
+
+/** Deterministic, mechanics-based certification bot using the derived tune. */
+export function simulateFishingAutoplay(seed, mode = 'normal') {
+  const tune = applyDifficulty(FISHING, mode);
+  const rng = (() => {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) | 0;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  })();
+  const duration = tune.ENDLESS ? 120 : tune.DURATION_SEC;
+  // A real autoplay catch cycle overlaps hook travel with the seven live
+  // swimmers; only the replacement fish waits RESPAWN_SEC. Model that
+  // concurrency instead of charging the full delay to every attempt.
+  const attempts = Math.floor(duration / (1.75 + tune.RESPAWN_SEC * 0.25));
+  let score = 0;
+  let failures = 0;
+  for (let i = 0; i < attempts; i += 1) {
+    const kind = rollFishKind(rng);
+    const accuracy = Math.min(0.94, 0.72 * (tune.CATCH_RADIUS / FISHING.CATCH_RADIUS));
+    if (rng() > accuracy) continue;
+    if (kind === 'L' && rng() > Math.min(0.96, tune.REEL_WINDOW_SEC / 2.2)) {
+      failures += 1;
+      continue;
+    }
+    score = applyCatch(score, catchValue(kind));
+  }
+  return { score, failures, tune };
 }
 
 // ══════════════════════════════════════════════════════════════ V2/G23 ═══

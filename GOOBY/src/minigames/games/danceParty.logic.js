@@ -12,6 +12,15 @@ import { DANCE } from '../../data/constants.js';
 
 /** G10 tuning (feel/visual knobs the spec leaves to implementation). */
 export const DANCE_TUNING = Object.freeze({
+  /** Base round length mirrored here so a complete derived tune is portable. */
+  DURATION_SEC: DANCE.DURATION_SEC,
+  /** Rhythm judgment windows. Normal keeps the frozen §C6 values exactly. */
+  PERFECT_MS: DANCE.PERFECT_MS,
+  GOOD_MS: DANCE.GOOD_MS,
+  /** §G5 endless metadata. */
+  ENDLESS: false,
+  ENDLESS_BREAK_LIMIT: 3,
+  RAMP_FLOOR_STEP: 0,
   /** Silence before the first beat reaches the hit line (s). */
   LEAD_IN_SEC: 2.4,
   /** Note fall time from spawn to the hit line (s) — also the visual window. */
@@ -56,6 +65,52 @@ export const DANCE_TUNING = Object.freeze({
    */
   DRIFT_MAX_FRAME_GAP_SEC: 2.0,
 });
+
+/**
+ * §G5 sequence/puzzle difficulty. The PATTERN_SEED and BPM are deliberately
+ * absent: difficulty may change chart density/preview speed/judgment windows,
+ * never the synth-track contract.
+ * @param {object} [tune]
+ * @param {'easy'|'normal'|'hard'|'endless'} [mode]
+ */
+export function applyDifficulty(tune = DANCE_TUNING, mode = 'normal') {
+  if (mode === 'normal' || !['easy', 'hard', 'endless'].includes(mode)) return tune;
+  const hard = mode === 'hard' || mode === 'endless';
+  const speedMult = hard ? 1.15 : 0.85;
+  const windowMult = hard ? 0.8 : 1.25;
+  return Object.freeze({
+    ...tune,
+    DENSITY_START: tune.DENSITY_START * speedMult,
+    DENSITY_END: tune.DENSITY_END * speedMult,
+    NOTE_TRAVEL_SEC: tune.NOTE_TRAVEL_SEC / speedMult,
+    PERFECT_MS: tune.PERFECT_MS * windowMult,
+    GOOD_MS: tune.GOOD_MS * windowMult,
+    RAMP_FLOOR_STEP: hard ? -1 : 0,
+    ENDLESS: mode === 'endless',
+  });
+}
+
+/** Apply the plain hitbox multiplier derived by the scene from ctx.params. */
+export function withDanceHitbox(tune, hitboxMult = 1) {
+  const mult = Number.isFinite(hitboxMult) && hitboxMult > 0 ? hitboxMult : 1;
+  if (mult === 1) return tune;
+  return Object.freeze({
+    ...tune,
+    PERFECT_MS: tune.PERFECT_MS * mult,
+    GOOD_MS: tune.GOOD_MS * mult,
+  });
+}
+
+/** §G5.4: three sections containing a combo break end an endless dance. */
+export function createDanceEndlessState(limit = DANCE_TUNING.ENDLESS_BREAK_LIMIT) {
+  return { breaks: 0, limit, ended: false };
+}
+
+export function recordDanceSection(state, missed) {
+  if (missed && !state.ended) state.breaks += 1;
+  state.ended = state.breaks >= state.limit;
+  return state.ended;
+}
 
 /**
  * Deterministic RNG (mulberry32) — same algorithm the framework hands games,
@@ -164,13 +219,14 @@ export function createSongClock({
  * @returns {DanceNote[]} sorted by time
  */
 export function generatePattern(seed = DANCE.PATTERN_SEED, opts = {}) {
+  const tune = opts.tune ?? DANCE_TUNING;
   const bpm = opts.bpm ?? DANCE.BPM;
-  const durationSec = opts.durationSec ?? DANCE.DURATION_SEC;
+  const durationSec = opts.durationSec ?? tune.DURATION_SEC;
   const rng = mulberry32(seed);
   const beatSec = 60 / bpm;
-  const slotSec = beatSec / DANCE_TUNING.SLOTS_PER_BEAT;
-  const startSlot = DANCE_TUNING.START_BEAT * DANCE_TUNING.SLOTS_PER_BEAT;
-  const endTime = durationSec - DANCE_TUNING.TAIL_SEC;
+  const slotSec = beatSec / tune.SLOTS_PER_BEAT;
+  const startSlot = tune.START_BEAT * tune.SLOTS_PER_BEAT;
+  const endTime = durationSec - tune.TAIL_SEC;
   const totalSlots = Math.floor(endTime / slotSec);
 
   /** @type {DanceNote[]} */
@@ -184,20 +240,20 @@ export function generatePattern(seed = DANCE.PATTERN_SEED, opts = {}) {
     if (time > endTime) break;
     const t = time / durationSec;
     let density =
-      DANCE_TUNING.DENSITY_START + (DANCE_TUNING.DENSITY_END - DANCE_TUNING.DENSITY_START) * t;
-    if (slot % DANCE_TUNING.SLOTS_PER_BEAT !== 0) density *= DANCE_TUNING.OFFBEAT_MULT;
+      tune.DENSITY_START + (tune.DENSITY_END - tune.DENSITY_START) * t;
+    if (slot % tune.SLOTS_PER_BEAT !== 0) density *= tune.OFFBEAT_MULT;
     if (rng() >= density) continue;
-    if (time - lastTime < DANCE_TUNING.MIN_GAP_SEC - 1e-9) continue;
+    if (time - lastTime < tune.MIN_GAP_SEC - 1e-9) continue;
 
     // lane walk: sometimes stay, otherwise step to a neighbor lane
-    if (rng() >= DANCE_TUNING.LANE_REPEAT_CHANCE) {
+    if (rng() >= tune.LANE_REPEAT_CHANCE) {
       lane = lane === 0 ? 1 : lane === DANCE.LANES - 1 ? DANCE.LANES - 2 : lane + (rng() < 0.5 ? -1 : 1);
     }
     // respect the same-lane gap; try the other lanes in a deterministic order
     let chosen = -1;
     for (let k = 0; k < DANCE.LANES; k += 1) {
       const cand = (lane + k) % DANCE.LANES;
-      if (time - lastLaneTime[cand] >= DANCE_TUNING.LANE_GAP_SEC - 1e-9) {
+      if (time - lastLaneTime[cand] >= tune.LANE_GAP_SEC - 1e-9) {
         chosen = cand;
         break;
       }
@@ -217,10 +273,10 @@ export function generatePattern(seed = DANCE.PATTERN_SEED, opts = {}) {
  * @param {number} deltaSec tapTime − noteTime, seconds (sign irrelevant)
  * @returns {'perfect'|'good'|null}
  */
-export function classifyHit(deltaSec) {
+export function classifyHit(deltaSec, tune = DANCE_TUNING) {
   const ms = Math.abs(deltaSec) * 1000;
-  if (ms <= DANCE.PERFECT_MS) return 'perfect';
-  if (ms <= DANCE.GOOD_MS) return 'good';
+  if (ms <= tune.PERFECT_MS) return 'perfect';
+  if (ms <= tune.GOOD_MS) return 'good';
   return null;
 }
 
@@ -233,10 +289,10 @@ export function classifyHit(deltaSec) {
  * @param {number} songTime seconds
  * @returns {number} index into notes, or −1
  */
-export function judgeTap(notes, lane, songTime) {
+export function judgeTap(notes, lane, songTime, tune = DANCE_TUNING) {
   let best = -1;
   let bestAbs = Infinity;
-  const windowSec = DANCE.GOOD_MS / 1000;
+  const windowSec = tune.GOOD_MS / 1000;
   for (let i = 0; i < notes.length; i += 1) {
     const n = notes[i];
     if (n.lane !== lane || n.hit || n.missed) continue;
@@ -361,8 +417,31 @@ export function encoreBonus(kind, active) {
  * @param {number} songTime
  * @returns {'future'|'visible'|'expired'}
  */
-export function noteLifecycle(noteTime, songTime) {
-  if (songTime - noteTime > DANCE.GOOD_MS / 1000) return 'expired';
-  if (noteTime - songTime <= DANCE_TUNING.NOTE_TRAVEL_SEC) return 'visible';
+export function noteLifecycle(noteTime, songTime, tune = DANCE_TUNING) {
+  if (songTime - noteTime > tune.GOOD_MS / 1000) return 'expired';
+  if (noteTime - songTime <= tune.NOTE_TRAVEL_SEC) return 'visible';
   return 'future';
+}
+
+/**
+ * Deterministic headless certification bot. It consumes the same derived
+ * chart/windows as the live bot and models seeded human timing error.
+ */
+export function simulateDanceAutoplay(seed, mode = 'normal') {
+  const tune = applyDifficulty(DANCE_TUNING, mode);
+  const notes = generatePattern(DANCE.PATTERN_SEED, { tune });
+  const rng = mulberry32(seed);
+  const tally = createTally();
+  const missChance = mode === 'easy' ? 0.04 : mode === 'hard' || mode === 'endless' ? 0.1 : 0.08;
+  for (const note of notes) {
+    if (rng() < missChance) {
+      applyJudgment(tally, 'miss');
+      continue;
+    }
+    const error = (rng() + rng() + rng() - 1.5) * 0.16;
+    const kind = classifyHit(error, tune);
+    applyJudgment(tally, kind ?? 'miss');
+    void note;
+  }
+  return { score: danceScore(tally), tune, tally };
 }

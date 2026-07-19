@@ -37,7 +37,37 @@ export const BUBBLE = Object.freeze({
   SPIKY_TOUCH_RADIUS: 0.6,
   /** Mini foods that ride in bubbles (Kenney food-kit keys). */
   FOODS: Object.freeze(['carrot', 'apple', 'banana', 'cheese', 'donut-sprinkles', 'cupcake']),
+  /** §G5 mode metadata and endless density floor. */
+  ENDLESS: false,
+  ENDLESS_SPIKY_LIMIT: 3,
+  ENDLESS_SPAWN_FLOOR_SEC: 0.35,
 });
+
+/** §G5 timed-arena difficulty (normal stays bit-identical). */
+export function applyDifficulty(tune = BUBBLE, mode = 'normal') {
+  if (mode === 'normal' || !['easy', 'hard', 'endless'].includes(mode)) return tune;
+  const hard = mode === 'hard' || mode === 'endless';
+  const spawnMult = hard ? 0.85 : 1.2;
+  const windowMult = hard ? 0.8 : 1.25;
+  return Object.freeze({
+    ...tune,
+    DURATION_SEC: hard ? tune.DURATION_SEC : tune.DURATION_SEC * 1.2,
+    SPAWN_SEC_START: tune.SPAWN_SEC_START * spawnMult,
+    SPAWN_SEC_END: tune.SPAWN_SEC_END * spawnMult,
+    TARGET_ROTATE_SEC: Math.max(0.35, tune.TARGET_ROTATE_SEC * windowMult),
+    ENDLESS: mode === 'endless',
+  });
+}
+
+export function createBubbleEndlessState(limit = BUBBLE.ENDLESS_SPIKY_LIMIT) {
+  return { spikyPops: 0, limit, ended: false };
+}
+
+export function recordBubbleEndlessPop(state, result) {
+  if (result === 'spiky' && !state.ended) state.spikyPops += 1;
+  state.ended = state.spikyPops >= state.limit;
+  return state.ended;
+}
 
 /**
  * Color-blind-safe identity: color is redundant with a high-contrast symbol.
@@ -59,9 +89,11 @@ export const BUBBLE_STYLES = Object.freeze({
  * @param {number} [duration]
  * @returns {number} wu/s
  */
-export function riseSpeedAt(elapsed, duration = BUBBLE.DURATION_SEC) {
-  const t = Math.min(1, Math.max(0, elapsed / duration));
-  return BUBBLE.RISE_START + (BUBBLE.RISE_END - BUBBLE.RISE_START) * t;
+export function riseSpeedAt(elapsed, duration = BUBBLE.DURATION_SEC, tune = BUBBLE) {
+  const t = tune.ENDLESS
+    ? Math.max(0, elapsed / duration)
+    : Math.min(1, Math.max(0, elapsed / duration));
+  return tune.RISE_START + (tune.RISE_END - tune.RISE_START) * t;
 }
 
 /**
@@ -70,9 +102,12 @@ export function riseSpeedAt(elapsed, duration = BUBBLE.DURATION_SEC) {
  * @param {number} [duration]
  * @returns {number}
  */
-export function spawnIntervalAt(elapsed, duration = BUBBLE.DURATION_SEC) {
-  const t = Math.min(1, Math.max(0, elapsed / duration));
-  return BUBBLE.SPAWN_SEC_START + (BUBBLE.SPAWN_SEC_END - BUBBLE.SPAWN_SEC_START) * t;
+export function spawnIntervalAt(elapsed, duration = BUBBLE.DURATION_SEC, tune = BUBBLE) {
+  const t = tune.ENDLESS
+    ? Math.max(0, elapsed / duration)
+    : Math.min(1, Math.max(0, elapsed / duration));
+  const interval = tune.SPAWN_SEC_START + (tune.SPAWN_SEC_END - tune.SPAWN_SEC_START) * t;
+  return tune.ENDLESS ? Math.max(tune.ENDLESS_SPAWN_FLOOR_SEC, interval) : interval;
 }
 
 /**
@@ -80,8 +115,8 @@ export function spawnIntervalAt(elapsed, duration = BUBBLE.DURATION_SEC) {
  * @param {number} elapsed seconds
  * @returns {number} 0-based slot index
  */
-export function targetIndexAt(elapsed) {
-  return Math.max(0, Math.floor(elapsed / BUBBLE.TARGET_ROTATE_SEC));
+export function targetIndexAt(elapsed, tune = BUBBLE) {
+  return Math.max(0, Math.floor(elapsed / tune.TARGET_ROTATE_SEC));
 }
 
 /**
@@ -115,10 +150,10 @@ export function targetOrder(rng, count) {
  * @param {string} targetFood current target food id
  * @returns {{kind: 'spiky'}|{kind: 'food', food: string}}
  */
-export function rollBubble(rng, targetFood) {
-  if (rng() < BUBBLE.SPIKY_CHANCE) return { kind: 'spiky' };
-  if (rng() < BUBBLE.TARGET_CHANCE) return { kind: 'food', food: targetFood };
-  const others = BUBBLE.FOODS.filter((f) => f !== targetFood);
+export function rollBubble(rng, targetFood, tune = BUBBLE) {
+  if (rng() < tune.SPIKY_CHANCE) return { kind: 'spiky' };
+  if (rng() < tune.TARGET_CHANCE) return { kind: 'food', food: targetFood };
+  const others = tune.FOODS.filter((f) => f !== targetFood);
   return { kind: 'food', food: others[Math.min(others.length - 1, Math.floor(rng() * others.length))] };
 }
 
@@ -187,4 +222,39 @@ export function chainNeighborIndices(bubbles, style, x, y, radius = BUBBLE.CHAIN
 /** Raycast radius audit helper (spikes must be as tappable as they look). */
 export function touchRadiusFor(kind) {
   return kind === 'spiky' ? BUBBLE.SPIKY_TOUCH_RADIUS : BUBBLE.FOOD_TOUCH_RADIUS;
+}
+
+/** Deterministic certification bot using the derived spawn cadence. */
+export function simulateBubbleAutoplay(seed, mode = 'normal') {
+  const tune = applyDifficulty(BUBBLE, mode);
+  let a = seed >>> 0;
+  const rng = () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) | 0;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const duration = tune.ENDLESS ? 90 : tune.DURATION_SEC;
+  let elapsed = 0;
+  let score = 0;
+  let matches = 0;
+  let spikyPops = 0;
+  const reactionAccuracy = Math.min(
+    0.93,
+    0.93 * (tune.TARGET_ROTATE_SEC / BUBBLE.TARGET_ROTATE_SEC)
+  );
+  while (elapsed < duration && spikyPops < tune.ENDLESS_SPIKY_LIMIT) {
+    elapsed += spawnIntervalAt(elapsed, tune.DURATION_SEC, tune);
+    const bubble = rollBubble(rng, 'carrot', tune);
+    if (bubble.kind === 'spiky') {
+      if (rng() < 0.025) spikyPops += 1;
+      continue;
+    }
+    if (bubble.food === 'carrot' && rng() < reactionAccuracy) {
+      score += tune.MATCH_PTS;
+      matches += 1;
+      if (matches % tune.CHAIN_COUNT === 0) score += tune.MATCH_PTS;
+    }
+  }
+  return { score, spikyPops, tune };
 }

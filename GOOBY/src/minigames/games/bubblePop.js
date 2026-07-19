@@ -17,6 +17,9 @@ import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: 
 import { clampFloatTextToView } from '../framework.js'; // F4 P2-3
 import {
   BUBBLE,
+  applyDifficulty,
+  createBubbleEndlessState,
+  recordBubbleEndlessPop,
   riseSpeedAt,
   spawnIntervalAt,
   targetIndexAt,
@@ -105,6 +108,8 @@ export default {
   /** @param {object} ctx §E8 game context */
   init(ctx) {
     this.ctx = ctx;
+    this.tune = applyDifficulty(BUBBLE, ctx.params?.difficulty ?? 'normal');
+    this.endlessState = createBubbleEndlessState(this.tune.ENDLESS_SPIKY_LIMIT);
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
 
@@ -178,7 +183,10 @@ export default {
     scene.add(this.gooby.group);
 
     // --- target banner (in-scene canvas board, §C6.1: "Pop: <food>") ---
-    this.targets = targetOrder(ctx.rng, Math.ceil(BUBBLE.DURATION_SEC / BUBBLE.TARGET_ROTATE_SEC) + 1);
+    const targetSlots = this.tune.ENDLESS
+      ? 128
+      : Math.ceil(this.tune.DURATION_SEC / this.tune.TARGET_ROTATE_SEC) + 1;
+    this.targets = targetOrder(ctx.rng, targetSlots);
     this.targetIdx = -1;
     this.bannerCanvas = document.createElement('canvas');
     this.bannerCanvas.width = 512;
@@ -246,7 +254,7 @@ export default {
 
     this.setTarget(0);
     ctx.hud.setScore(0);
-    ctx.hud.setTime(BUBBLE.DURATION_SEC);
+    ctx.hud.setTime(this.tune.ENDLESS ? 0 : this.tune.DURATION_SEC);
   },
 
   /** Current target food id. */
@@ -356,7 +364,7 @@ export default {
   /** Build/reuse a bubble and float it in from the bottom. */
   spawnBubble() {
     const { rng, scene } = this.ctx;
-    const roll = rollBubble(rng, this.target());
+    const roll = rollBubble(rng, this.target(), this.tune);
     let grp;
     let sphere;
     let foodHolder = null;
@@ -501,7 +509,19 @@ export default {
       bubble.wobT = 0.5;
       this.particles.emit('dizzyStars', pos, { count: 3 });
       this.reactGooby('grumpy', 'refuse', pos);
+      if (this.tune.ENDLESS && recordBubbleEndlessPop(this.endlessState, 'spiky')) {
+        this.finishRound();
+      }
     }
+  },
+
+  finishRound() {
+    if (this.phase !== 'play') return;
+    this.phase = 'ending';
+    this.endT = 0;
+    this.ctx.camera.position.set(0, 0, 10);
+    this.ctx.audio.play('ui.win');
+    this.gooby.setEmotion('ecstatic');
   },
 
   /** Brief Gooby reaction toward a pop position. */
@@ -571,12 +591,12 @@ export default {
       return;
     }
 
-    const remaining = BUBBLE.DURATION_SEC - elapsed;
-    ctx.hud.setTime(remaining);
+    const remaining = this.tune.DURATION_SEC - elapsed;
+    ctx.hud.setTime(this.tune.ENDLESS ? elapsed : remaining);
     if (this.stunT > 0) this.stunT -= dt;
 
     // target rotation (§C6.1: every 12 s)
-    this.setTarget(targetIndexAt(elapsed));
+    this.setTarget(targetIndexAt(elapsed, this.tune));
 
     if (this.autoplay) this.autoplayTick(dt);
 
@@ -584,11 +604,11 @@ export default {
     this.spawnT -= dt;
     if (this.spawnT <= 0) {
       this.spawnBubble();
-      this.spawnT = spawnIntervalAt(elapsed);
+      this.spawnT = spawnIntervalAt(elapsed, this.tune.DURATION_SEC, this.tune);
     }
 
     // rise + wobble; despawn above the top
-    const speed = riseSpeedAt(elapsed);
+    const speed = riseSpeedAt(elapsed, this.tune.DURATION_SEC, this.tune);
     for (const b of this.bubbles) {
       if (!b.active) continue;
       const p = b.grp.position;
@@ -612,7 +632,7 @@ export default {
       this.bannerFood.rotation.y += dt * 1.4;
     }
 
-    if (remaining <= 0) {
+    if (!this.tune.ENDLESS && remaining <= 0) {
       this.phase = 'ending';
       ctx.camera.position.set(0, 0, 10);
       ctx.audio.play('ui.win');
@@ -646,6 +666,8 @@ export default {
     this.bubbleMats = {};
     this.markerTexs = [];
     this.popChain = null;
+    this.tune = null;
+    this.endlessState = null;
     this.bannerFood = null;
     this.banner = null;
     this.bannerTex = null;

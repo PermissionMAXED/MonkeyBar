@@ -9,6 +9,11 @@ import assert from 'node:assert/strict';
 
 import {
   DANCE_TUNING,
+  applyDifficulty as applyDanceDifficulty,
+  withDanceHitbox,
+  createDanceEndlessState,
+  recordDanceSection,
+  simulateDanceAutoplay,
   createSongClock,
   mulberry32,
   generatePattern,
@@ -26,6 +31,10 @@ import {
 } from '../src/minigames/games/danceParty.logic.js';
 import {
   FISHING,
+  applyDifficulty as applyFishingDifficulty,
+  createFishingEndlessState,
+  recordFishingFailure,
+  simulateFishingAutoplay,
   lowerDepth,
   catchValue,
   needsReel,
@@ -44,6 +53,10 @@ import {
 } from '../src/minigames/games/fishingPond.logic.js';
 import {
   BUBBLE,
+  applyDifficulty as applyBubbleDifficulty,
+  createBubbleEndlessState,
+  recordBubbleEndlessPop,
+  simulateBubbleAutoplay,
   riseSpeedAt,
   spawnIntervalAt,
   targetIndexAt,
@@ -59,6 +72,11 @@ import {
 } from '../src/minigames/games/bubblePop.logic.js';
 import {
   TRAMP,
+  applyDifficulty as applyTrampolineDifficulty,
+  withTrampolineHitbox,
+  createTrampolineEndlessState,
+  recordTrampolineLanding,
+  simulateTrampolineAutoplay,
   windowSecFor,
   heightMultiplier,
   apexFor,
@@ -706,4 +724,151 @@ test('tramp V3/G44 audit: armed landing is consumed once and high-tier contact i
   assert.equal(crossedMat(0.12, -0.2, -7.5), true);
   assert.equal(crossedMat(0, -0.2, -7.5), false, 'already-at-mat frame cannot double fire');
   assert.equal(crossedMat(0.12, -0.2, 1), false, 'upward motion is not a landing');
+});
+
+// ===========================================================================
+// V4/G72 — §G5 difficulty, Endlos and eligible modifier tuning
+// ===========================================================================
+
+const meanScore = (simulate, mode) => {
+  const scores = Array.from({ length: 10 }, (_, i) => simulate(i + 1, mode).score);
+  return scores.reduce((sum, score) => sum + score, 0) / scores.length;
+};
+
+const certifyHard = (simulate, target) => {
+  const scores = Array.from({ length: 5 }, (_, i) => simulate(i + 1, 'hard').score);
+  assert.ok(Math.max(...scores) >= target, `Schwer target ${target}; scores=${scores.join(',')}`);
+  assert.ok(meanScore(simulate, 'easy') >= meanScore(simulate, 'normal'));
+  assert.ok(meanScore(simulate, 'normal') >= meanScore(simulate, 'hard'));
+};
+
+test('dance V4/G72: sequence difficulty is monotone and keeps the seed/music contract', () => {
+  const easy = applyDanceDifficulty(DANCE_TUNING, 'easy');
+  const hard = applyDanceDifficulty(DANCE_TUNING, 'hard');
+  const endless = applyDanceDifficulty(DANCE_TUNING, 'endless');
+  assert.strictEqual(applyDanceDifficulty(DANCE_TUNING, 'normal'), DANCE_TUNING);
+  assert.ok(Object.isFrozen(easy) && Object.isFrozen(hard) && Object.isFrozen(endless));
+  assert.ok(easy.DENSITY_START < DANCE_TUNING.DENSITY_START);
+  assert.ok(DANCE_TUNING.DENSITY_START < hard.DENSITY_START);
+  assert.ok(easy.NOTE_TRAVEL_SEC > DANCE_TUNING.NOTE_TRAVEL_SEC);
+  assert.ok(DANCE_TUNING.NOTE_TRAVEL_SEC > hard.NOTE_TRAVEL_SEC);
+  assert.ok(easy.GOOD_MS > DANCE_TUNING.GOOD_MS);
+  assert.ok(DANCE_TUNING.GOOD_MS > hard.GOOD_MS);
+  assert.ok(hard.NOTE_TRAVEL_SEC >= 0.35, 'reaction/preview window guardrail');
+  assert.ok(hard.GOOD_MS >= DANCE_TUNING.GOOD_MS * 0.55, 'judgment hitbox guardrail');
+  assert.equal(endless.ENDLESS, true);
+  assert.equal(DANCE.BPM, 100);
+  assert.deepEqual(
+    generatePattern(DANCE.PATTERN_SEED, { tune: hard }),
+    generatePattern(DANCE.PATTERN_SEED, { tune: hard }),
+    'difficulty never replaces PATTERN_SEED'
+  );
+});
+
+test('dance V4/G72: Giant Gooby numbers and three-section Endlos condition', () => {
+  const hard = applyDanceDifficulty(DANCE_TUNING, 'hard');
+  const giant = withDanceHitbox(hard, 1.3);
+  assert.equal(giant.GOOD_MS, hard.GOOD_MS * 1.3);
+  assert.equal(giant.PERFECT_MS, hard.PERFECT_MS * 1.3);
+  assert.equal(hard.GOOD_MS, DANCE_TUNING.GOOD_MS * 0.8, 'base tune is immutable');
+  const state = createDanceEndlessState();
+  assert.equal(recordDanceSection(state, false), false);
+  assert.equal(recordDanceSection(state, true), false);
+  assert.equal(recordDanceSection(state, true), false);
+  assert.equal(recordDanceSection(state, true), true);
+  assert.equal(state.breaks, 3);
+});
+
+test('dance V4/G72: five-seed Schwer certification and ten-seed monotonicity', () => {
+  certifyHard(simulateDanceAutoplay, 140);
+});
+
+test('fishing V4/G72: timed-arena parameters are monotone with guardrails', () => {
+  const easy = applyFishingDifficulty(FISHING, 'easy');
+  const hard = applyFishingDifficulty(FISHING, 'hard');
+  const endless = applyFishingDifficulty(FISHING, 'endless');
+  assert.strictEqual(applyFishingDifficulty(FISHING, 'normal'), FISHING);
+  assert.equal(easy.DURATION_SEC, FISHING.DURATION_SEC * 1.2);
+  assert.equal(hard.DURATION_SEC, FISHING.DURATION_SEC);
+  assert.ok(easy.RESPAWN_SEC > FISHING.RESPAWN_SEC);
+  assert.ok(FISHING.RESPAWN_SEC > hard.RESPAWN_SEC);
+  assert.ok(easy.REEL_WINDOW_SEC > FISHING.REEL_WINDOW_SEC);
+  assert.ok(FISHING.REEL_WINDOW_SEC > hard.REEL_WINDOW_SEC);
+  assert.ok(hard.REEL_WINDOW_SEC >= 0.35);
+  assert.ok(hard.CATCH_RADIUS >= FISHING.CATCH_RADIUS * 0.55);
+  assert.equal(endless.ENDLESS, true);
+});
+
+test('fishing V4/G72: Endlos counts exactly line breaks and boots', () => {
+  const state = createFishingEndlessState();
+  assert.equal(recordFishingFailure(state, 'miss'), false);
+  assert.equal(recordFishingFailure(state, 'lineBreak'), false);
+  assert.equal(recordFishingFailure(state, 'boot'), false);
+  assert.equal(recordFishingFailure(state, 'boot'), true);
+  assert.deepEqual(state, { failures: 3, limit: 3, ended: true });
+});
+
+test('fishing V4/G72: five-seed Schwer certification and ten-seed monotonicity', () => {
+  certifyHard(simulateFishingAutoplay, 65);
+});
+
+test('bubble V4/G72: timed-arena parameters are monotone with guardrails', () => {
+  const easy = applyBubbleDifficulty(BUBBLE, 'easy');
+  const hard = applyBubbleDifficulty(BUBBLE, 'hard');
+  const endless = applyBubbleDifficulty(BUBBLE, 'endless');
+  assert.strictEqual(applyBubbleDifficulty(BUBBLE, 'normal'), BUBBLE);
+  assert.equal(easy.DURATION_SEC, BUBBLE.DURATION_SEC * 1.2);
+  assert.equal(hard.DURATION_SEC, BUBBLE.DURATION_SEC);
+  assert.ok(easy.SPAWN_SEC_START > BUBBLE.SPAWN_SEC_START);
+  assert.ok(BUBBLE.SPAWN_SEC_START > hard.SPAWN_SEC_START);
+  assert.ok(easy.TARGET_ROTATE_SEC > BUBBLE.TARGET_ROTATE_SEC);
+  assert.ok(BUBBLE.TARGET_ROTATE_SEC > hard.TARGET_ROTATE_SEC);
+  assert.ok(hard.TARGET_ROTATE_SEC >= 0.35);
+  assert.equal(endless.ENDLESS, true);
+  assert.equal(spawnIntervalAt(10000, endless.DURATION_SEC, endless), BUBBLE.ENDLESS_SPAWN_FLOOR_SEC);
+});
+
+test('bubble V4/G72: three spiky taps end Endlos', () => {
+  const state = createBubbleEndlessState();
+  assert.equal(recordBubbleEndlessPop(state, 'match'), false);
+  assert.equal(recordBubbleEndlessPop(state, 'spiky'), false);
+  assert.equal(recordBubbleEndlessPop(state, 'spiky'), false);
+  assert.equal(recordBubbleEndlessPop(state, 'spiky'), true);
+  assert.equal(state.spikyPops, 3);
+});
+
+test('bubble V4/G72: five-seed Schwer certification and ten-seed monotonicity', () => {
+  certifyHard(simulateBubbleAutoplay, 80);
+});
+
+test('trampoline V4/G72: physics tolerances are monotone and duration stays frozen', () => {
+  const easy = applyTrampolineDifficulty(TRAMP, 'easy');
+  const hard = applyTrampolineDifficulty(TRAMP, 'hard');
+  const endless = applyTrampolineDifficulty(TRAMP, 'endless');
+  assert.strictEqual(applyTrampolineDifficulty(TRAMP, 'normal'), TRAMP);
+  assert.equal(easy.DURATION_SEC, TRAMP.DURATION_SEC);
+  assert.equal(hard.DURATION_SEC, TRAMP.DURATION_SEC);
+  assert.ok(easy.WINDOW_BASE_SEC > TRAMP.WINDOW_BASE_SEC);
+  assert.ok(TRAMP.WINDOW_BASE_SEC > hard.WINDOW_BASE_SEC);
+  assert.ok(hard.WINDOW_BASE_SEC >= TRAMP.WINDOW_BASE_SEC * 0.55);
+  assert.ok(hard.WINDOW_MIN_SEC >= TRAMP.WINDOW_MIN_SEC * 0.55);
+  assert.ok(hard.JUDGE_ZONE_SEC >= 0.35);
+  assert.equal(endless.ENDLESS, true);
+});
+
+test('trampoline V4/G72: Giant Gooby hit window and three-failure Endlos condition', () => {
+  const hard = applyTrampolineDifficulty(TRAMP, 'hard');
+  const giant = withTrampolineHitbox(hard, 1.3);
+  assert.equal(giant.WINDOW_BASE_SEC, hard.WINDOW_BASE_SEC * 1.3);
+  assert.equal(giant.JUDGE_ZONE_SEC, hard.JUDGE_ZONE_SEC * 1.3);
+  const state = createTrampolineEndlessState();
+  assert.equal(recordTrampolineLanding(state, 'boost'), false);
+  assert.equal(recordTrampolineLanding(state, 'butt'), false);
+  assert.equal(recordTrampolineLanding(state, 'butt'), false);
+  assert.equal(recordTrampolineLanding(state, 'butt'), true);
+  assert.equal(state.failedLandings, 3);
+});
+
+test('trampoline V4/G72: five-seed Schwer certification and ten-seed monotonicity', () => {
+  certifyHard(simulateTrampolineAutoplay, 105);
 });

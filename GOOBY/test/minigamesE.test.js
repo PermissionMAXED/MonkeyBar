@@ -11,6 +11,10 @@ import { fileURLToPath } from 'node:url';
 
 import {
   HOPPER,
+  applyDifficulty as applyHopperDifficulty,
+  withHopperRuntime,
+  hopperEndlessEnded,
+  simulateHopperAutoplay,
   speedAt,
   difficultyAt,
   rowGapAt,
@@ -35,6 +39,10 @@ import {
 } from '../src/minigames/games/starHopper.logic.js';
 import {
   PIPE,
+  applyDifficulty as applyPipeDifficulty,
+  createPipeEndlessState,
+  recordPipeFailure,
+  simulatePipeAutoplay,
   DIRS,
   opposite,
   connectionsOf,
@@ -54,6 +62,12 @@ import {
 // --- V2/G28 (wave 4): deliveryRush + miniGolf logic siblings -----------------
 import {
   DELIVERY,
+  applyDifficulty as applyDeliveryDifficulty,
+  withDeliveryCoinRate,
+  createDeliveryEndlessState,
+  recordDeliveryExpiry,
+  parcelExpired,
+  simulateDeliveryAutoplay,
   pickDeliveries,
   pickFragileParcel,
   fragileCrashPenalty,
@@ -69,6 +83,10 @@ import {
 } from '../src/minigames/games/deliveryRush.logic.js';
 import {
   GOLF,
+  applyDifficulty as applyGolfDifficulty,
+  createGolfEndlessState,
+  recordGolfHole,
+  simulateGolfAutoplay,
   holeScore,
   frictionFactor,
   rollDistance,
@@ -877,4 +895,175 @@ test('miniGolf: coin row §C1.1 — 5/4/28 energy 8, typical ≈ 80 → 16c', ()
   assert.equal(computeCoins(COIN_TABLE.miniGolf, 9999, false), 28); // max clamp
   // perfect round (6 aces) still clamps inside the row
   assert.equal(computeCoins(COIN_TABLE.miniGolf, 6 * GOLF.SCORE_ACE, false), 28);
+});
+
+// ===========================================================================
+// V4/G72 — §G5 difficulty, Endlos and eligible modifier tuning
+// ===========================================================================
+
+const meanScore = (simulate, mode) => {
+  const scores = Array.from({ length: 10 }, (_, i) => simulate(i + 1, mode).score);
+  return scores.reduce((sum, score) => sum + score, 0) / scores.length;
+};
+
+const certifyHard = (simulate, target) => {
+  const scores = Array.from({ length: 5 }, (_, i) => simulate(i + 1, 'hard').score);
+  assert.ok(Math.max(...scores) >= target, `Schwer target ${target}; scores=${scores.join(',')}`);
+  assert.ok(meanScore(simulate, 'easy') >= meanScore(simulate, 'normal'));
+  assert.ok(meanScore(simulate, 'normal') >= meanScore(simulate, 'hard'));
+};
+
+test('starHopper V4/G72: sequence parameters are monotone and guards hold', () => {
+  const easy = applyHopperDifficulty(HOPPER, 'easy');
+  const hard = applyHopperDifficulty(HOPPER, 'hard');
+  const endless = applyHopperDifficulty(HOPPER, 'endless');
+  assert.strictEqual(applyHopperDifficulty(HOPPER, 'normal'), HOPPER);
+  assert.ok(easy.SHOWER_EVERY_SEC > HOPPER.SHOWER_EVERY_SEC);
+  assert.ok(HOPPER.SHOWER_EVERY_SEC > hard.SHOWER_EVERY_SEC);
+  assert.ok(easy.SHOWER_TELEGRAPH_SEC > HOPPER.SHOWER_TELEGRAPH_SEC);
+  assert.ok(HOPPER.SHOWER_TELEGRAPH_SEC > hard.SHOWER_TELEGRAPH_SEC);
+  assert.ok(hard.SHOWER_TELEGRAPH_SEC >= 0.35);
+  assert.ok(hard.BOT_WINDOW_SEC >= 0.35);
+  assert.ok(speedAt(0, hard) > speedAt(0, HOPPER), 'Schwer starts one ramp step ahead');
+  assert.equal(endless.MAX_SPEED, Infinity);
+  assert.equal(endless.WORMHOLE_CHANCE, HOPPER.WORMHOLE_CHANCE * 0.5);
+});
+
+test('starHopper V4/G72: scaled-speed validator keeps hard rows survivable', () => {
+  const hard = applyHopperDifficulty(HOPPER, 'hard');
+  for (let seed = 1; seed <= 100; seed += 1) {
+    const rng = rngFrom(seed);
+    const rows = [];
+    for (let i = 0; i < 35; i += 1) {
+      const elapsed = i * 1.8;
+      rows.push(generateRow(rng, elapsed, rows.slice(-6), hard));
+    }
+    assert.ok(
+      isChainSurvivable(rows, speedAt(75, hard), hard),
+      `hard scaled-speed chain is survivable for seed ${seed}`
+    );
+  }
+});
+
+test('starHopper V4/G72: plain modifier numbers alter coin, Turbo and Giant tuning', () => {
+  const base = applyHopperDifficulty(HOPPER, 'hard');
+  const derived = withHopperRuntime(base, {
+    speedMult: 1.25,
+    scoreMult: 1.5,
+    coinRate: 1.5,
+    hitboxMult: 1.3,
+    goobyScale: 1.6,
+  });
+  assert.equal(speedAt(0, derived), speedAt(0, base) * 1.25);
+  assert.equal(hopperScore(100, 20, derived), Math.round(hopperScore(100, 20, base) * 1.5));
+  assert.equal(derived.STAR_CHANCE, HOPPER.STAR_CHANCE * 1.5);
+  assert.equal(derived.HITBOX_SCALE, HOPPER.HITBOX_SCALE * 1.3);
+  assert.equal(derived.GOOBY_SCALE, 1.6);
+  assert.equal(hopperEndlessEnded(resolveHit(false)), true);
+});
+
+test('starHopper V4/G72: five-seed Schwer certification and ten-seed monotonicity', () => {
+  certifyHard(simulateHopperAutoplay, 190);
+});
+
+test('pipeFlow V4/G72: sequence parameters are monotone with window guard', () => {
+  const easy = applyPipeDifficulty(PIPE, 'easy');
+  const hard = applyPipeDifficulty(PIPE, 'hard');
+  const endless = applyPipeDifficulty(PIPE, 'endless');
+  assert.strictEqual(applyPipeDifficulty(PIPE, 'normal'), PIPE);
+  assert.equal(easy.PREVIEW_SPEED_MULT, 0.85);
+  assert.equal(hard.PREVIEW_SPEED_MULT, 1.15);
+  assert.ok(easy.ROTATE_SEC > PIPE.ROTATE_SEC);
+  assert.ok(PIPE.ROTATE_SEC > hard.ROTATE_SEC);
+  assert.ok(easy.LEAK_SEC > PIPE.LEAK_SEC);
+  assert.ok(PIPE.LEAK_SEC > hard.LEAK_SEC);
+  assert.ok(hard.LEAK_SEC >= 0.35);
+  assert.equal(endless.ENDLESS, true);
+});
+
+test('pipeFlow V4/G72: three unsolved/leaked puzzles end Endlos', () => {
+  const state = createPipeEndlessState();
+  assert.equal(recordPipeFailure(state, 'solved'), false);
+  assert.equal(recordPipeFailure(state, 'unsolved'), false);
+  assert.equal(recordPipeFailure(state, 'leak'), false);
+  assert.equal(recordPipeFailure(state, 'leak'), true);
+  assert.deepEqual(state, { failures: 3, limit: 3, ended: true });
+});
+
+test('pipeFlow V4/G72: five-seed Schwer certification and ten-seed monotonicity', () => {
+  certifyHard(simulatePipeAutoplay, 100);
+});
+
+test('deliveryRush V4/G72: runner parameters scale and road paths stay valid', () => {
+  const easy = applyDeliveryDifficulty(DELIVERY, 'easy');
+  const hard = applyDeliveryDifficulty(DELIVERY, 'hard');
+  const endless = applyDeliveryDifficulty(DELIVERY, 'endless');
+  assert.strictEqual(applyDeliveryDifficulty(DELIVERY, 'normal'), DELIVERY);
+  assert.equal(easy.SPEED_MULT, 0.85);
+  assert.equal(hard.SPEED_MULT, 1.2);
+  assert.equal(easy.TRAFFIC_DENSITY_MULT, 0.85);
+  assert.equal(hard.TRAFFIC_DENSITY_MULT, 1.15);
+  assert.equal(easy.CRASH_ALLOWANCE, DELIVERY.CRASH_ALLOWANCE + 1);
+  assert.equal(hard.CRASH_ALLOWANCE, DELIVERY.CRASH_ALLOWANCE);
+  assert.equal(endless.ENDLESS, true);
+  const layout = generateCityLayout(DRIVE_TUNING.CITY_SEED);
+  const roads = layout.landmarks.map(({ x, z }) => {
+    const { r, c } = worldToTile(x, z);
+    return nearestRoadTile(layout.grid, r, c);
+  });
+  for (let i = 1; i < roads.length; i += 1) {
+    assert.ok(roadPathBetween(layout.grid, roads[i - 1], roads[i]), 'scaled speed never invalidates route');
+  }
+});
+
+test('deliveryRush V4/G72: Coin Rain and three-expiry Endlos tuning', () => {
+  const base = applyDeliveryDifficulty(DELIVERY, 'hard');
+  const rain = withDeliveryCoinRate(base, 1.5);
+  assert.equal(rain.COIN_RATE, 1.5);
+  assert.equal(rain.COIN_INTERVAL_SEC, DELIVERY.COIN_INTERVAL_SEC / 1.5);
+  assert.equal(base.COIN_INTERVAL_SEC, DELIVERY.COIN_INTERVAL_SEC);
+  assert.equal(parcelExpired(DELIVERY.PARCEL_EXPIRE_SEC, base), false);
+  const endless = applyDeliveryDifficulty(DELIVERY, 'endless');
+  assert.equal(parcelExpired(DELIVERY.PARCEL_EXPIRE_SEC - 0.001, endless), false);
+  assert.equal(parcelExpired(DELIVERY.PARCEL_EXPIRE_SEC, endless), true);
+  const state = createDeliveryEndlessState();
+  assert.equal(recordDeliveryExpiry(state), false);
+  assert.equal(recordDeliveryExpiry(state), false);
+  assert.equal(recordDeliveryExpiry(state), true);
+  assert.equal(state.expired, 3);
+  assert.ok(simulateDeliveryAutoplay(1, 'hard', 1.5).coinPoints > 0);
+  assert.equal(simulateDeliveryAutoplay(1, 'hard').coinPoints, 0);
+});
+
+test('deliveryRush V4/G72: five-seed Schwer certification and ten-seed monotonicity', () => {
+  certifyHard(simulateDeliveryAutoplay, 200);
+});
+
+test('miniGolf V4/G72: physics tolerances are monotone with hitbox guard', () => {
+  const easy = applyGolfDifficulty(GOLF, 'easy');
+  const hard = applyGolfDifficulty(GOLF, 'hard');
+  const endless = applyGolfDifficulty(GOLF, 'endless');
+  assert.strictEqual(applyGolfDifficulty(GOLF, 'normal'), GOLF);
+  assert.ok(easy.HOLE_R > GOLF.HOLE_R);
+  assert.ok(GOLF.HOLE_R > hard.HOLE_R);
+  assert.ok(easy.CAPTURE_SPEED > GOLF.CAPTURE_SPEED);
+  assert.ok(GOLF.CAPTURE_SPEED > hard.CAPTURE_SPEED);
+  assert.ok(hard.HOLE_R >= GOLF.HOLE_R * 0.55);
+  assert.ok(hard.CAPTURE_SPEED >= GOLF.CAPTURE_SPEED * 0.55);
+  assert.equal(easy.PAR_BONUS, 1);
+  assert.equal(hard.PAR_BONUS, 0);
+  assert.equal(endless.ENDLESS, true);
+});
+
+test('miniGolf V4/G72: three over-par holes end Endlos', () => {
+  const state = createGolfEndlessState();
+  assert.equal(recordGolfHole(state, 2, 2), false);
+  assert.equal(recordGolfHole(state, 4, 3), false);
+  assert.equal(recordGolfHole(state, 5, 3), false);
+  assert.equal(recordGolfHole(state, 3, 2), true);
+  assert.equal(state.overPar, 3);
+});
+
+test('miniGolf V4/G72: five-seed Schwer certification and ten-seed monotonicity', () => {
+  certifyHard(simulateGolfAutoplay, 110);
 });

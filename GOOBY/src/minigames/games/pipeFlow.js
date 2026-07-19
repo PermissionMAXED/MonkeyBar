@@ -15,6 +15,9 @@ import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js';
 import {
   PIPE,
+  applyDifficulty,
+  createPipeEndlessState,
+  recordPipeFailure,
   DIRS,
   connectionsOf,
   rotateTile,
@@ -155,6 +158,8 @@ export default {
   /** @param {object} ctx §E8 game context */
   init(ctx) {
     this.ctx = ctx;
+    this.tune = applyDifficulty(PIPE, ctx.params?.difficulty ?? 'normal');
+    this.endlessState = createPipeEndlessState(this.tune.ENDLESS_FAILURE_LIMIT);
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
 
@@ -278,19 +283,19 @@ export default {
     });
 
     ctx.hud.setScore(0);
-    ctx.hud.setTime(PIPE.DURATION_SEC);
+    ctx.hud.setTime(this.tune.ENDLESS ? 0 : this.tune.DURATION_SEC);
   },
 
   /** Deal the next seeded puzzle and (re)build its meshes. */
   dealPuzzle() {
     this.puzzleNo += 1;
     const seed = Math.floor(this.ctx.rng() * 2 ** 31);
-    this.board = generateBoard(seed);
+    this.board = generateBoard(seed, this.tune);
     this.currentOptimal = this.board.optimalTaps;
     this.puzzleElapsed = 0;
     this.leakApplied = false;
     this.leakFxT = 0;
-    this.leakJoint = leakJointFor(this.board, this.puzzleNo);
+    this.leakJoint = leakJointFor(this.board, this.puzzleNo, this.tune);
     this.buildBoardMeshes();
     if (this.puzzleNo > 1) this.ctx.hud.banner(t('mg.pipe.puzzle', { n: this.puzzleNo }));
     if (this.autoplay) {
@@ -298,8 +303,8 @@ export default {
       this.botQueue = taps.slice();
       // Human-ish pacing (§C1.2 #9: ~3 puzzles / 90 s typical): a per-puzzle
       // think budget split into a study pause + evenly spread taps.
-      const budget = 23 + this.ctx.rng() * 8; // s of studying + tapping
-      const study = 5 + this.ctx.rng() * 2.5;
+      const budget = (23 + this.ctx.rng() * 8) / this.tune.PREVIEW_SPEED_MULT;
+      const study = (5 + this.ctx.rng() * 2.5) / this.tune.PREVIEW_SPEED_MULT;
       this.botTapInterval = THREE.MathUtils.clamp(
         (budget - study) / Math.max(1, this.botQueue.length), 0.8, 4.5
       );
@@ -412,7 +417,7 @@ export default {
     view.turnTween = tween({
       from: pipes.rotation.z,
       to: target,
-      duration: 0.16,
+      duration: this.tune.ROTATE_SEC,
       ease: easings.easeOutQuad,
       onUpdate: (v) => { pipes.rotation.z = v; },
       onComplete: () => { view.turnTween = null; },
@@ -435,14 +440,14 @@ export default {
     this.fillT = 0;
     this.filledDepth = -1;
     // HUD score reflects 25·solved live; the efficiency bonus lands at onEnd.
-    this.ctx.onScore(PIPE.SOLVE_POINTS);
-    this.displayedScore += PIPE.SOLVE_POINTS;
+    this.ctx.onScore(this.tune.SOLVE_POINTS);
+    this.displayedScore += this.tune.SOLVE_POINTS;
   },
 
   /** Advance the fill animation; deal the next puzzle when done. */
   updateFill(dt) {
     this.fillT += dt;
-    const depthNow = Math.floor(this.fillT / 0.09);
+    const depthNow = Math.floor(this.fillT / this.tune.FILL_STEP_SEC);
     if (depthNow > this.filledDepth) {
       this.filledDepth = depthNow;
       for (const [idx, depth] of this.fillDepths) {
@@ -452,12 +457,12 @@ export default {
       }
       if (depthNow <= this.fillMax) this.ctx.audio.play('pipe.fill');
     }
-    if (this.fillT > this.fillMax * 0.09 + 0.25 && !this.sprayed) {
+    if (this.fillT > this.fillMax * this.tune.FILL_STEP_SEC + 0.25 && !this.sprayed) {
       this.sprayed = true;
       this.particles.emit('bubbles', this.sprinklerPos, { count: 14 });
       this.particles.emit('sparkles', this.sprinklerPos, { count: 8 });
     }
-    if (this.fillT >= this.fillMax * 0.09 + 1.1) {
+    if (this.fillT >= this.fillMax * this.tune.FILL_STEP_SEC + this.tune.FILL_END_DELAY_SEC) {
       this.sprayed = false;
       this.gooby.setEmotion('happy');
       this.phase = 'play';
@@ -489,15 +494,15 @@ export default {
       this.endT += dt;
       if (this.endT >= 1.2 && this.phase !== 'done') {
         this.phase = 'done';
-        const final = pipeScore(this.solved, this.totalTaps, this.totalOptimal, PIPE, this.leakPenalties);
+        const final = pipeScore(this.solved, this.totalTaps, this.totalOptimal, this.tune, this.leakPenalties);
         if (final !== this.displayedScore) ctx.onScore(final - this.displayedScore);
         ctx.onEnd({ score: final });
       }
       return;
     }
 
-    const remaining = PIPE.DURATION_SEC - elapsed;
-    ctx.hud.setTime(remaining);
+    const remaining = this.tune.DURATION_SEC - elapsed;
+    ctx.hud.setTime(this.tune.ENDLESS ? elapsed : remaining);
 
     if (this.phase === 'play') {
       this.puzzleElapsed += dt;
@@ -513,16 +518,21 @@ export default {
             this.particles.emit('bubbles', world, { count: 2 });
           }
         }
-        if (leakPenaltyDue(this.puzzleElapsed, this.leakApplied)) {
+        if (leakPenaltyDue(this.puzzleElapsed, this.leakApplied, this.tune)) {
           this.leakApplied = true;
           this.leakPenalties += 1;
-          const delta = -Math.min(PIPE.LEAK_PENALTY, this.displayedScore);
+          const delta = -Math.min(this.tune.LEAK_PENALTY, this.displayedScore);
           if (delta !== 0) {
             ctx.onScore(delta);
             this.displayedScore += delta;
           }
           ctx.audio.play('pipe.fill');
-          ctx.hud.banner(t('v3.depth.pipe.leakPenalty', { n: PIPE.LEAK_PENALTY }));
+          ctx.hud.banner(t('v3.depth.pipe.leakPenalty', { n: this.tune.LEAK_PENALTY }));
+          if (this.tune.ENDLESS) {
+            if (recordPipeFailure(this.endlessState, 'leak')) this.finishRound();
+            else this.dealPuzzle();
+            return;
+          }
         }
       }
     }
@@ -532,9 +542,9 @@ export default {
     // idle sway: sprinkler-to-be garden plan breathes a little
     this.boardGroup.rotation.z = Math.sin(elapsed * 0.4) * 0.004;
 
-    if (remaining <= 0 && this.phase !== 'ending') {
+    if (!this.tune.ENDLESS && remaining <= 0 && this.phase !== 'ending') {
       this.phase = 'ending';
-      const final = pipeScore(this.solved, this.totalTaps, this.totalOptimal, PIPE, this.leakPenalties);
+      const final = pipeScore(this.solved, this.totalTaps, this.totalOptimal, this.tune, this.leakPenalties);
       ctx.audio.play('ui.win');
       this.gooby.setEmotion(this.solved > 0 ? 'ecstatic' : 'sad');
       if (this.solved > 0) this.gooby.play('happyBounce');
@@ -546,6 +556,14 @@ export default {
         );
       }
     }
+  },
+
+  finishRound() {
+    if (this.phase === 'ending' || this.phase === 'done') return;
+    this.phase = 'ending';
+    this.endT = 0;
+    this.ctx.audio.play('ui.win');
+    this.gooby.setEmotion(this.solved > 0 ? 'ecstatic' : 'sad');
   },
 
   dispose() {
@@ -568,6 +586,8 @@ export default {
     this.ctx = null;
     this.gooby = null;
     this.particles = null;
+    this.tune = null;
+    this.endlessState = null;
     this.ownedGeos = [];
     this.ownedMats = [];
     this.ownedTexs = [];

@@ -23,6 +23,10 @@ import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: 
 import { clampFloatTextToView } from '../framework.js'; // F4 P2-3
 import {
   DANCE_TUNING,
+  applyDifficulty,
+  withDanceHitbox,
+  createDanceEndlessState,
+  recordDanceSection,
   createSongClock, // F6 (RE5 P1): absolute-time-base song clock
   generatePattern,
   classifyHit,
@@ -103,6 +107,15 @@ export default {
   /** @param {object} ctx §E8 game context */
   init(ctx) {
     this.ctx = ctx;
+    const modifier = ctx.params?.modifier ?? {};
+    this.tune = withDanceHitbox(
+      applyDifficulty(DANCE_TUNING, ctx.params?.difficulty ?? 'normal'),
+      modifier.hitboxMult ?? 1
+    );
+    this.goobyScale = modifier.type === 'riesenGooby' ? 1.6 : 1;
+    this.endlessState = createDanceEndlessState(this.tune.ENDLESS_BREAK_LIMIT);
+    this.sectionIdx = 0;
+    this.sectionMissed = false;
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
 
@@ -137,7 +150,9 @@ export default {
 
     // --- pattern (the §D6/G14 seed contract) ---
     /** @type {Array<{time:number,lane:number,hit?:boolean,missed?:boolean,mesh?:THREE.Group}>} */
-    this.notes = generatePattern(DANCE.PATTERN_SEED).map((n) => ({ ...n }));
+    this.notes = [];
+    this.chartSegment = 0;
+    this.appendChartSegment();
     this.nextSpawn = 0; // index of the next note to get a mesh
     this.headIdx = 0; //   index of the first note that can still be judged
 
@@ -210,6 +225,7 @@ export default {
     this.danceGrp = new THREE.Group(); // external energy bob/pulse wrapper
     this.gooby = createGooby({ particles: this.particles });
     applyEquippedOutfits(this.gooby); // G14: cameo wears the equipped outfits
+    this.gooby.group.scale.setScalar(this.goobyScale);
     this.gooby.group.position.set(0, 1.15, -1.6);
     this.gooby.setEmotion('happy');
     this.gooby.play('dance', { loop: true });
@@ -284,7 +300,38 @@ export default {
     // beat source contract (§D6): the stub logs, G14's real track takes over.
     ctx.audio.music('dance');
     ctx.hud.setScore(0);
-    ctx.hud.setTime(DANCE.DURATION_SEC);
+    ctx.hud.setTime(this.tune.ENDLESS ? 0 : this.tune.DURATION_SEC);
+  },
+
+  /**
+   * Append one deterministic 75-second chart segment. Segment zero preserves
+   * the frozen PATTERN_SEED/BPM contract exactly; Endlos extends it lazily
+   * instead of imposing an arbitrary hidden duration cap.
+   */
+  appendChartSegment() {
+    const segment = this.chartSegment;
+    const offset = segment * this.tune.DURATION_SEC;
+    const seed = segment === 0
+      ? DANCE.PATTERN_SEED
+      : (DANCE.PATTERN_SEED + Math.imul(segment, 0x9e3779b1)) >>> 0;
+    const generated = generatePattern(seed, {
+      durationSec: this.tune.DURATION_SEC,
+      tune: this.tune,
+    }).map((n) => ({ ...n, time: n.time + offset }));
+    const first = this.notes.length;
+    this.notes.push(...generated);
+    this.chartSegment += 1;
+
+    if (this.autoplay && this.plan) {
+      const rng = this.ctx.rng;
+      for (let i = first; i < this.notes.length; i += 1) {
+        const n = this.notes[i];
+        if (rng() < 0.12) continue;
+        const err = (rng() + rng() + rng() - 1.5) * 0.25;
+        this.plan.push({ at: n.time + err, lane: n.lane });
+      }
+      this.plan.sort((a, b) => a.at - b.at);
+    }
   },
 
   /**
@@ -316,7 +363,7 @@ export default {
 
   /** Judge a tap in a lane at the current song time. */
   tapLane(lane) {
-    const idx = judgeTap(this.notes, lane, this.songTime);
+    const idx = judgeTap(this.notes, lane, this.songTime, this.tune);
     if (idx === -1) {
       this.ctx.audio.play('dance.tapEmpty');
       this.flashRing(lane, false);
@@ -325,7 +372,7 @@ export default {
     const note = this.notes[idx];
     note.hit = true;
     this.releaseNoteMesh(note);
-    const kind = classifyHit(this.songTime - note.time) ?? 'good';
+    const kind = classifyHit(this.songTime - note.time, this.tune) ?? 'good';
     const doubled = encoreActive(this.feverChain, this.songTime);
     applyJudgment(this.tally, kind);
     const bonus = encoreBonus(kind, doubled);
@@ -359,6 +406,7 @@ export default {
     note.missed = true;
     this.releaseNoteMesh(note);
     applyJudgment(this.tally, 'miss');
+    this.sectionMissed = true;
     advanceFeverChain(this.feverChain, 'miss', this.tally.combo, this.songTime);
     this.syncScore();
     if (!quiet) {
@@ -467,7 +515,7 @@ export default {
 
     if (this.phase === 'ending') {
       this.endT += dt;
-      if (this.endT >= DANCE_TUNING.END_DELAY_SEC && this.phase !== 'done') {
+      if (this.endT >= this.tune.END_DELAY_SEC && this.phase !== 'done') {
         this.phase = 'done';
         ctx.onEnd({ score: danceScore(this.tally) });
       }
@@ -475,7 +523,31 @@ export default {
     }
 
     // song clock: stepped above (absolute time base — F6/RE5)
-    ctx.hud.setTime(DANCE.DURATION_SEC - this.songTime);
+    ctx.hud.setTime(this.tune.ENDLESS ? Math.max(0, this.songTime) : this.tune.DURATION_SEC - this.songTime);
+
+    // §G5.4: a section containing any full combo break counts once; three
+    // missed sections end Endlos (individual missed notes never double-count).
+    if (this.tune.ENDLESS && this.songTime >= 0) {
+      const section = Math.floor(this.songTime / 12);
+      if (section > this.sectionIdx) {
+        const ended = recordDanceSection(this.endlessState, this.sectionMissed);
+        this.sectionIdx = section;
+        this.sectionMissed = false;
+        if (ended) {
+          this.phase = 'ending';
+          this.endT = 0;
+          ctx.audio.play('ui.win');
+          return;
+        }
+      }
+    }
+
+    while (
+      this.tune.ENDLESS &&
+      this.songTime + this.tune.NOTE_TRAVEL_SEC >= this.chartSegment * this.tune.DURATION_SEC
+    ) {
+      this.appendChartSegment();
+    }
 
     // autoplay taps
     if (this.autoplay && this.plan) {
@@ -488,7 +560,7 @@ export default {
     // spawn note meshes entering the travel window
     while (this.nextSpawn < this.notes.length) {
       const n = this.notes[this.nextSpawn];
-      const lifecycle = noteLifecycle(n.time, this.songTime);
+      const lifecycle = noteLifecycle(n.time, this.songTime, this.tune);
       if (lifecycle === 'future') break;
       if (lifecycle === 'expired') this.missNote(n, true);
       else n.mesh = this.takeNoteMesh(n.lane);
@@ -496,7 +568,7 @@ export default {
     }
 
     // move live notes; flag misses once past the good window
-    const missAt = DANCE.GOOD_MS / 1000;
+    const missAt = this.tune.GOOD_MS / 1000;
     for (let i = this.headIdx; i < this.nextSpawn; i += 1) {
       const n = this.notes[i];
       if (n.hit || n.missed) {
@@ -511,15 +583,15 @@ export default {
       if (n.mesh) {
         n.mesh.position.set(
           LANE_X[n.lane],
-          HIT_Y + (dtToHit / DANCE_TUNING.NOTE_TRAVEL_SEC) * (SPAWN_Y - HIT_Y),
+          HIT_Y + (dtToHit / this.tune.NOTE_TRAVEL_SEC) * (SPAWN_Y - HIT_Y),
           0.4
         );
-        const appear = Math.min(1, (DANCE_TUNING.NOTE_TRAVEL_SEC - dtToHit) * 5);
+        const appear = Math.min(1, (this.tune.NOTE_TRAVEL_SEC - dtToHit) * 5);
         n.mesh.scale.setScalar(appear * (dtToHit < 0.1 ? 1.1 : 1));
       }
     }
 
-    if (this.songTime >= DANCE.DURATION_SEC) {
+    if (!this.tune.ENDLESS && this.songTime >= this.tune.DURATION_SEC) {
       this.phase = 'ending';
       ctx.audio.play('ui.win');
       this.gooby.setEmotion('ecstatic');
@@ -555,6 +627,8 @@ export default {
     this.plan = null;
     this.songClock = null;
     this.feverChain = null;
+    this.tune = null;
+    this.endlessState = null;
     this.gooby = null;
     this.particles = null;
     this.floats = null;

@@ -19,6 +19,10 @@ import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: 
 import { clampFloatTextToView } from '../framework.js'; // F4 P2-3
 import {
   TRAMP,
+  applyDifficulty,
+  withTrampolineHitbox,
+  createTrampolineEndlessState,
+  recordTrampolineLanding,
   windowSecFor,
   heightMultiplier,
   apexFor,
@@ -115,6 +119,13 @@ export default {
   /** @param {object} ctx §E8 game context */
   init(ctx) {
     this.ctx = ctx;
+    const modifier = ctx.params?.modifier ?? {};
+    this.tune = withTrampolineHitbox(
+      applyDifficulty(TRAMP, ctx.params?.difficulty ?? 'normal'),
+      modifier.hitboxMult ?? 1
+    );
+    this.goobyScale = modifier.type === 'riesenGooby' ? 1.6 : 1;
+    this.endlessState = createTrampolineEndlessState(this.tune.ENDLESS_FAILURE_LIMIT);
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
 
@@ -239,6 +250,7 @@ export default {
     this.floats = createFloatTexts(scene, ctx.camera);
     this.gooby = createGooby({ particles: this.particles });
     applyEquippedOutfits(this.gooby); // G14: cameo wears the equipped outfits
+    this.gooby.group.scale.setScalar(this.goobyScale);
     this.gooby.group.position.set(0, -0.52, 0);
     this.trickGrp = new THREE.Group();
     this.trickGrp.add(this.gooby.group);
@@ -264,7 +276,7 @@ export default {
     this.prevVy = 0;
 
     ctx.hud.setScore(0);
-    ctx.hud.setTime(TRAMP.DURATION_SEC);
+    ctx.hud.setTime(this.tune.ENDLESS ? 0 : this.tune.DURATION_SEC);
   },
 
   /** Judge a screen tap against the landing window (falling only). */
@@ -272,7 +284,7 @@ export default {
     if (!this.airborne || this.vy >= 0 || this.armed) return;
     const tti = timeToImpact(this.h, this.vy);
     const apexH = apexFor(this.launchVy);
-    const verdict = classifyLandingTap(tti, apexH);
+    const verdict = classifyLandingTap(tti, apexH, this.tune);
     if (verdict === 'ignore') return;
     this.armed = verdict === 'boost' ? 'boost' : 'butt';
     if (this.armed === 'boost') this.ctx.audio.play('tramp.armed');
@@ -281,7 +293,7 @@ export default {
   /** Start a mid-air trick (§C6.1: swipe left/right/up = flip/spin/twist). */
   tryTrick(kind) {
     const tti = this.airborne ? timeToImpact(this.h, this.vy) : 0;
-    if (!canTrick(this.airborne, tti, this.tricking)) return;
+    if (!canTrick(this.airborne, tti, this.tricking, this.tune)) return;
     const mult = heightMultiplier(apexFor(this.launchVy));
     const pts = trickPoints(kind, mult);
     this.score += pts;
@@ -358,11 +370,14 @@ export default {
         from: 0.55, to: 1, duration: 0.5, delay: 0.4, ease: easings.easeOutElastic,
         onUpdate: (v) => grp.scale.set(2 - v, v, 1),
       });
+      if (this.tune.ENDLESS && recordTrampolineLanding(this.endlessState, action)) {
+        this.finishRound();
+      }
       return;
     }
 
     // ground (re)launches use launchVy as-is; airborne contacts apply the rule
-    const vy = this.airborne ? nextBounceVy(this.launchVy, action) : this.launchVy;
+    const vy = this.airborne ? nextBounceVy(this.launchVy, action, this.tune) : this.launchVy;
     this.launchVy = vy;
     this.vy = vy;
     this.h = 0.001;
@@ -393,7 +408,7 @@ export default {
     const { rng } = this.ctx;
     const airT = airTimeFor(vy);
     const apexH = apexFor(vy);
-    const win = windowSecFor(apexH);
+    const win = windowSecFor(apexH, this.tune);
     const bot = this.bot;
     bot.airT = 0;
     bot.tricks = [];
@@ -413,6 +428,14 @@ export default {
       if (chaseCombo || rng() < chance) bot.tricks.push({ at, kind: kinds[bot.tricks.length] });
       at += 0.62;
     }
+  },
+
+  finishRound() {
+    if (this.phase !== 'play') return;
+    this.phase = 'ending';
+    this.endT = 0;
+    this.ctx.audio.play('ui.win');
+    this.gooby.setEmotion('ecstatic');
   },
 
   autoplayTick(dt) {
@@ -464,8 +487,8 @@ export default {
       return;
     }
 
-    const remaining = TRAMP.DURATION_SEC - elapsed;
-    ctx.hud.setTime(remaining);
+    const remaining = this.tune.DURATION_SEC - elapsed;
+    ctx.hud.setTime(this.tune.ENDLESS ? elapsed : remaining);
 
     if (this.autoplay) this.autoplayTick(dt);
 
@@ -501,7 +524,7 @@ export default {
     if (this.airborne && this.vy < 0) {
       const tti = timeToImpact(this.h, this.vy);
       const apexH = apexFor(this.launchVy);
-      const win = windowSecFor(apexH);
+      const win = windowSecFor(apexH, this.tune);
       const s = 1 + Math.min(2.6, tti * 2.4);
       this.ring.scale.set(s, s, 1);
       const inWindow = tti <= win;
@@ -517,7 +540,7 @@ export default {
       this.particles.emit('sparkles', this.trickGrp.position.clone().add(new THREE.Vector3(0, -0.3, 0)), { count: 1 });
     }
 
-    if (remaining <= 0) {
+    if (!this.tune.ENDLESS && remaining <= 0) {
       this.phase = 'ending';
       ctx.audio.play('ui.win');
       this.gooby.setEmotion('ecstatic');
@@ -549,6 +572,8 @@ export default {
     this.trickTween = null;
     this.bot = null;
     this.airTrickChain = null;
+    this.tune = null;
+    this.endlessState = null;
     this.gooby = null;
     this.particles = null;
     this.floats = null;
