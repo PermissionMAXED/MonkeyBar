@@ -24,8 +24,13 @@ globalThis.localStorage = {
   /** @param {string} k */ removeItem: (k) => backing.delete(k),
 };
 
-const { defaultState, migrations, load, persist } = await import('../src/core/save.js');
+const { defaultState, migrations, load, persist, clear, hasNewerSave } = await import('../src/core/save.js');
+const { createStore } = await import('../src/core/store.js'); // V3/FIX-A P0-2 policy tests
+const { cooldownRemainingMs } = await import('../src/systems/nougat.logic.js'); // V3/FIX-A P2-1
 const { SAVE } = await import('../src/data/constants.js');
+
+/** V3/FIX-A (P0-2): the write-generation counter key (kept OUT of the payload). */
+const GEN_KEY = `${SAVE.KEY}.gen`;
 
 const wipe = () => backing.clear();
 
@@ -417,4 +422,244 @@ test('v2 → v3 load is idempotent (load → persist → load, byte-stable)', ()
   assert.deepEqual(second.state, first);
   persist(second.state);
   assert.equal(backing.get(SAVE.KEY), bytes1); // byte-stable roundtrip
+});
+
+// ============================================================================
+// V3/FIX-A extensions (E20 P0-1/P0-2 + E2 P2-1/P2-2)
+// ============================================================================
+
+// ------------------------------------- P0-1: storage disabled → boot survives
+
+test('P0-1: SecurityError on every storage access — load/persist never throw, session runs in memory', () => {
+  wipe();
+  const original = {
+    getItem: globalThis.localStorage.getItem,
+    setItem: globalThis.localStorage.setItem,
+    removeItem: globalThis.localStorage.removeItem,
+  };
+  const deny = () => {
+    const err = new Error('The operation is insecure.');
+    err.name = 'SecurityError';
+    throw err;
+  };
+  globalThis.localStorage.getItem = deny;
+  globalThis.localStorage.setItem = deny;
+  globalThis.localStorage.removeItem = deny;
+  try {
+    let first;
+    assert.doesNotThrow(() => {
+      first = load();
+    }, 'load() must not throw when storage is disabled (the E20 blank-boot)');
+    assert.equal(first.fresh, true);
+    assert.equal(first.recovered, false);
+    assert.equal(first.state.v, 3, 'fully playable default state');
+    // the session keeps its own progress via the in-memory fallback store
+    first.state.coins = 321;
+    assert.doesNotThrow(() => persist(first.state));
+    const again = load();
+    assert.equal(again.fresh, false, 'in-memory save readable within the session');
+    assert.equal(again.state.coins, 321);
+    assert.doesNotThrow(() => clear(), 'clear() survives disabled storage too');
+    assert.equal(load().fresh, true);
+  } finally {
+    globalThis.localStorage.getItem = original.getItem;
+    globalThis.localStorage.setItem = original.setItem;
+    globalThis.localStorage.removeItem = original.removeItem;
+    clear(); // scrub the in-memory fallback so later tests read real backing
+  }
+});
+
+test('P0-1: reads prefer REAL storage once it works — the memory fallback never shadows it', () => {
+  const s = defaultState();
+  s.coins = 777;
+  const { state, fresh } = loadRaw(s); // real backing, normal path
+  assert.equal(fresh, false);
+  assert.equal(state.coins, 777);
+});
+
+// --------------------------- P0-2: stale tab never blind-overwrites (save.js)
+
+test('P0-2: persist refuses when storage holds a newer generation — the newer write survives', () => {
+  const base = defaultState();
+  base.coins = 100;
+  const { state: tabState } = loadRaw(base); // this "tab" loads at gen 0
+  assert.equal(persist(tabState), true);
+  assert.equal(backing.get(GEN_KEY), '1', 'successful persist bumps the counter');
+  assert.equal(hasNewerSave(), false);
+
+  // a foreign tab lands a NEWER write (coins 211 @ gen 2)
+  const foreign = JSON.parse(backing.get(SAVE.KEY));
+  foreign.coins = 211;
+  backing.set(SAVE.KEY, JSON.stringify(foreign));
+  backing.set(GEN_KEY, '2');
+  assert.equal(hasNewerSave(), true);
+
+  // the stale tab acts (uiScale) and tries to flush its whole old state
+  tabState.settings.uiScale = 85;
+  assert.equal(persist(tabState), false, 'stale write must be refused');
+  assert.equal(JSON.parse(backing.get(SAVE.KEY)).coins, 211, 'newer coins survive');
+  assert.equal(backing.get(GEN_KEY), '2', 'counter untouched by the refused write');
+
+  // adopting the newer save (a fresh load) re-arms this tab as a writer
+  const adopted = load();
+  assert.equal(adopted.state.coins, 211);
+  assert.equal(hasNewerSave(), false);
+  adopted.state.coins = 260;
+  assert.equal(persist(adopted.state), true);
+  assert.equal(JSON.parse(backing.get(SAVE.KEY)).coins, 260);
+  assert.equal(backing.get(GEN_KEY), '3', 'counter stays monotonic');
+});
+
+test('P0-2: the write counter lives OUTSIDE the payload — save bytes stay byte-stable', () => {
+  const first = loadRaw(fixture('v2-midgame.json')).state;
+  persist(first);
+  const bytes = backing.get(SAVE.KEY);
+  assert.ok(!bytes.includes('"gen"'), 'no counter key inside the payload');
+  persist(load().state);
+  assert.equal(backing.get(SAVE.KEY), bytes, 'roundtrip stays byte-stable with the guard on');
+  assert.equal(backing.get(GEN_KEY), '2', 'only the external counter moved');
+});
+
+// ------------------- P0-2: store policy (stale latch, idle adoption, resume)
+
+test('P0-2: two-writer store sequence — stale tab skips, hidden tab adopts, visible tab resumes', () => {
+  // window/document shims so createStore wires its storage/visibility handlers
+  const handlers = { window: new Map(), document: new Map() };
+  globalThis.window = {
+    addEventListener: (ev, cb) => handlers.window.set(ev, cb),
+  };
+  globalThis.document = {
+    visibilityState: 'visible',
+    addEventListener: (ev, cb) => handlers.document.set(ev, cb),
+    getElementById: () => null, // no #ui in node — the notice DOM is skipped
+  };
+  try {
+    // tab B boots on the shared profile (coins 100) and flushes once
+    const base = defaultState();
+    base.coins = 100;
+    wipe();
+    backing.set(SAVE.KEY, JSON.stringify(base));
+    const storeB = createStore(load().state); // autosave ON (flush persists)
+    let conflicts = 0;
+    storeB.on('saveConflict', () => {
+      conflicts += 1;
+    });
+    storeB.flush();
+    assert.equal(JSON.parse(backing.get(SAVE.KEY)).coins, 100);
+    assert.equal(backing.get(GEN_KEY), '1');
+
+    // tab A (foreign) saves coins 211 — tab B is VISIBLE: latch stale + event
+    const foreign = { ...JSON.parse(backing.get(SAVE.KEY)), coins: 211 };
+    backing.set(SAVE.KEY, JSON.stringify(foreign));
+    backing.set(GEN_KEY, '2');
+    handlers.window.get('storage')();
+    assert.equal(conflicts, 1, 'saveConflict fired once');
+
+    // the stale tab acts (the E20 repro: uiScale change) and flushes
+    storeB.set('settings.uiScale', 85);
+    storeB.set('coins', 100);
+    storeB.flush();
+    assert.equal(JSON.parse(backing.get(SAVE.KEY)).coins, 211, 'tab A\u2019s newer coins survive');
+    assert.equal(JSON.parse(backing.get(SAVE.KEY)).settings.uiScale, 100, 'no partial clobber either');
+
+    // tab B goes hidden; tab A writes again → B adopts silently while idle
+    globalThis.document.visibilityState = 'hidden';
+    backing.set(SAVE.KEY, JSON.stringify({ ...foreign, coins: 300 }));
+    backing.set(GEN_KEY, '3');
+    handlers.window.get('storage')();
+    assert.equal(storeB.get('coins'), 300, 'hidden tab adopted the newer save in place');
+    // hidden post-adoption mutations (time-engine ticks) stay LOCAL for now —
+    // a hidden tab never writes, so the active writer can't be clobbered…
+    storeB.set('coins', 301);
+    storeB.flush();
+    assert.equal(JSON.parse(backing.get(SAVE.KEY)).coins, 300, 'hidden tab stays read-only');
+
+    // tab B becomes the visible tab again → it CLAIMS writership: its state
+    // (adopted gen-3 lineage + its own post-adoption progress — causally
+    // consistent, NOT stale data) persists at a fresh generation so the
+    // other tab's next autosave is the one that gets refused
+    globalThis.document.visibilityState = 'visible';
+    handlers.document.get('visibilitychange')();
+    assert.equal(JSON.parse(backing.get(SAVE.KEY)).coins, 301, 'claim persists the adopted lineage');
+    assert.equal(backing.get(GEN_KEY), '4', 'claim bumps the generation');
+    storeB.set('coins', 305);
+    storeB.flush();
+    assert.equal(JSON.parse(backing.get(SAVE.KEY)).coins, 305, 'resumed tab persists again');
+    assert.equal(backing.get(GEN_KEY), '5', 'counter monotonic across the whole sequence');
+  } finally {
+    delete globalThis.window;
+    delete globalThis.document;
+  }
+});
+
+test('P0-2: a foreign wipe/corruption is NOT adopted — the live tab keeps its state', () => {
+  const handlers = { window: new Map(), document: new Map() };
+  globalThis.window = { addEventListener: (ev, cb) => handlers.window.set(ev, cb) };
+  globalThis.document = {
+    visibilityState: 'hidden',
+    addEventListener: (ev, cb) => handlers.document.set(ev, cb),
+    getElementById: () => null,
+  };
+  try {
+    const base = defaultState();
+    base.coins = 555;
+    wipe();
+    backing.set(SAVE.KEY, JSON.stringify(base));
+    const store = createStore(load().state);
+    store.flush(); // gen 1
+    // another tab writes GARBAGE at a newer generation
+    backing.set(SAVE.KEY, 'garbage{{{');
+    backing.set(GEN_KEY, '2');
+    handlers.window.get('storage')();
+    assert.equal(store.get('coins'), 555, 'live memory survives foreign corruption');
+  } finally {
+    delete globalThis.window;
+    delete globalThis.document;
+    wipe(); // the corrupt-backup key etc.
+  }
+});
+
+// ----------------------------- P2-1: far-future nougat cooldown is defused
+
+test('P2-1: far-future nougat.lastGlobAt (9e15) clamps to now() in validate', () => {
+  const s = defaultState();
+  s.nougat = { lastGlobAt: 9e15, installed: true };
+  const before = Date.now();
+  const { state, recovered } = loadRaw(s);
+  assert.equal(recovered, false, 'hostile timestamp is clamped, not corruption');
+  assert.ok(state.nougat.lastGlobAt <= Date.now() + 1000, 'clamped down to ~now');
+  assert.ok(state.nougat.lastGlobAt >= before - 1000, 'not zeroed — reads as "just globbed"');
+  assert.equal(state.nougat.installed, true, 'installed flag untouched');
+  // worst case ONE 30-min cooldown instead of ~285k years
+  assert.ok(cooldownRemainingMs(state, Date.now()) <= 30 * 60000);
+});
+
+test('P2-1: legitimate past lastGlobAt values still pass through unclamped', () => {
+  const s = defaultState();
+  const past = Date.now() - 10 * 60000; // mid-cooldown, 10 min ago
+  s.nougat = { lastGlobAt: past, installed: true };
+  assert.equal(loadRaw(s).state.nougat.lastGlobAt, past);
+});
+
+// ------------------------- P2-2: present-but-junk v is corruption recovery
+
+test('P2-2: v:null (and other PRESENT non-number v) → corruption recovery, whatsNew never re-arms', () => {
+  const v2 = fixture('v2-midgame.json');
+  for (const junkV of [null, '', false, true, [], '2', '0']) {
+    const raw = JSON.stringify({ ...v2, v: junkV });
+    const { state, fresh, recovered } = loadRaw(raw);
+    assert.equal(recovered, true, `v=${JSON.stringify(junkV)} must take the corruption path`);
+    assert.equal(fresh, false);
+    assert.equal(backing.get(SAVE.CORRUPT_KEY), raw, 'raw payload backed up for inspection');
+    // fresh state: the migration chain did NOT re-run over the v2 save…
+    assert.equal(state.onboarding.whatsNew2Seen, true, 'no 2.0 panel re-arm');
+    assert.equal(state.onboarding.whatsNew3Seen, true, 'no 3.0 panel re-arm');
+    assert.notEqual(state.settings.lang, 'de', 'v2 fields not half-imported');
+  }
+  // a truly ABSENT v still counts as v0 and migrates losslessly (unchanged)
+  const { v: _v, ...noV } = v2;
+  const chained = loadRaw(noV);
+  assert.equal(chained.recovered, false);
+  assert.equal(chained.state.v, 3);
+  assert.equal(chained.state.coins, v2.coins);
 });

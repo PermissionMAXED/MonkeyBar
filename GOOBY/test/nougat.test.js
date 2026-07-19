@@ -120,6 +120,24 @@ test('cooldown: exactly 30 real minutes from lastGlobAt, pinned-clock safe', () 
   assert.equal(cooldownRemainingMs({ nougat: { lastGlobAt: NaN } }, NOW), 0);
 });
 
+// V3/FIX-A (E2 P2-1): defensive runtime clamp — an absurd far-future stamp
+// (hostile 9e15) is treated as "just globbed" instead of soft-locking the
+// machine for ~285k years; plausible clock skew (≤ one cooldown ahead of
+// nowMs, e.g. a pinned/rolled-back clock) keeps the exact old semantics.
+// The persisted value itself is clamped to now() by save.js validate().
+test('cooldown clamp: absurd future lastGlobAt is defused, plausible skew preserved', () => {
+  const junk = baseState({ nougat: { lastGlobAt: 9e15, installed: true } });
+  assert.equal(cooldownRemainingMs(junk, NOW), 30 * 60000, 'capped at ONE full cooldown');
+  assert.equal(canGlob(junk, NOW).reason, 'cooldown', 'refuses politely, no soft-lock');
+  // boundary: exactly nowMs + cooldown is still plausible skew → untouched
+  const edge = baseState({ nougat: { lastGlobAt: NOW + 30 * 60000, installed: true } });
+  assert.equal(cooldownRemainingMs(edge, NOW), 60 * 60000);
+  // one ms beyond the plausible-skew window → clamped to "just globbed"
+  const beyond = baseState({ nougat: { lastGlobAt: NOW + 30 * 60000 + 1, installed: true } });
+  assert.equal(cooldownRemainingMs(beyond, NOW), 30 * 60000);
+  assert.equal(canGlob(beyond, NOW).reason, 'cooldown');
+});
+
 // ---------------------------------------------------------------------------
 // effect application (§C6.5): exact numbers, double junkScore, jar consumption
 // ---------------------------------------------------------------------------

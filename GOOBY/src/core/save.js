@@ -9,26 +9,114 @@ import { now } from './clock.js';
 
 // --- storage backend (swappable for tests / Capacitor Preferences later) ---
 
-/** In-memory fallback when localStorage is unavailable (node tests). */
+// V3/FIX-A (E20 P0-1): every localStorage touch is exception-safe. Browsers
+// can make ANY access throw (Safari-private-style SecurityError on the
+// window.localStorage getter itself, enterprise policies overriding
+// Storage.prototype, disabled cookies) — previously load()'s first getItem
+// threw before the parse/migrate try-block and bricked boot to a blank page.
+// Now every op falls back to the in-memory session store: the game always
+// boots and plays, progress simply doesn't survive the tab when real storage
+// is unusable. Reads prefer REAL storage when it works (so a transient write
+// failure — e.g. quota — never hides newer on-disk data); the memory map only
+// answers when real storage is unreadable or a write fell back to it.
+
+/** In-memory fallback when localStorage is unavailable (node tests, P0-1). */
 const memory = new Map();
+
+/** Warn once per session when real storage proves unusable. */
+let storageWarned = false;
+
+/** @param {unknown} err */
+function warnStorageUnavailable(err) {
+  if (storageWarned) return;
+  storageWarned = true;
+  console.warn(
+    '[save] localStorage unavailable, using in-memory session store:',
+    /** @type {{message?: string}} */ (err)?.message ?? err
+  );
+}
 
 const storage = {
   /** @param {string} key @returns {string|null} */
   getItem(key) {
-    if (typeof localStorage !== 'undefined') return localStorage.getItem(key);
+    try {
+      if (typeof localStorage !== 'undefined') return localStorage.getItem(key);
+    } catch (err) {
+      warnStorageUnavailable(err);
+    }
     return memory.has(key) ? memory.get(key) : null;
   },
-  /** @param {string} key @param {string} value */
+  /**
+   * @param {string} key @param {string} value
+   * @returns {boolean} true when the REAL backend took the write (false =
+   *   in-memory fallback only — persist() uses this to keep the multi-tab
+   *   write-generation in lock-step with what other tabs can actually see).
+   */
   setItem(key, value) {
-    if (typeof localStorage !== 'undefined') localStorage.setItem(key, value);
-    else memory.set(key, value);
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(key, value);
+        memory.delete(key); // drop a stale shadow from an earlier failed write
+        return true;
+      }
+    } catch (err) {
+      warnStorageUnavailable(err);
+    }
+    memory.set(key, value);
+    return false;
   },
   /** @param {string} key */
   removeItem(key) {
-    if (typeof localStorage !== 'undefined') localStorage.removeItem(key);
-    else memory.delete(key);
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.removeItem(key);
+    } catch (err) {
+      warnStorageUnavailable(err);
+    }
+    memory.delete(key);
   },
 };
+
+// --- V3/FIX-A (E20 P0-2): multi-tab write-generation guard -------------------
+// Whole-state last-writer-wins persistence let a STALE second tab clobber
+// fields another tab had just saved (repro: tab A saves coins 211, stale tab
+// B flushes a uiScale change and rewrites coins 100). Design (least invasive
+// correct option per the E20 finding):
+//   - Every successful persist bumps a monotonic write counter stored under
+//     its own key (SAVE.KEY + '.gen'). It lives OUTSIDE the save payload on
+//     purpose: the payload bytes stay exactly what they were (byte-stable
+//     persist→load→persist roundtrips and the §E3 schema are untouched).
+//   - persist() first compares the stored counter against the generation this
+//     tab last loaded/wrote (`knownGen`). If storage holds a NEWER write from
+//     another tab, the write is SKIPPED (returns false) — a stale tab can
+//     never blind-overwrite newer data. core/store.js turns that refusal into
+//     a sticky "stale tab" state with a one-time notice.
+//   - core/store.js also listens to the window 'storage' event and ADOPTS the
+//     newer save while this tab is idle (document hidden), via load() +
+//     hasNewerSave() below; the visible tab is always the single writer.
+// Old builds that never bump the counter keep working: a missing/junk counter
+// reads as 0, so their tabs simply behave like before (last write wins).
+
+/** Storage key of the monotonic write counter (payload stays byte-stable). */
+const GEN_KEY = `${SAVE.KEY}.gen`;
+
+/** Write generation this tab last loaded or successfully wrote. */
+let knownGen = 0;
+
+/** @returns {number} the stored write counter (missing/junk → 0) */
+function readGen() {
+  const n = Number(storage.getItem(GEN_KEY));
+  return Number.isInteger(n) && n > 0 ? n : 0;
+}
+
+/**
+ * True when another tab persisted a newer save than this tab has seen —
+ * store.js polls this from its 'storage'-event/visibility handlers.
+ * @returns {boolean}
+ */
+export function hasNewerSave() {
+  return readGen() > knownGen;
+}
+// --- end V3/FIX-A P0-2 guard ---
 
 // --- G13: guarded Capacitor Preferences mirror (§E3/§F1) ---
 // On native, WKWebView localStorage works but iOS may evict it under storage
@@ -396,9 +484,14 @@ function validate(state) {
   // devUnlocked: strict boolean — junk-typed truthy values never open the gate.
   s.settings.devUnlocked = s.settings.devUnlocked === true;
   // nougat: finite non-negative cooldown timestamp; installed strict boolean.
+  // V3/FIX-A (E2 P2-1): additionally clamped to now() — a far-future
+  // lastGlobAt (hostile 9e15) used to survive validate() and soft-lock the
+  // Nougatschleuse behind a ~285k-year cooldown. A glob can never legitimately
+  // have happened in the future, so future stamps collapse to "just globbed"
+  // (worst case: one full 30-min cooldown from load).
   {
     const at = Number(s.nougat.lastGlobAt);
-    s.nougat.lastGlobAt = Number.isFinite(at) && at > 0 ? at : 0;
+    s.nougat.lastGlobAt = Number.isFinite(at) && at > 0 ? Math.min(at, now()) : 0;
     s.nougat.installed = s.nougat.installed === true;
   }
   // outfits.equipped.back exists via mergeDefaults (defaultState carries it).
@@ -420,6 +513,9 @@ function validate(state) {
  *   fresh: no prior save existed; recovered: prior save was corrupt/unreadable.
  */
 export function load() {
+  // V3/FIX-A (P0-2): adopt the stored write generation — after load() this
+  // tab is allowed to persist on top of exactly what it just read.
+  knownGen = readGen();
   const raw = storage.getItem(SAVE.KEY);
   if (raw == null) {
     return { state: defaultState(), fresh: true, recovered: false };
@@ -432,12 +528,17 @@ export function load() {
     // Version sanity (F2): a missing v counts as v0 (pre-versioned save); an
     // absurd PRESENT v (negative, fractional, non-numeric junk) is corruption
     // — never index migrations[] with it or loop on it.
+    // V3/FIX-A (E2 P2-2): "present" junk includes null/''/false/[] — the old
+    // Number(parsed.v) coerced those to 0 and re-ran the WHOLE migration
+    // chain over an already-migrated save (re-arming the whatsNew panels)
+    // instead of taking the corruption path this comment promises. A PRESENT
+    // v must now BE a number; only a truly absent key still counts as v0.
     let v = 0;
     if (parsed.v !== undefined) {
-      v = Number(parsed.v);
-      if (!Number.isInteger(v) || v < 0) {
+      if (typeof parsed.v !== 'number' || !Number.isInteger(parsed.v) || parsed.v < 0) {
         throw new Error(`absurd save version ${JSON.stringify(parsed.v)}`);
       }
+      v = parsed.v;
       if (v > SAVE.VERSION) {
         throw new Error(`forward version ${parsed.v} > ${SAVE.VERSION}`);
       }
@@ -464,17 +565,35 @@ export function load() {
 
 /**
  * Persist the state (synchronous; store debounces calls — §E2).
+ * V3/FIX-A (E20 P0-2): refuses to blind-overwrite a NEWER save written by
+ * another tab — see the write-generation guard block up top. Returns false
+ * ONLY for that stale-tab refusal (serialization/quota errors still resolve
+ * true after the existing graceful warn, so callers don't confuse a full
+ * disk with a foreign newer write).
  * @param {object} state
+ * @returns {boolean} false when skipped because storage holds a newer save
  */
 export function persist(state) {
+  const storedGen = readGen();
+  if (storedGen > knownGen) {
+    console.warn(`[save] persist skipped: storage holds a newer save (gen ${storedGen} > ${knownGen})`);
+    return false;
+  }
   try {
     const json = JSON.stringify(state);
-    storage.setItem(SAVE.KEY, json);
+    // Bump the write counter only when the REAL backend took the payload —
+    // an in-memory fallback write is invisible to other tabs and must not
+    // advance the shared generation.
+    if (storage.setItem(SAVE.KEY, json)) {
+      knownGen = Math.max(knownGen, storedGen) + 1;
+      storage.setItem(GEN_KEY, String(knownGen));
+    }
     // G13: mirror to Capacitor Preferences on native (fire-and-forget).
     prefs?.set({ key: SAVE.KEY, value: json })?.catch?.(() => {});
   } catch (err) {
     console.warn('[save] persist failed:', err?.message);
   }
+  return true;
 }
 
 /** Wipe the save (dev harness ?reset=1 — §E9). */

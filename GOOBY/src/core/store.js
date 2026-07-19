@@ -4,7 +4,12 @@
 // no three.js/DOM imports (window/document usage is guarded for node:test).
 
 import { ENGINE } from '../data/constants.js';
-import { persist } from './save.js';
+// V3/FIX-A (E20 P0-2): + load/hasNewerSave for the multi-tab guard below.
+import { persist, load, hasNewerSave } from './save.js';
+// V3/FIX-A: bilingual stale-tab notice text (pure data import; store.js owns
+// no strings/* module, so the two strings live inline below — documented
+// deviation from the t(key) rule, scoped to this one notice).
+import { getLang } from '../data/strings.js';
 // V2/G20: weight tier mapping for the §B5 'weightChanged' granularity rule
 // (emit only when the integer value or the tier changes). Pure import.
 import { tierOf } from '../systems/weight.js';
@@ -12,6 +17,8 @@ import { tierOf } from '../systems/weight.js';
 /**
  * Specific store events (§E2). 'change' fires (coalesced) on any mutation.
  * 'levelUp' payload: { level }. 'achievementUnlocked' payload: id (string).
+ * V3/FIX-A: runtime-only 'saveConflict' ({ reason: 'stale' }) fires when this
+ * tab's persist was refused because another tab holds a newer save (P0-2).
  */
 const EVENTS = [
   'change',
@@ -52,6 +59,11 @@ export function createStore(state, opts = {}) {
   const autosave = opts.autosave !== false;
   let flushScheduled = false;
   let saveTimer = null;
+  // V3/FIX-A (E20 P0-2): sticky "stale tab" latch. True while another tab
+  // owns a newer save than this tab's state — all persists are skipped so
+  // the newer write can never be lost. Cleared only when this tab becomes
+  // the visible (single-writer) tab again, after adopting the newest save.
+  let staleTab = false;
   let snapshot = takeSnapshot();
 
   function takeSnapshot() {
@@ -121,6 +133,98 @@ export function createStore(state, opts = {}) {
     emit('change', state);
   }
 
+  // --- V3/FIX-A (E20 P0-2): stale-tab persistence policy --------------------
+  // persist() (core/save.js) refuses to overwrite a NEWER save written by
+  // another tab (write-generation guard) and returns false. This wrapper
+  // turns that refusal into a sticky stale state: the tab stops persisting,
+  // shows a one-time notice and emits the runtime 'saveConflict' event
+  // (payload { reason: 'stale' }) for any future UI wiring.
+
+  /**
+   * One-time (per staleness episode) "save updated in another tab" notice.
+   * The 'saveConflict' event always fires; the DOM toast renders only for a
+   * VISIBLE tab — a hidden tab going stale is the normal, silent writership
+   * handover (it adopts the newer save and recovers on its own).
+   */
+  function showStaleNotice() {
+    emit('saveConflict', { reason: 'stale' });
+    if (typeof document === 'undefined') return;
+    if (document.visibilityState === 'hidden') return;
+    const root = document.getElementById('ui');
+    if (!root) return;
+    // Mirrors ui.js's transient toast markup (styles.css .toast). Inline
+    // EN/DE because store.js owns no strings/* module (see import note).
+    const el = document.createElement('div');
+    el.className = 'toast';
+    el.textContent = getLang() === 'de'
+      ? 'Spielstand in einem anderen Tab aktualisiert — zum Weiterspielen hier neu laden.'
+      : 'Save updated in another tab — reload here to keep playing.';
+    root.appendChild(el);
+    setTimeout(() => {
+      el.classList.add('toast-out');
+      setTimeout(() => el.remove(), 300);
+    }, 5000);
+  }
+
+  /** Guarded persist: no-ops while stale; latches stale on a refused write. */
+  function persistNow() {
+    if (staleTab) return;
+    if (persist(state) === false) {
+      staleTab = true;
+      showStaleNotice();
+    }
+  }
+
+  /**
+   * Adopt the newer save another tab persisted: reload through the full
+   * §E3 pipeline and swap the state IN PLACE (same object identity — every
+   * holder of store.get() sees the adopted data), then flush so the snapshot
+   * diff emits the regular §E2 events for everything that changed. The tab
+   * stays read-only (stale) until it is the visible tab again. A foreign
+   * wipe/corruption (fresh/recovered load) is NOT adopted — this tab keeps
+   * its live state rather than clobbering memory with a recovery state.
+   */
+  function adoptNewerSave() {
+    const result = load();
+    if (result.fresh || result.recovered) return;
+    for (const k of Object.keys(state)) delete state[k];
+    Object.assign(state, result.state);
+    staleTab = true;
+    scheduleFlush();
+  }
+
+  /** 'storage' event: another same-origin tab wrote. Adopt when idle. */
+  function onForeignWrite() {
+    if (!hasNewerSave()) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+      adoptNewerSave(); // idle tab: silently follow the active writer
+    } else if (!staleTab) {
+      staleTab = true; // visible dual-tab play: freeze writes + tell the user
+      showStaleNotice();
+    }
+  }
+
+  /**
+   * Becoming visible again: catch up if needed, then CLAIM writership by
+   * persisting a fresh generation right away. The claim matters because a
+   * still-open background tab keeps autosaving its time-engine ticks (1 Hz)
+   * without ever being refused — bumping the generation here makes that
+   * tab's next autosave the refused one, so it latches stale and starts
+   * adopting instead. One retry absorbs a background write racing into the
+   * adopt→claim window; losing twice keeps this tab stale with the notice.
+   */
+  function onBecameVisible() {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (hasNewerSave()) adoptNewerSave();
+      staleTab = false;
+      if (!autosave) return; // never write for an autosave-less store
+      if (persist(state) !== false) return;
+      staleTab = true;
+    }
+    showStaleNotice();
+  }
+  // --- end V3/FIX-A P0-2 policy ---
+
   function scheduleFlush() {
     if (!flushScheduled) {
       flushScheduled = true;
@@ -132,7 +236,7 @@ export function createStore(state, opts = {}) {
       // while the time engine mutates stats every tick.
       saveTimer = setTimeout(() => {
         saveTimer = null;
-        persist(state);
+        persistNow(); // V3/FIX-A: stale-guarded (was a bare persist(state))
       }, ENGINE.AUTOSAVE_DEBOUNCE_MS);
     }
   }
@@ -225,7 +329,7 @@ export function createStore(state, opts = {}) {
         clearTimeout(saveTimer);
         saveTimer = null;
       }
-      if (autosave) persist(state);
+      if (autosave) persistNow(); // V3/FIX-A: stale-guarded (see P0-2 block)
     },
   };
 
@@ -233,10 +337,16 @@ export function createStore(state, opts = {}) {
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') store.flush();
+      // V3/FIX-A (P0-2): the visible tab is the single writer — resync/unlatch.
+      else if (document.visibilityState === 'visible') onBecameVisible();
     });
   }
   if (typeof window !== 'undefined') {
     window.addEventListener('pagehide', () => store.flush());
+    // V3/FIX-A (P0-2): follow foreign same-origin writes (fires per changed
+    // key; the handler is idempotent and key-agnostic on purpose — it just
+    // asks save.js whether storage is ahead of this tab).
+    window.addEventListener('storage', onForeignWrite);
   }
 
   singleton = store;

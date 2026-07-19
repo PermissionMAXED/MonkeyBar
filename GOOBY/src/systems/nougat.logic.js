@@ -45,13 +45,21 @@ export const NOUGAT = Object.freeze({
 
 /**
  * Cooldown remaining from the persisted timestamp (0 when ready).
+ * V3/FIX-A (E2 P2-1) defensive clamp: a lastGlobAt further in the future
+ * than one full cooldown can't come from legitimate clock skew (a pinned
+ * ?now= / device-clock rollback keeps the stamp within rollback-size of
+ * nowMs and is preserved so a rollback never unlocks the machine early) —
+ * treat such junk as "just globbed" so the machine is never soft-locked for
+ * ~285k years (save.js validate() clamps the persisted value to now() at
+ * load; this guards states poked at runtime, e.g. via the dev console).
  * @param {{nougat?: {lastGlobAt?: number}}} state store snapshot (or slice)
  * @param {number} nowMs
  * @returns {number} ms until the next glob is allowed
  */
 export function cooldownRemainingMs(state, nowMs) {
-  const last = Number(state?.nougat?.lastGlobAt) || 0;
+  let last = Number(state?.nougat?.lastGlobAt) || 0;
   if (last <= 0) return 0;
+  if (last > nowMs + NOUGAT.COOLDOWN_MIN * 60000) last = nowMs;
   return Math.max(0, last + NOUGAT.COOLDOWN_MIN * 60000 - nowMs);
 }
 
