@@ -81,8 +81,8 @@ const B2_NEW_COUNTERS = {
 // ------------------------------------------------------------------ schema
 
 test('SAVE.VERSION is 3 and the migration chain has one entry per step', () => {
-  assert.equal(SAVE.VERSION, 3); // V3/G34: schema v3 (§B1) — was 2
-  assert.equal(migrations.length, 3); // v0→1, v1→2, v2→3
+  assert.equal(SAVE.VERSION, 4); // V4/G53: schema v4 (PLAN4 §B1) — was 3
+  assert.equal(migrations.length, 4); // v0→1, v1→2, v2→3, v3→4
 });
 
 test('fresh defaultState: v2 slices at §B2 defaults, whatsNew2Seen true', () => {
@@ -109,9 +109,15 @@ for (const name of ['v1-fresh.json', 'v1-midgame.json', 'v1-extra-keys.json']) {
     // additions are asserted fixture-by-fixture in saveV3.test.js).
     assert.equal(state.v, SAVE.VERSION);
 
-    // 1. every v1 value passes through verbatim (§B2 migration step 2)
-    const { v: _v, ...v1Values } = v1;
+    // 1. every v1 value passes through verbatim (§B2 migration step 2).
+    //    V4/G53 (PLAN4 §B1): the ONE sanctioned furniture delta — migrations[3]
+    //    appends the 'radio' gift and places it on the free living:shelf1 slot.
+    const { v: _v, furniture: v1Furniture, ...v1Values } = v1;
     assertSubset(state, v1Values);
+    assert.deepEqual(state.furniture.owned, [...v1Furniture.owned, 'radio']);
+    assert.deepEqual(state.furniture.placed, {
+      ...v1Furniture.placed, 'living:shelf1': 'radio',
+    });
 
     // 2. every new top-level slice lands at its exact §B2 default
     for (const [slice, def] of Object.entries(B2_SLICE_DEFAULTS())) {
@@ -143,7 +149,10 @@ test('midgame fixture details: coins/level/outfits/bests/streak survive exactly'
   assert.equal(state.daily.streak, 6);
   assert.equal(Object.keys(state.minigames.best).length, 12); // all 12 v1 games
   assert.deepEqual(state.minigames.best, v1.minigames.best);
-  assert.deepEqual(state.furniture.placed, v1.furniture.placed);
+  // V4/G53 (PLAN4 §B1): + the migrations[3] radio gift on the free shelf slot
+  assert.deepEqual(state.furniture.placed, {
+    ...v1.furniture.placed, 'living:shelf1': 'radio',
+  });
   assert.equal(state.quickDelivery, true);
   assert.equal(state.settings.lang, 'de');
 });

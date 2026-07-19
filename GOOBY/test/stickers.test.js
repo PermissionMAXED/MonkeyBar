@@ -51,17 +51,25 @@ const SPEC_CONDS = [
   ['cakeBoss', { counter: 'perfectCakes', target: 1 }],
   ['surfStar', { counter: 'surfRuns', target: 1 }],
   ['albumMaster', { special: 'setsClaimed', target: 4 }],
+  // V4/G53 (PLAN4 §C-SYS5.4/§B6): the secret BONUS sticker #29 — outside the
+  // 28 (secret: true), unlocked only via the 'herzGooby' code word.
+  ['herzGooby', { code: 'herzGooby' }],
 ];
 
 // ------------------------------------------------------------------ catalog
 
 test('28 stickers, §C5.1 ids in frozen table order, unique', () => {
-  assert.equal(STICKERS.length, 28);
+  // V4/G53 (§C-SYS5.4): catalog now carries 28 regular + the secret #29;
+  // the BOOK total (header n/28, stickerBookFull target) stays 28.
+  assert.equal(STICKERS.length, 29);
   assert.equal(TOTAL_BOOK_STICKERS, 28);
   assert.deepEqual(STICKERS.map((s) => s.id), SPEC_CONDS.map(([id]) => id));
-  assert.equal(new Set(STICKERS.map((s) => s.id)).size, 28);
+  assert.equal(new Set(STICKERS.map((s) => s.id)).size, 29);
   assert.equal(getSticker('firstNom'), STICKERS[0]);
   assert.equal(getSticker('bogus'), undefined);
+  // the ONE secret def is herzGooby, flagged + last in table order
+  assert.deepEqual(STICKERS.filter((s) => s.secret).map((s) => s.id), ['herzGooby']);
+  assert.equal(STICKERS[28].id, 'herzGooby');
 });
 
 test('every condition row matches §C5.1 verbatim', () => {
@@ -85,7 +93,13 @@ test('§C5.3 page layout: 5 pages of 6/6/6/6/4, table order preserved', () => {
   assert.deepEqual([...STICKER_PAGE_SIZES], [6, 6, 6, 6, 4]);
   const pages = stickerPages();
   assert.deepEqual(pages.map((p) => p.length), [6, 6, 6, 6, 4]);
-  assert.deepEqual(pages.flat().map((s) => s.id), STICKERS.map((s) => s.id));
+  // V4/G53 (§C-SYS5.4): pages carry the 28 REGULAR defs only — the secret
+  // #29 slot is appended to page 5 by ui/albumScreen.js, outside the paging.
+  assert.deepEqual(
+    pages.flat().map((s) => s.id),
+    STICKERS.filter((s) => !s.secret).map((s) => s.id)
+  );
+  assert.ok(pages.flat().every((s) => s.id !== 'herzGooby'));
 });
 
 test('every sticker title/flavor/hint exists in BOTH dictionaries (EN+DE)', () => {
@@ -151,6 +165,7 @@ function maxedState() {
   s.collections.claimedSets = { veggies: 1, fish: 1, landmarks: 1, treats: 1 };
   s.skins.owned = ['cream', 'snow'];
   s.outfits.equipped = { hat: 'crown', glasses: 'starGlasses', neck: 'scarfRed', back: null };
+  s.codes.redeemed.herzGooby = 777; // V4/G53: #29 unlocks via its code latch
   return s;
 }
 
@@ -158,7 +173,8 @@ test('all 24 counter/special stickers unlock through applyStickerUnlocks', () =>
   const eventIds = SPEC_CONDS.filter(([, c]) => c.event).map(([id]) => id);
   assert.deepEqual(eventIds, ['grumpMorning', 'rainyDay', 'starGazer', 'towTrouble']);
   const { state, unlocked } = applyStickerUnlocks(maxedState(), 777);
-  assert.equal(unlocked.length, 28 - eventIds.length, '24 non-event stickers');
+  // V4/G53: 24 counter/special + the code-latched #29 = 25 non-event defs
+  assert.equal(unlocked.length, SPEC_CONDS.length - eventIds.length);
   for (const [id, cond] of SPEC_CONDS) {
     if (cond.event) {
       assert.equal(state.stickers.unlocked[id], undefined, `${id} needs its hook`);

@@ -52,6 +52,11 @@ export function stickerProgress(def, state) {
     current = Math.floor(Number(state?.achievements?.counters?.[cond.counter]) || 0);
   } else if (cond.event) {
     current = state?.stickers?.unlocked?.[def.id] ? 1 : 0;
+  } else if (cond.code) {
+    // V4/G53 (§C-SYS5.4/§B6): code-word stickers (#29 herzGooby) — satisfied
+    // once the code is latched in codes.redeemed, so the normal checkNow()
+    // path unlocks + announces it right after the §C-SYS5 redeem.
+    current = state?.codes?.redeemed?.[cond.code] ? 1 : 0;
   } else {
     switch (cond.special) {
       case 'level':
@@ -138,15 +143,21 @@ export function applyStickerUnlocks(state, nowMs = now(), defs = STICKERS) {
 export function stickerCounts(state, defs = STICKERS) {
   const unlockedMap = state?.stickers?.unlocked ?? {};
   const seenMap = state?.stickers?.seen ?? {};
+  // V4/G53 (§C-SYS5.4): total/unlocked run over the NON-secret defs — the
+  // header stays „n/28" (the unlocked secret sticker renders as a „+💗"
+  // suffix instead, ui/albumScreen.js). unseen runs over ALL defs so the NEU
+  // badge covers a freshly revealed #29 too.
   let unlocked = 0;
   let unseen = 0;
+  let total = 0;
   for (const def of defs) {
+    if (!def.secret) total += 1;
     if (unlockedMap[def.id]) {
-      unlocked += 1;
+      if (!def.secret) unlocked += 1;
       if (seenMap[def.id] !== true) unseen += 1;
     }
   }
-  return { unlocked, total: defs.length, unseen };
+  return { unlocked, total, unseen };
 }
 
 // ---------------------------------------------------------------------------

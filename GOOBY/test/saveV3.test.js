@@ -83,13 +83,14 @@ const B1_NEW_COUNTERS = {
 // ------------------------------------------------------------------ schema
 
 test('SAVE.VERSION is 3 and the chain has one migration per step', () => {
-  assert.equal(SAVE.VERSION, 3);
-  assert.equal(migrations.length, 3); // v0→1, v1→2, v2→3
+  assert.equal(SAVE.VERSION, 4); // V4/G53 (PLAN4 §B1): 3 → 4
+  assert.equal(migrations.length, 4); // v0→1, v1→2, v2→3, v3→4
 });
 
 test('fresh defaultState: §B1 slices/settings/counters at exact defaults', () => {
   const s = defaultState();
-  assert.equal(s.v, 3);
+  assert.equal(s.v, 4); // V4/G53: current schema
+
   for (const [slice, def] of Object.entries(B1_SLICE_DEFAULTS())) {
     assert.deepEqual(s[slice], def, `defaultState().${slice}`);
   }
@@ -116,11 +117,17 @@ test('v2-midgame.json: v → 3, EVERY v2 leaf intact, §B1 additions at defaults
   const { state, fresh, recovered } = loadRaw(v2);
   assert.equal(fresh, false);
   assert.equal(recovered, false);
-  assert.equal(state.v, 3);
+  assert.equal(state.v, 4); // V4/G53: chain now ends at v4
 
-  // 1. lossless: every v2 leaf passes through verbatim (field-diff walk)
-  const { v: _v, ...v2Values } = v2;
+  // 1. lossless: every v2 leaf passes through verbatim (field-diff walk).
+  //    V4/G53 (PLAN4 §B1): furniture is the ONE sanctioned delta — the
+  //    migrations[3] radio gift (owned append + free shelf slot placement).
+  const { v: _v, furniture: v2Furniture, ...v2Values } = v2;
   assertSubset(state, v2Values);
+  assert.deepEqual(state.furniture.owned, [...v2Furniture.owned, 'radio']);
+  assert.deepEqual(state.furniture.placed, {
+    ...v2Furniture.placed, 'living:shelf1': 'radio',
+  });
 
   // 2. new slices at exact §B1 defaults
   for (const [slice, def] of Object.entries(B1_SLICE_DEFAULTS())) {
@@ -162,11 +169,16 @@ for (const name of ['v1-fresh.json', 'v1-midgame.json', 'v1-extra-keys.json']) {
     assert.equal(v1.v, 1, 'fixture must be a v1 save');
     const { state, recovered } = loadRaw(v1);
     assert.equal(recovered, false);
-    assert.equal(state.v, 3);
+    assert.equal(state.v, 4); // V4/G53: chain now ends at v4
 
-    // lossless across BOTH hops (field-diff walk)
-    const { v: _v, ...v1Values } = v1;
+    // lossless across the whole chain (field-diff walk); V4/G53 (PLAN4 §B1):
+    // furniture is the ONE sanctioned delta (the migrations[3] radio gift).
+    const { v: _v, furniture: v1Furniture, ...v1Values } = v1;
     assertSubset(state, v1Values);
+    assert.deepEqual(state.furniture.owned, [...v1Furniture.owned, 'radio']);
+    assert.deepEqual(state.furniture.placed, {
+      ...v1Furniture.placed, 'living:shelf1': 'radio',
+    });
 
     // v3 additions at defaults
     for (const [slice, def] of Object.entries(B1_SLICE_DEFAULTS())) {
@@ -266,11 +278,12 @@ test('validate: devUnlocked/nougat.installed strict booleans; lastGlobAt finite 
 // ------------------------------------------------ refusal + recovery (§B1)
 
 test('forward version v:4 refuses: fresh state + corrupt backup', () => {
-  const payload = JSON.stringify({ ...defaultState(), v: 4, coins: 424242 });
+  // V4/G53: v4 is current now — the forward-refusal check moves to v5.
+  const payload = JSON.stringify({ ...defaultState(), v: SAVE.VERSION + 1, coins: 424242 });
   const { state, fresh, recovered } = loadRaw(payload);
   assert.equal(fresh, false);
   assert.equal(recovered, true);
-  assert.equal(state.v, 3);
+  assert.equal(state.v, SAVE.VERSION);
   assert.notEqual(state.coins, 424242, 'future coins NOT imported');
   assert.equal(backing.get(SAVE.CORRUPT_KEY), payload);
 });
@@ -295,7 +308,7 @@ test('wrong-typed NEW slices are corruption → recovery, never a crash', () => 
       result = loadRaw(raw);
     }, `load() must not throw for ${raw}`);
     assert.equal(result.recovered, true, `${raw} should recover`);
-    assert.equal(result.state.v, 3);
+    assert.equal(result.state.v, SAVE.VERSION);
     assert.equal(backing.get(SAVE.CORRUPT_KEY), raw, `${raw} backup preserved`);
   }
 });
@@ -369,7 +382,7 @@ test('fuzz battery: ≥ 300 seeded mutations (new-slice targets, truncations, sp
       result = loadRaw(raw);
     }, `mutation #${i} must not throw: ${raw.slice(0, 120)}`);
     assert.ok(result.state, `mutation #${i} yields a state`);
-    assert.equal(result.state.v, 3, `mutation #${i} lands on v3`);
+    assert.equal(result.state.v, SAVE.VERSION, `mutation #${i} lands on the current version`);
     assert.equal(typeof result.state.stats, 'object');
     assert.deepEqual(Object.keys(result.state.stickers).sort(), ['seen', 'unlocked'],
       `mutation #${i} stickers slice is structurally sound`);
@@ -386,7 +399,7 @@ test('fuzz battery: ≥ 300 seeded mutations (new-slice targets, truncations, sp
     assert.doesNotThrow(() => {
       result = loadRaw(raw);
     }, `truncation @${cut} must not throw`);
-    assert.equal(result.state.v, 3);
+    assert.equal(result.state.v, SAVE.VERSION);
     runs += 1;
     if (result.recovered) recoveries += 1;
   }
@@ -400,7 +413,7 @@ test('fuzz battery: ≥ 300 seeded mutations (new-slice targets, truncations, sp
     assert.doesNotThrow(() => {
       result = loadRaw(raw);
     }, `splice @${at} must not throw`);
-    assert.equal(result.state.v, 3);
+    assert.equal(result.state.v, SAVE.VERSION);
     runs += 1;
     if (result.recovered) recoveries += 1;
   }
@@ -452,7 +465,7 @@ test('P0-1: SecurityError on every storage access — load/persist never throw, 
     }, 'load() must not throw when storage is disabled (the E20 blank-boot)');
     assert.equal(first.fresh, true);
     assert.equal(first.recovered, false);
-    assert.equal(first.state.v, 3, 'fully playable default state');
+    assert.equal(first.state.v, SAVE.VERSION, 'fully playable default state');
     // the session keeps its own progress via the in-memory fallback store
     first.state.coins = 321;
     assert.doesNotThrow(() => persist(first.state));
@@ -660,6 +673,6 @@ test('P2-2: v:null (and other PRESENT non-number v) → corruption recovery, wha
   const { v: _v, ...noV } = v2;
   const chained = loadRaw(noV);
   assert.equal(chained.recovered, false);
-  assert.equal(chained.state.v, 3);
+  assert.equal(chained.state.v, SAVE.VERSION);
   assert.equal(chained.state.coins, v2.coins);
 });

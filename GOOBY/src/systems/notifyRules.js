@@ -2,6 +2,11 @@
 // imports, fully unit-tested. computeSchedule(state, now) predicts the 5
 // trigger times and applies quiet hours, minimum spacing and the schedule cap.
 //
+// V4/G53 — 4.0 trigger (PLAN4 §B10: MAX_SCHEDULED 7 → 8):
+//   8 modifier at modifiers.nextAt (the §C-SYS4 event scheduler's persisted
+//              next-event time); body copy in strings/v4-core.js; NOT
+//              quiet-hours-exempt; min-spacing/cap pipeline like ids 2–7.
+//
 // Triggers (§C7 table):
 //   1 wake     at sleep.wakeAt (only while sleeping) — EXEMPT from quiet hours
 //              (fires on time, user-initiated) and never moved by spacing.
@@ -204,6 +209,18 @@ export function computeSchedule(state, nowMs) {
       Number.isFinite(lastSickAt) && lastSickAt > 0 && lastSickAt <= nowMs &&
       sameLocalDay(lastSickAt, quietShift(at));
     if (!firedSameDay) items.push(makeItem(NOTIFY.IDS.sick, at));
+  }
+
+  // V4/G53: id 8 — modifier event (PLAN4 §B10): scheduled at the persisted
+  // `modifiers.nextAt` (G54's engine keeps it stable between reschedules, so
+  // the notification fires at most once per event). NOT quiet-hours-exempt;
+  // participates in min-spacing/cap like ids 2–7. 0/past/junk → skip (0 =
+  // unscheduled; a passed nextAt starts its event on next boot anyway).
+  {
+    const nextAt = Number(state?.modifiers?.nextAt);
+    if (Number.isFinite(nextAt) && nextAt > nowMs) {
+      items.push(makeItem(NOTIFY.IDS.modifier, nextAt));
+    }
   }
 
   return resolveConflicts(items);

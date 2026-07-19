@@ -161,7 +161,8 @@ test('decorator regression (F2/E11): furniturePlacement API drives progress to u
   const def = ACHIEVEMENTS_BY_ID.decorator;
   const store = createStore(freshState(), { autosave: false });
   store.set('coins', 5000);
-  assert.equal(countNonDefaultDecor(store.get()), 0); // defaults only
+  // V4/G53 (PLAN4 §B1): fresh saves carry the placed radio gift → baseline 1
+  assert.equal(countNonDefaultDecor(store.get()), 1);
 
   const placements = [
     ['loungeDesignSofa', 'living', 'sofa'],
@@ -173,7 +174,7 @@ test('decorator regression (F2/E11): furniturePlacement API drives progress to u
     ['kitchenFridgeLarge', 'kitchen', 'fridge'],
     ['bedDouble', 'bedroom', 'bed'],
   ];
-  let expected = 0;
+  let expected = 1; // radio gift baseline (V4/G53)
   for (const [itemId, roomId, slotId] of placements) {
     assert.equal(furniturePlacement.buyFurniture(store, itemId).ok, true, `buy ${itemId}`);
     assert.equal(furniturePlacement.place(store, itemId, roomId, slotId).ok, true, `place ${itemId}`);
@@ -185,13 +186,15 @@ test('decorator regression (F2/E11): furniturePlacement API drives progress to u
   assert.equal(store.get('furniture.placed')['living:sofa'], 'loungeDesignSofa');
 
   // non-default wallpaper + floor complete the 10 (§C8.3 intent)
-  assert.equal(furniturePlacement.buySurface(store, 'wallpaper', 'mint').ok, true);
-  assert.equal(furniturePlacement.applySurface(store, 'wallpaper', 'living', 'mint').ok, true);
   assert.equal(countNonDefaultDecor(store.get()), 9);
   assert.equal(isSatisfied(def, store.get()), false);
+  assert.equal(furniturePlacement.buySurface(store, 'wallpaper', 'mint').ok, true);
+  assert.equal(furniturePlacement.applySurface(store, 'wallpaper', 'living', 'mint').ok, true);
+  assert.equal(countNonDefaultDecor(store.get()), 10);
+  assert.equal(isSatisfied(def, store.get()), true);
   assert.equal(furniturePlacement.buySurface(store, 'floor', 'tile').ok, true);
   assert.equal(furniturePlacement.applySurface(store, 'floor', 'bathroom', 'tile').ok, true);
-  assert.equal(countNonDefaultDecor(store.get()), 10);
+  assert.equal(countNonDefaultDecor(store.get()), 11);
   assert.equal(isSatisfied(def, store.get()), true);
 
   // the engine unlocks it at the threshold (store 'change' wiring)
@@ -203,7 +206,7 @@ test('decorator regression (F2/E11): furniturePlacement API drives progress to u
 
   // placing the free default back collapses the override; the unlock stays
   furniturePlacement.place(store, 'loungeSofa', 'living', 'sofa');
-  assert.equal(countNonDefaultDecor(store.get()), 9);
+  assert.equal(countNonDefaultDecor(store.get()), 10);
   assert.equal(store.get('achievements.unlocked.decorator') > 0, true);
   resetAchievementsEngineForTests();
 });
@@ -214,7 +217,8 @@ test('decorator: shared rug placed in two rooms counts per placement (F2/E11)', 
   assert.equal(furniturePlacement.buyFurniture(store, 'rugRectangle').ok, true);
   assert.equal(furniturePlacement.place(store, 'rugRectangle', 'living', 'rug').ok, true);
   assert.equal(furniturePlacement.place(store, 'rugRectangle', 'bedroom', 'rug').ok, true);
-  assert.equal(countNonDefaultDecor(store.get()), 2);
+  // V4/G53: +1 for the fresh-save radio gift baseline
+  assert.equal(countNonDefaultDecor(store.get()), 3);
 });
 
 test('streak7: daily streak ≥ 7', () => {
@@ -231,7 +235,8 @@ test('play12: each of the 12 games played ≥ 1 (plays map)', () => {
   const state = freshState();
   // V2/G16: play12 needs ANY 12 distinct catalog games played; play21 (21 of
   // the now-27 ids — §C5.3) is the 2.0 tier. V3/G34: catalog is 27 (§E0.1-9).
-  assert.equal(MINIGAME_IDS.length, 27);
+  // V4/G53: +goobyWelt (PLAN4 §E0.1) → 28.
+  assert.equal(MINIGAME_IDS.length, 28);
   for (const id of MINIGAME_IDS.slice(0, 11)) state.minigames.plays[id] = 2;
   state.minigames.plays._smoke = 99; // dev game never counts
   assert.equal(isSatisfied(def, state), false);

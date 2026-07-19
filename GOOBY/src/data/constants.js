@@ -5,7 +5,8 @@
 /** Save schema / persistence (§E3). */
 export const SAVE = Object.freeze({
   // V2/G16: schema v2 — garden/health/weight/quests/collections/skins/items/profile slices (PLAN2 §B2)
-  VERSION: 3, // V3/G34: schema v3 — stickers/nougat slices + settings.uiScale/volumes/devUnlocked + back slot + new counters (PLAN3 §B1)
+  // V3/G34: schema v3 — stickers/nougat slices + settings.uiScale/volumes/devUnlocked + back slot + new counters (PLAN3 §B1)
+  VERSION: 4, // V4/G53: schema v4 — radio/codes/modifiers/recap/gallery slices + gyro/controls/quality settings + new counters (PLAN4 §B1)
   KEY: 'gooby.save',
   CORRUPT_KEY: 'gooby.save.corrupt',
   /** New-game stat defaults (§E3). */
@@ -160,6 +161,8 @@ export const COIN_TABLE = Object.freeze({
   ghostHunt: Object.freeze({ divisor: 4, min: 4, max: 28 }),
   rocketRescue: Object.freeze({ divisor: 5, min: 4, max: 28 }),
   harborHopper: Object.freeze({ divisor: 5, min: 4, max: 30 }),
+  // V4/G53: the ONE new 4.0 coin row (PLAN4 §E0.1-7 / PLAN4-GAMES §G6.4)
+  goobyWelt: Object.freeze({ divisor: 6, min: 4, max: 20 }),
 });
 
 /** Minigame unlock schedule (§C6.3): level → new game. */
@@ -231,9 +234,10 @@ export const INTERACT = Object.freeze({
 /** Local notification rules (§C7). */
 export const NOTIFY = Object.freeze({
   // V2/G16: ids 6/7 + cap 7 (PLAN2 §B3 — harvest §C2.4, sick §C3.5)
-  IDS: Object.freeze({ wake: 1, hunger: 2, fun: 3, hygiene: 4, daily: 5, harvest: 6, sick: 7 }),
-  /** Max scheduled notifications (one per id). */
-  MAX_SCHEDULED: 7,
+  // V4/G53: id 8 + cap 8 (PLAN4 §B10 — modifier event at modifiers.nextAt)
+  IDS: Object.freeze({ wake: 1, hunger: 2, fun: 3, hygiene: 4, daily: 5, harvest: 6, sick: 7, modifier: 8 }),
+  /** Max scheduled notifications (one per id). V4/G53: 7 → 8 (§B10). */
+  MAX_SCHEDULED: 8,
   /** Stat thresholds whose predicted crossing time triggers a notification. */
   HUNGER_AT: 20,
   FUN_AT: 15,
@@ -532,6 +536,8 @@ export const UNLOCKS = Object.freeze({
     ghostHunt: 16,
     rocketRescue: 18,
     harborHopper: 20,
+    // V4/G53: the ONE new 4.0 game gate (PLAN4 §E0.1-7 / PLAN4-GAMES §G6.4)
+    goobyWelt: 12,
   }),
   /** Crop unlock levels (§B6/§C2.3). */
   CROPS: Object.freeze({
@@ -743,3 +749,39 @@ export const ITEM_PRICES = Object.freeze({
 // owning module (§E0.1-2 pattern). constants.js is FROZEN again after this
 // edit — no other 3.0 agent may touch it.
 // ============================================================== end V3/G34 ==
+
+// ============================================================================
+// V4/G53: GOOBY 4.0 data spine (PLAN4 §B10/§E0.1-7 — the SINGLE 4.0 re-opening
+// of this file): SAVE.VERSION → 4 (§B1), NOTIFY.IDS.modifier 8 +
+// MAX_SCHEDULED 8 (§B10), the ONE new COIN_TABLE row + UNLOCKS.MINIGAMES gate
+// (goobyWelt — §G6.4) — marked inline at their tables above, because the
+// frozen objects cannot be extended after definition — plus the two new
+// frozen tables below. Every other 4.0 number (station tables, modifier
+// tuning, recap grid, gyro numbers, difficulty families, per-game tunes)
+// lives as exported frozen consts inside the owning module / .logic.js
+// (§E0.1-2 pattern). constants.js is FROZEN again after this edit — no other
+// 4.0 agent may touch it.
+// ============================================================================
+
+/**
+ * Codes system rate limit (§B10/§C-SYS5.3): LOCK_AFTER wrong attempts within
+ * a rolling LOCK_WINDOW_SEC window → codes.lockUntil = now + LOCK_SEC.
+ * The code CATALOG (ids + normalized secrets + effects) lives in
+ * data/codes.js (§B6); the pure engine in systems/codesEngine.js.
+ */
+export const CODES = Object.freeze({
+  LOCK_AFTER: 5,
+  LOCK_WINDOW_SEC: 60,
+  LOCK_SEC: 30,
+});
+
+/**
+ * Modifier events (§B10/§C-SYS11): daily cap on modifier-surplus coins —
+ * tracked in the modifiers.dayCoins/dayCoinsDay save ledger (§B1). All other
+ * modifier tuning lives in systems/modifierEngine.js (G54, §E0.1-2).
+ */
+export const MODIFIER = Object.freeze({
+  DAY_COIN_CAP: 150,
+});
+
+// ============================================================== end V4/G53 ==

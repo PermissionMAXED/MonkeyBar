@@ -76,6 +76,11 @@ export const STICKERS = Object.freeze(
     // shoppingSurf run completed (BOTH modes bump surfRuns — §C8.6)
     { id: 'surfStar', cond: { counter: 'surfRuns', target: 1 } },
     { id: 'albumMaster', cond: { special: 'setsClaimed', target: 4 } },
+    // V4/G53 (PLAN4 §C-SYS5.4, binding): sticker #29 herzGooby is a BONUS
+    // sticker OUTSIDE the 28 — secret: true keeps it out of TOTAL_BOOK_STICKERS
+    // (header stays „n/28", stickerBookFull stays 28); it unlocks ONLY via the
+    // 'herzGooby' code word (cond.code reads codes.redeemed — §B6/§C-SYS5.2).
+    { id: 'herzGooby', secret: true, cond: { code: 'herzGooby' } },
   ].map((s) =>
     Object.freeze({
       ...s,
@@ -101,21 +106,31 @@ export function getSticker(id) {
   return STICKERS_BY_ID[id];
 }
 
-/** Total book stickers (§C5: 28 — header shows n/28). */
-export const TOTAL_BOOK_STICKERS = STICKERS.length;
+/**
+ * Total book stickers (§C5: 28 — header shows n/28). V4/G53 (§C-SYS5.4): the
+ * secret herzGooby bonus sticker is OUTSIDE the 28 — the header gains a
+ * „+💗" suffix once unlocked, stickerBookFull keeps target 28.
+ */
+export const TOTAL_BOOK_STICKERS = STICKERS.filter((s) => !s.secret).length;
 
-/** §C5.3 page layout: 5 pages of 6/6/6/6/4 slots (2×3 grid per page). */
+/**
+ * §C5.3 page layout: 5 pages in a 2×3 grid — the 28 REGULAR stickers only.
+ * V4/G53 (§C-SYS5.4): the secret #29 slot is NOT paged here; ui/albumScreen.js
+ * appends it explicitly to page 5 (rendering 6/6/6/6/4+1 slots) as a
+ * „?"-silhouette with „Geheim" styling while locked.
+ */
 export const STICKER_PAGE_SIZES = Object.freeze([6, 6, 6, 6, 4]);
 
 /**
- * The catalog split into the §C5.3 pages (table order).
+ * The catalog split into the §C5.3 pages (table order, non-secret only).
  * @returns {StickerDef[][]} 5 arrays of 6/6/6/6/4 defs
  */
 export function stickerPages() {
+  const regular = STICKERS.filter((s) => !s.secret); // V4/G53: #29 excluded
   const pages = [];
   let at = 0;
   for (const size of STICKER_PAGE_SIZES) {
-    pages.push(STICKERS.slice(at, at + size));
+    pages.push(regular.slice(at, at + size));
     at += size;
   }
   return pages;

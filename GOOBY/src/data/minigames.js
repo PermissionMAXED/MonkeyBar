@@ -17,11 +17,12 @@ import { COIN_TABLE, UNLOCK_LEVELS, UNLOCKS, MINIGAME } from './constants.js'; /
  */
 
 /**
- * The 27 shipping games (§C6 + PLAN2 §C1 + PLAN3 §C8–§C10), in unlock order
- * (§B6/§B8 merged with v1 §C6.3; earlier-generation-first within a level).
- * V2/G16: 9 new 2.0 ids added. V3/G34 (§E0.1-9): 6 new 3.0 ids added — their
- * modules land in waves 2–3 (metadata-only entries render "coming soon",
- * §E8), their coin rows are live in COIN_TABLE (§E0.1-3).
+ * The 28 shipping games (§C6 + PLAN2 §C1 + PLAN3 §C8–§C10 + PLAN4-GAMES §G6),
+ * in unlock order (§B6/§B8 merged with v1 §C6.3; earlier-generation-first
+ * within a level). V2/G16: 9 new 2.0 ids added. V3/G34 (§E0.1-9): 6 new 3.0
+ * ids added. V4/G53 (§E0.1-19): goobyWelt added — its module lands in wave 2
+ * (metadata-only entries render "coming soon", §E8), its coin row/gate are
+ * live in COIN_TABLE/UNLOCKS (§E0.1-7), energy 8 = the §C6 default.
  */
 export const MINIGAME_IDS = Object.freeze([
   'carrotCatch', //  L1
@@ -46,6 +47,7 @@ export const MINIGAME_IDS = Object.freeze([
   'trampoline', //   L10
   'goalieGooby', //  L11 (2.0)
   'starHopper', //   L12 (2.0)
+  'goobyWelt', //    L12 (4.0 — V4/G53 §E0.1-19, PLAN4-GAMES §G6; module lands wave 2)
   'pipeFlow', //     L14 (2.0)
   'toyRacer', //     L15 (3.0 — V3/G34, §C10.1)
   'ghostHunt', //    L16 (3.0 — V3/G34, §C10.1)
@@ -85,6 +87,9 @@ const ICONS = {
   ghostHunt: 'sparkle',
   rocketRescue: 'star',
   harborHopper: 'fish',
+  // V4/G53 (§E0.1-19): the ONE new 4.0 tile — reuses an existing icon name;
+  // the Gooby-Welt agents (G65/G66, wave 2) may swap in a bespoke icon.
+  goobyWelt: 'sparkle',
 };
 
 /** V2/G16: car games cost 6 energy (§C1 shared rules — cityDrive + deliveryRush). */

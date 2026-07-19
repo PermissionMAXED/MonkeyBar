@@ -234,7 +234,7 @@ test('all 5 triggers live: cap holds, one per id, sorted by time', () => {
   // the 5 v1 triggers exist until G20 wires the new rules; 5 < cap holds.
   assert.equal(items.length, 5);
   assert.ok(items.length <= NOTIFY.MAX_SCHEDULED, 'cap holds');
-  assert.equal(NOTIFY.MAX_SCHEDULED, 7);
+  assert.equal(NOTIFY.MAX_SCHEDULED, 8); // V4/G53 (PLAN4 §B10): +modifier id 8
   assert.equal(new Set(items.map((n) => n.id)).size, 5);
   for (let i = 1; i < items.length; i++) assert.ok(items[i].at >= items[i - 1].at, 'sorted');
 });
@@ -459,5 +459,66 @@ test('all 7 triggers live: MAX_SCHEDULED 7 holds, ids 6/7 included, sorted', () 
   assert.deepEqual(new Set(items.map((n) => n.id)).size, 7, 'one per id');
   assert.ok(byId(items, NOTIFY.IDS.harvest), 'harvest present');
   assert.ok(byId(items, NOTIFY.IDS.sick), 'sick present');
+  for (let i = 1; i < items.length; i++) assert.ok(items[i].at >= items[i - 1].at, 'sorted');
+});
+
+// ========================================= V4/G53: modifier event (id 8, §B10)
+
+test('modifier: scheduled AT modifiers.nextAt with the v4-core copy keys (§B10)', () => {
+  const now = at(10, 0);
+  const s = state({}, { modifiers: { ...defaultState().modifiers, nextAt: at(14, 30) } });
+  const items = computeSchedule(s, now);
+  assert.deepEqual(items, [{
+    id: 8, at: at(14, 30),
+    titleKey: 'notify.modifier.title', bodyKey: 'notify.modifier.body',
+  }]);
+});
+
+test('modifier guards: 0 / past / junk nextAt never schedule', () => {
+  const now = at(10, 0);
+  const mods = defaultState().modifiers;
+  for (const nextAt of [0, now, now - MIN, NaN, Infinity, 'soon', null, undefined]) {
+    const s = state({}, { modifiers: { ...mods, nextAt } });
+    assert.equal(byId(computeSchedule(s, now), NOTIFY.IDS.modifier), undefined, `nextAt=${nextAt}`);
+  }
+  assert.equal(byId(computeSchedule(state({}, { modifiers: undefined }), now), 8), undefined);
+});
+
+test('modifier is NOT quiet-hours-exempt: 23:00 event shifts to 08:05', () => {
+  const now = at(21, 0);
+  const s = state({}, { modifiers: { ...defaultState().modifiers, nextAt: at(23, 0) } });
+  assert.equal(byId(computeSchedule(s, now), NOTIFY.IDS.modifier).at, at(8, 5, 1));
+});
+
+test('modifier joins the spacing cascade like ids 2–7 (30-min rule)', () => {
+  const now = at(9, 0);
+  // hunger 40 → crossing at now + (40−20)/0.35 ≈ 57.14 min; put the modifier
+  // 10 min after it → must shift to crossing + 30 min.
+  const s = state({ hunger: 40 }, {});
+  const hungerAt = byId(computeSchedule(s, now), NOTIFY.IDS.hunger).at;
+  s.modifiers = { ...defaultState().modifiers, nextAt: hungerAt + 10 * MIN };
+  const items = computeSchedule(s, now);
+  const n = byId(items, NOTIFY.IDS.modifier);
+  assert.equal(n.at, hungerAt + 30 * MIN);
+});
+
+test('all 8 triggers live: MAX_SCHEDULED 8 holds, id 8 included, sorted', () => {
+  const now = at(9, 0);
+  const s = state(
+    { hunger: 40, fun: 50, hygiene: 40 },
+    {
+      sleep: { sleeping: true, startedAt: now, wakeAt: now + 27 * MIN },
+      daily: { lastClaimDay: '2026-07-16', streak: 3 },
+      health: { ...defaultState().health, state: 'sick' },
+      modifiers: { ...defaultState().modifiers, nextAt: at(18, 0) },
+    }
+  );
+  gardenCurrent(s, now);
+  s.garden.plots[0] = plot('corn', now, { progress: 0, wateredMin: 90 });
+  const items = computeSchedule(s, now);
+  assert.equal(items.length, 8);
+  assert.ok(items.length <= NOTIFY.MAX_SCHEDULED, 'cap holds');
+  assert.deepEqual(new Set(items.map((n) => n.id)).size, 8, 'one per id');
+  assert.ok(byId(items, NOTIFY.IDS.modifier), 'modifier present');
   for (let i = 1; i < items.length; i++) assert.ok(items[i].at >= items[i - 1].at, 'sorted');
 });

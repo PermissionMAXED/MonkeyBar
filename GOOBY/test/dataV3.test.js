@@ -46,7 +46,8 @@ const V3_UNLOCK_LEVELS = {
 // ---------------------------------------------------------------- constants
 
 test('SAVE.VERSION bumped to 3 (§B1 — the single §E0.1-3 spine edit)', () => {
-  assert.equal(SAVE.VERSION, 3);
+  // V4/G53 (PLAN4 §B1): bumped again, 3 → 4 (saveV4.test.js owns the details)
+  assert.equal(SAVE.VERSION, 4);
 });
 
 test('the 6 §E0.1-3 coin rows are verbatim', () => {
@@ -64,7 +65,8 @@ test('the 6 §E0.1-3 unlock levels are verbatim (UNLOCKS.MINIGAMES)', () => {
 // ---------------------------------------------------------------- minigames
 
 test('minigames.js lists exactly 27 shipping ids incl. the 6 new (§E0.1-9)', () => {
-  assert.equal(MINIGAME_IDS.length, 27);
+  // V4/G53: +goobyWelt (PLAN4 §E0.1) → 28
+  assert.equal(MINIGAME_IDS.length, 28);
   for (const id of Object.keys(V3_COIN_ROWS)) {
     assert.ok(MINIGAME_IDS.includes(id), `${id} in MINIGAME_IDS`);
   }
@@ -84,7 +86,7 @@ test('the 6 new metadata rows carry titleKey/minLevel/energy/coinTable (§E0.1-9
     assert.equal(m.dev, undefined, `${id} is a shipping game`);
     assertKey(m.titleKey);
   }
-  assert.equal(MINIGAMES.filter((m) => !m.dev).length, 27);
+  assert.equal(MINIGAMES.filter((m) => !m.dev).length, 28); // V4/G53: +goobyWelt
 });
 
 // -------------------------------------------------------------- achievements
@@ -134,6 +136,8 @@ test('v3-stickers: EN/DE key parity; every catalog key + book chrome present', (
   assert.deepEqual(Object.keys(V3_STICKERS_EN).sort(), Object.keys(V3_STICKERS_DE).sort());
   for (const key of Object.keys(V3_STICKERS_EN)) assertKey(key, `v3-stickers ${key}`);
   for (const s of STICKERS) {
+    // V4/G53: the secret herzGooby row (#29) is keyed in strings/v4-core.js
+    if (s.secret) continue;
     for (const key of [s.nameKey, s.flavorKey, s.hintKey]) {
       assert.equal(typeof V3_STICKERS_EN[key], 'string', `v3-stickers owns ${key}`);
     }

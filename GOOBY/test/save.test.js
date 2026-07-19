@@ -42,6 +42,8 @@ test('fresh load: no prior save → defaults per §E3', () => {
     // V3/G34: §B1 counter extensions (deep coverage in saveV3.test.js)
     nougatGlobs: 0, cakesServed: 0, perfectCakes: 0, surfRuns: 0, surfDistanceM: 0,
     races: 0, ghostsCaught: 0, rescues: 0, cratesShipped: 0,
+    // V4/G53: PLAN4 §B1 counter extensions (deep coverage in saveV4.test.js)
+    codesRedeemed: 0, modifierPlays: 0, recapsSeen: 0, radioMinutes: 0, galleryPhotos: 0,
   });
   assert.equal(state.onboarding.done, false);
 });
@@ -154,7 +156,10 @@ test('wrong-typed fields (valid JSON): recovery with backup, never a throw', () 
     // fresh, usable state
     assert.deepEqual(result.state.stats, { hunger: 80, energy: 90, hygiene: 85, fun: 70 });
     assert.equal(result.state.coins, ECONOMY.STARTING_COINS);
-    assert.deepEqual(result.state.furniture, { owned: [], placed: {} });
+    // V4/G53 (PLAN4 §B1/§E0.1-15): fresh saves own + place the radio gift
+    assert.deepEqual(result.state.furniture, {
+      owned: ['radio'], placed: { 'living:shelf1': 'radio' },
+    });
   }
 });
 

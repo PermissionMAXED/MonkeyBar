@@ -6,6 +6,11 @@
 
 import { SAVE, ECONOMY, LEVELING } from '../data/constants.js'; // V2/G16: + LEVELING (§B2.4)
 import { now } from './clock.js';
+// V4/G53 (§B1 step 5): pure catalog lookups for validate()'s v4 clamps —
+// radio.station against the frozen §C-SYS1.2 station ids, modifiers.current
+// against known game ids. Both modules are pure data (no DOM/three).
+import { STATION_IDS } from '../systems/musicRegistry.js';
+import { MINIGAMES_BY_ID } from '../data/minigames.js';
 
 // --- storage backend (swappable for tests / Capacitor Preferences later) ---
 
@@ -224,13 +229,159 @@ const V3_COUNTER_DEFAULTS = Object.freeze({
 const UI_SCALE_STOPS = Object.freeze([85, 100, 115, 130]);
 // --- end V3/G34 slice factories ---
 
+// --- V4/G53: schema v4 slice factories (PLAN4 §B1, exact defaults) ---------
+
+/** The v4 top-level slices at their exact §B1 defaults. @returns {object} */
+function v4SliceDefaults() {
+  return {
+    radio: {
+      station: 'bordmusik', // §C-SYS1.4 station id; validate() coerces unknown → 'bordmusik'
+      playing: false, // radio ON/OFF — persists; resumes after the first gesture on boot
+      shuffle: true, // shuffled station order vs. manifest order
+      replaceContext: true, // radio replaces medley context music everywhere
+      lastTrack: '', // resume point ('' = station start)
+      trims: {}, // trackId → { vol: 100, on: true } — ONLY non-default entries (open map)
+    },
+    codes: {
+      redeemed: {}, // codeId → epoch-ms
+      lockUntil: 0, // §C-SYS5.3 rate-limit lockout end (epoch-ms)
+      buffs: { doubleCoinsUntil: 0 }, // 'UpdateLiebe' expiry (epoch-ms; 0 = inactive)
+    },
+    modifiers: {
+      nextAt: 0, // epoch-ms of the next event; 0 = unscheduled
+      seed: 0, // mulberry32 stream position; 0 = derive from createdAt (validate() fills)
+      current: null, // null | { gameId, type, startedAt, endsAt, playsLeft }
+      lastGameId: '', // no-repeat guard for the next roll
+      dayCoins: 0, dayCoinsDay: '', // §C-SYS11 daily modifier-surplus ledger
+    },
+    recap: {
+      lastRecapLevel: 0, // highest milestone already recapped (migration initializes)
+      baseline: {}, // §C-SYS2.4 counter snapshot at last recap
+      baselineAt: 0, // epoch-ms of the snapshot
+      pendingLevel: 0, // queued-but-not-yet-played milestone (0 = none)
+      history: [], // last ≤ 8 of { level, at, stats } (§C-SYS2.8)
+    },
+    gallery: { count: 0, lastAddedAt: 0, hintShown: false }, // meta only (§B7: blobs in IndexedDB)
+  };
+}
+
+/** §B1/§G3.3/§G6.6 v4 additions to settings (v1–v3 keys unchanged). @returns {object} */
+function v4SettingsDefaults() {
+  return {
+    gyro: false, // §C-SYS8 — strict-boolean validated like devUnlocked
+    controls: { invertX: false, invertY: false }, // §G3.3 global invert toggles
+    goobyWeltQuality: 'high', // §G6.6 'high' (Schön) | 'low' (Flüssig)
+  };
+}
+
+/** §G5.5 v4 additions to minigames (best/plays/lastPlayDay unchanged). @returns {object} */
+function v4MinigameDefaults() {
+  return {
+    difficulty: {}, // gameId → 'easy'|'normal'|'hard' (last-selected)
+    beaten: {}, // gameId → { easy?, normal?, hard? } cleared markers
+    bestByDiff: {}, // gameId → { easy?, hard? } (Mittel stays in `best`)
+    endlessBest: {}, // gameId → n (local endless highscore)
+  };
+}
+
+/** §B1 v4 additions to achievements.counters (v1–v3 keys unchanged). */
+const V4_COUNTER_DEFAULTS = Object.freeze({
+  codesRedeemed: 0, modifierPlays: 0, recapsSeen: 0, radioMinutes: 0, galleryPhotos: 0,
+});
+
+/** §C-SYS4.2 modifier type ids (validate() checks modifiers.current.type). */
+const MODIFIER_TYPES = Object.freeze([
+  'doppelGold', 'muenzregen', 'turbo', 'riesenGooby', 'stickerChance', 'glueckspilz',
+]);
+
 /**
- * Fresh save-state per schema v3 (§E3 + PLAN2 §B2 + PLAN3 §B1).
+ * §B1: modifiers.seed 0 = "derive from createdAt". One shared formula so
+ * defaultState() (fresh saves) and validate() (migrated/hostile saves) fill
+ * the identical, per-save-stable mulberry32 stream position.
+ * @param {number} createdAt
+ * @returns {number} uint32 seed (0 only for junk createdAt)
+ */
+function deriveModifierSeed(createdAt) {
+  return Math.floor(Number(createdAt) || 0) % 4294967296;
+}
+
+/** §B1 #5: timestamp fields collapse when > now() + 24 h (hostile far-future). */
+const FUTURE_STAMP_SLACK_MS = 24 * 3600000;
+
+/**
+ * §C-SYS2.4 baseline snapshot for migrations[3] (§B1 #3). Prefers G55's
+ * recapEngine implementation when it has resolved (lazy dynamic import per
+ * §E0.1-11 — migrations run synchronously, so the inline fallback below
+ * mirrors the §C-SYS2.4 shape EXACTLY and both produce identical output).
+ * @type {((state: object, nowMs?: number) => object)|null}
+ */
+let recapSnapshotFn = null;
+{
+  // Non-literal specifier so Rollup/Vite never hard-require G55's same-wave
+  // module at build time (the guarded-import pattern from the G13 mirror).
+  const specifier = new URL('../systems/recap.js', import.meta.url).href;
+  import(/* @vite-ignore */ specifier).then(
+    (mod) => { recapSnapshotFn = typeof mod?.snapshot === 'function' ? mod.snapshot : null; },
+    () => { recapSnapshotFn = null; }
+  );
+}
+
+/** §C-SYS2.4 counter keys copied verbatim (petsToday excluded — daily). */
+const SNAPSHOT_COUNTERS = Object.freeze([
+  'feeds', 'washes', 'sleeps', 'tickles', 'trips', 'harvests', 'plantings',
+  'waterings', 'questsDone', 'deliveries', 'cures', 'nougatGlobs',
+  'cakesServed', 'surfRuns',
+]);
+
+/**
+ * Inline §C-SYS2.4 snapshot fallback (mirrors systems/recap.js `snapshot`):
+ * snapshotAtMs, level, coinsEarned/coinsSpent/distanceM/photos (profile),
+ * playsTotal (Σ minigames.plays), the listed counters verbatim, stickerCount.
+ * Missing/corrupt inputs snapshot as 0 (the diff side clamps ≥ 0 too).
+ * @param {object} state @param {number} nowMs
+ * @returns {object}
+ */
+function recapBaselineSnapshot(state, nowMs) {
+  if (recapSnapshotFn) return recapSnapshotFn(state, nowMs);
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
+  const s = state ?? {};
+  const profile = s.profile ?? {};
+  const counters = s.achievements?.counters ?? {};
+  const plays = s.minigames?.plays;
+  let playsTotal = 0;
+  if (plays != null && typeof plays === 'object' && !Array.isArray(plays)) {
+    for (const v of Object.values(plays)) playsTotal += num(v);
+  }
+  const unlocked = s.stickers?.unlocked;
+  const stickerCount =
+    unlocked != null && typeof unlocked === 'object' && !Array.isArray(unlocked)
+      ? Object.keys(unlocked).length
+      : 0;
+  const out = {
+    snapshotAtMs: num(nowMs),
+    level: Math.max(1, Math.floor(num(s.level)) || 1),
+    coinsEarned: num(profile.coinsEarned),
+    coinsSpent: num(profile.coinsSpent),
+    distanceM: num(profile.distanceM),
+    photos: num(profile.photos),
+    playsTotal,
+    stickerCount,
+  };
+  for (const k of SNAPSHOT_COUNTERS) out[k] = num(counters[k]);
+  return out;
+}
+// --- end V4/G53 slice factories ---
+
+/**
+ * Fresh save-state per schema v4 (§E3 + PLAN2 §B2 + PLAN3 §B1 + PLAN4 §B1).
  * @returns {object}
  */
 export function defaultState() {
   const ts = now();
-  return {
+  const state = {
     v: SAVE.VERSION,
     createdAt: ts,
     lastTickAt: ts,
@@ -241,17 +392,23 @@ export function defaultState() {
     xp: 0,
     level: 1,
     inventory: { ...ECONOMY.STARTER_INVENTORY },
-    furniture: { owned: [], placed: {} },
+    // V4/G53 (§B1/§E0.1-15): fresh saves get the free radio gift owned AND
+    // placed on the living-room shelf (migrated saves get it in migrations[3]).
+    furniture: { owned: ['radio'], placed: { 'living:shelf1': 'radio' } },
     decor: { wallpaper: {}, floor: {} },
     // V3/G34: 4th equip slot 'back' (§B1/§C13 — G40 ships the items, wave 2)
     outfits: { owned: [], equipped: { hat: null, glasses: null, neck: null, back: null } },
-    minigames: { best: {}, plays: {}, lastPlayDay: {} },
+    minigames: {
+      best: {}, plays: {}, lastPlayDay: {},
+      ...v4MinigameDefaults(), // V4/G53 (§G5.5: difficulty/beaten/bestByDiff/endlessBest)
+    },
     achievements: {
       unlocked: {},
       counters: {
         feeds: 0, washes: 0, sleeps: 0, trips: 0, tickles: 0, petsToday: 0, petsDay: '',
         ...V2_COUNTER_DEFAULTS, // V2/G16 (§B2)
         ...V3_COUNTER_DEFAULTS, // V3/G34 (§B1)
+        ...V4_COUNTER_DEFAULTS, // V4/G53 (§B1)
       },
     },
     daily: { lastClaimDay: '', streak: 0 },
@@ -259,14 +416,22 @@ export function defaultState() {
     settings: {
       lang: 'auto', sfx: true, music: true, haptics: true, notifications: 'unasked',
       ...v3SettingsDefaults(), // V3/G34 (§B1: uiScale/volumes/devUnlocked)
+      ...v4SettingsDefaults(), // V4/G53 (§B1/§G3.3/§G6.6: gyro/controls/goobyWeltQuality)
     },
     // V2/G16: whatsNew2Seen true for FRESH saves — only migrated v1 veterans
     // get false and see the one-time "What's new" panel (§E0.1-6; G30 builds it).
     // V3/G34: whatsNew3Seen mirrors the rule for 3.0 (§E0.1-8; G48 builds it).
-    onboarding: { done: false, step: 0, whatsNew2Seen: true, whatsNew3Seen: true },
+    // V4/G53: whatsNew4Seen mirrors the rule for 4.0 (§B1; G82 builds it).
+    onboarding: { done: false, step: 0, whatsNew2Seen: true, whatsNew3Seen: true, whatsNew4Seen: true },
     ...v2SliceDefaults(), // V2/G16 (§B2)
     ...v3SliceDefaults(), // V3/G34 (§B1)
+    ...v4SliceDefaults(), // V4/G53 (§B1)
   };
+  // V4/G53: fresh saves derive the modifier seed immediately (§B1 — validate()
+  // fills the SAME value for migrated saves), so an untouched defaultState()
+  // roundtrips persist → load with full deep equality.
+  state.modifiers.seed = deriveModifierSeed(ts);
+  return state;
 }
 
 /**
@@ -343,6 +508,71 @@ export const migrations = [
     }
     if (out.onboarding == null || isObj(out.onboarding)) {
       out.onboarding = { ...out.onboarding, whatsNew3Seen: false };
+    }
+    return out;
+  },
+  // V4/G53 — v3 → v4 (PLAN4 §B1 #1–5, exact behavior):
+  //  1. spread the new top-level slices (radio/codes/modifiers/recap/gallery)
+  //     ONLY when absent ({...defaults, ...state} ordering); wrong-typed
+  //     containers are left for validate()/F2 recovery,
+  //  2. settings gains gyro/controls/goobyWeltQuality defaults-first — every
+  //     v1–v3 settings key passes through verbatim (§B1 step 2 + §G3.3/§G6.6
+  //     per §E0.1-14); minigames gains the §G5.5 difficulty/beaten/bestByDiff/
+  //     endlessBest containers the same way,
+  //  3. recap retro-safety (§B1 #3, binding): lastRecapLevel = ⌊level/5⌋·5
+  //     (an L23 save → 20; L4 → 0) and baseline = the §C-SYS2.4 snapshot taken
+  //     FROM THE MIGRATING STATE, baselineAt = now() — no instant recap spam;
+  //     the first post-update recap counts only what happened since the update,
+  //  4. counters merged defaults-first (guarded); the radio furniture grant
+  //     (§C-SYS1.4/§E0.1-15): push 'radio' into furniture.owned when absent,
+  //     set furniture.placed['living:shelf1'] = 'radio' ONLY when that slot
+  //     key is absent (never overwrite a player's placement);
+  //     whatsNew4Seen = false so v1–v3 veterans see the one-time 4.0 panel,
+  //  5. never rewrite any existing key; validate() (not this migration)
+  //     clamps the v4 leaves (§B1 #5 — station ids, trims, the ≤ now + 24 h
+  //     timestamp collapses, modifiers.current shape, history cap, gallery).
+  //  Same corruption-guard style as migrations[1]/[2]: wrong-typed containers
+  //  are left untouched so validate()'s mergeDefaults throws → F2 recovery.
+  (state) => {
+    const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
+    const out = { ...v4SliceDefaults(), ...state, v: 4 };
+    if (out.settings == null || isObj(out.settings)) {
+      out.settings = { ...v4SettingsDefaults(), ...out.settings };
+    }
+    if (isObj(out.minigames)) {
+      out.minigames = { ...v4MinigameDefaults(), ...out.minigames };
+    }
+    // §B1 #3: initialize recap ONLY when the slice came from the defaults
+    // spread (a v3 save never carries one; a forward-written object is an
+    // existing key and is never rewritten).
+    if (isObj(out.recap) && !isObj(state?.recap)) {
+      const ts = now();
+      const level = Math.floor(Number(out.level) || 1);
+      out.recap = {
+        ...out.recap,
+        lastRecapLevel: Math.floor(Math.min(40, Math.max(0, level)) / 5) * 5,
+        baseline: recapBaselineSnapshot(out, ts),
+        baselineAt: ts,
+      };
+    }
+    if (isObj(out.achievements) && (out.achievements.counters == null || isObj(out.achievements.counters))) {
+      out.achievements = {
+        ...out.achievements,
+        counters: { ...V4_COUNTER_DEFAULTS, ...out.achievements.counters },
+      };
+    }
+    if (isObj(out.furniture)) {
+      const furniture = { ...out.furniture };
+      if (Array.isArray(furniture.owned) && !furniture.owned.includes('radio')) {
+        furniture.owned = [...furniture.owned, 'radio'];
+      }
+      if (isObj(furniture.placed) && !('living:shelf1' in furniture.placed)) {
+        furniture.placed = { ...furniture.placed, 'living:shelf1': 'radio' };
+      }
+      out.furniture = furniture;
+    }
+    if (out.onboarding == null || isObj(out.onboarding)) {
+      out.onboarding = { ...out.onboarding, whatsNew4Seen: false };
     }
     return out;
   },
@@ -498,6 +728,114 @@ function validate(state) {
   // stickers.unlocked/seen are open id-maps: wrong-typed CONTAINERS throw in
   // mergeDefaults (F2); entries pass through verbatim (engine reads guarded).
   // --- end V3/G34 ---
+  // --- V4/G53: v4 slice validation (PLAN4 §B1 #5) ---
+  {
+    /** finite ms ≥ 0, collapsed to ≤ now() + 24 h (§B1 #5: hostile far-future
+     * stamps — an over-future doubleCoinsUntil would grant a permanent ×2). */
+    const clampStamp = (v) => {
+      const n = Number(v);
+      if (!Number.isFinite(n) || n <= 0) return 0;
+      return Math.min(n, now() + FUTURE_STAMP_SLACK_MS);
+    };
+    // furniture.placed is taken VERBATIM when the save has one (same rule
+    // class as the V2/FIX-A inventory fix: defaultState now carries the
+    // radio gift at living:shelf1, and mergeDefaults would resurrect a
+    // removed placement on every load). Missing/null slices keep defaults;
+    // wrong-typed containers still throw in mergeDefaults (F2).
+    if (state.furniture != null && typeof state.furniture === 'object' && !Array.isArray(state.furniture)
+        && state.furniture.placed != null && typeof state.furniture.placed === 'object'
+        && !Array.isArray(state.furniture.placed)) {
+      s.furniture.placed = { ...state.furniture.placed };
+    }
+    // settings: gyro/invert toggles strict booleans; quality one of 2 stops.
+    s.settings.gyro = s.settings.gyro === true;
+    s.settings.controls.invertX = s.settings.controls.invertX === true;
+    s.settings.controls.invertY = s.settings.controls.invertY === true;
+    if (s.settings.goobyWeltQuality !== 'high' && s.settings.goobyWeltQuality !== 'low') {
+      s.settings.goobyWeltQuality = 'high';
+    }
+    // radio: station must be a known §C-SYS1.2 id (else 'bordmusik');
+    // booleans keep their defaults when junk-typed; trims entries normalize
+    // to { vol: int 0–150 (else 100), on: boolean (junk → true) } — non-object
+    // entries are dropped (trims only stores non-default rows anyway).
+    if (!STATION_IDS.includes(s.radio.station)) s.radio.station = 'bordmusik';
+    s.radio.playing = s.radio.playing === true;
+    s.radio.shuffle = typeof s.radio.shuffle === 'boolean' ? s.radio.shuffle : true;
+    s.radio.replaceContext = typeof s.radio.replaceContext === 'boolean' ? s.radio.replaceContext : true;
+    if (typeof s.radio.lastTrack !== 'string') s.radio.lastTrack = '';
+    {
+      const trims = {};
+      for (const [id, row] of Object.entries(s.radio.trims ?? {})) {
+        if (row == null || typeof row !== 'object' || Array.isArray(row)) continue;
+        const vol = Number(row.vol);
+        trims[id] = {
+          ...row,
+          vol: Number.isFinite(vol) ? Math.min(150, Math.max(0, Math.round(vol))) : 100,
+          on: row.on === false ? false : true,
+        };
+      }
+      s.radio.trims = trims;
+    }
+    // codes: lockUntil/doubleCoinsUntil are §B1 #5 clamped stamps; redeemed
+    // entries normalize to a TRUTHY finite epoch-ms (junk collapses to 1, not
+    // 0 — the id must stay redeemed so single-use holds).
+    s.codes.lockUntil = clampStamp(s.codes.lockUntil);
+    s.codes.buffs.doubleCoinsUntil = clampStamp(s.codes.buffs.doubleCoinsUntil);
+    for (const [id, at] of Object.entries(s.codes.redeemed ?? {})) {
+      const n = Number(at);
+      s.codes.redeemed[id] = Number.isFinite(n) && n > 0 ? n : 1;
+    }
+    // modifiers: nextAt clamped stamp; seed int ≥ 0 (0 → derived from
+    // createdAt so G54's mulberry32 stream is stable per save); current →
+    // null unless a well-formed row with a known gameId/type and a future
+    // endsAt (§B1 #5); day ledger normalized.
+    s.modifiers.nextAt = clampStamp(s.modifiers.nextAt);
+    {
+      const seed = Number(s.modifiers.seed);
+      s.modifiers.seed = Number.isFinite(seed) && seed > 0 ? Math.floor(seed) : 0;
+      if (s.modifiers.seed === 0) {
+        s.modifiers.seed = deriveModifierSeed(s.createdAt); // §B1: 0 = derive
+      }
+      const cur = s.modifiers.current;
+      const wellFormed =
+        cur != null && typeof cur === 'object' && !Array.isArray(cur) &&
+        typeof cur.gameId === 'string' && MINIGAMES_BY_ID[cur.gameId] != null &&
+        MODIFIER_TYPES.includes(cur.type) &&
+        Number.isFinite(Number(cur.endsAt)) && Number(cur.endsAt) > now() &&
+        Number.isFinite(Number(cur.startedAt)) && Number(cur.startedAt) >= 0 &&
+        Number.isInteger(Number(cur.playsLeft)) && Number(cur.playsLeft) >= 0;
+      if (!wellFormed) s.modifiers.current = null;
+      if (typeof s.modifiers.lastGameId !== 'string') s.modifiers.lastGameId = '';
+      const dayCoins = Number(s.modifiers.dayCoins);
+      s.modifiers.dayCoins = Number.isFinite(dayCoins) ? Math.max(0, Math.floor(dayCoins)) : 0;
+      if (typeof s.modifiers.dayCoinsDay !== 'string') s.modifiers.dayCoinsDay = '';
+    }
+    // recap: milestone ints 0–40; baselineAt finite ≥ 0; history ≤ 8
+    // well-formed rows ({ level, at, stats } — junk rows dropped, §B1 #5).
+    {
+      const mile = (v) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? Math.min(40, Math.max(0, Math.floor(n))) : 0;
+      };
+      s.recap.lastRecapLevel = mile(s.recap.lastRecapLevel);
+      s.recap.pendingLevel = mile(s.recap.pendingLevel);
+      const at = Number(s.recap.baselineAt);
+      s.recap.baselineAt = Number.isFinite(at) && at > 0 ? at : 0;
+      s.recap.history = (Array.isArray(s.recap.history) ? s.recap.history : [])
+        .filter((row) => row != null && typeof row === 'object' && !Array.isArray(row)
+          && Number.isFinite(Number(row.level)) && Number.isFinite(Number(row.at)))
+        .slice(-8);
+    }
+    // gallery: count int 0–40 (§B7 cap); lastAddedAt finite ≥ 0; strict bool.
+    {
+      const count = Number(s.gallery.count);
+      s.gallery.count = Number.isFinite(count) ? Math.min(40, Math.max(0, Math.floor(count))) : 0;
+      const at = Number(s.gallery.lastAddedAt);
+      s.gallery.lastAddedAt = Number.isFinite(at) && at > 0 ? at : 0;
+      s.gallery.hintShown = s.gallery.hintShown === true;
+    }
+  }
+  // --- end V4/G53 ---
   return s;
 }
 

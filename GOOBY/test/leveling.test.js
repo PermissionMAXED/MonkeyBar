@@ -106,8 +106,9 @@ test('V2/G16: unlock queries cover the 9 new §B6 games', () => {
     Object.values(UNLOCKS.MINIGAMES).filter((l) => l <= 10).length;
   assert.equal(unlockedMinigames(10).length, atOldMax);
   // V3/G34: catalog is 27 now; the last gate is harborHopper at L20 (§E0.1-3)
-  assert.equal(unlockedMinigames(20).length, 27);
-  assert.equal(unlockedMinigames(40).length, 27);
+  // V4/G53: +goobyWelt at L12 (PLAN4 §B10) → 28
+  assert.equal(unlockedMinigames(20).length, 28);
+  assert.equal(unlockedMinigames(40).length, 28);
 });
 
 test('V3/G34: unlock queries cover the 6 new §E0.1-3 gates', () => {

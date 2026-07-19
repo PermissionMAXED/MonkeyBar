@@ -43,8 +43,9 @@ test('headline catalog counts: 32 foods / 8 crops / 28 quests / 4×32 stickers /
   assert.equal(SKINS.length, 7);
   // V3/G34: 33 → 37 achievements (§C5.5/§C6.4), 21 → 27 games (§E0.1-9) —
   // the 3.0 rows themselves are asserted verbatim in dataV3.test.js.
+  // V4/G53: +goobyWelt (PLAN4 §E0.1) → 28 games.
   assert.equal(ACHIEVEMENTS.length, 37);
-  assert.equal(MINIGAME_IDS.length, 27);
+  assert.equal(MINIGAME_IDS.length, 28);
 });
 
 // ---------------------------------------------------- §C1.1 coin rows verbatim
@@ -290,6 +291,8 @@ test('UNLOCKS matches the §B6 gating table verbatim', () => {
     // V3/G34: the 6 3.0 gates (§E0.1-3 — dataV3.test.js re-asserts them)
     shoppingSurf: 5, purblePlace: 6, toyRacer: 15, ghostHunt: 16,
     rocketRescue: 18, harborHopper: 20,
+    // V4/G53: goobyWelt gate (PLAN4 §B10 — level 12)
+    goobyWelt: 12,
   });
   assert.deepEqual({ ...UNLOCKS.CROPS }, {
     radish: 3, carrot: 3, salad: 3, tomato: 4, corn: 6, eggplant: 8, pumpkin: 10, watermelon: 12,
@@ -309,8 +312,10 @@ test('UNLOCKS matches the §B6 gating table verbatim', () => {
 test('NOTIFY gains harvest:6 / sick:7 with MAX_SCHEDULED 7 + EN/DE copy', () => {
   assert.equal(NOTIFY.IDS.harvest, 6);
   assert.equal(NOTIFY.IDS.sick, 7);
-  assert.equal(NOTIFY.MAX_SCHEDULED, 7);
-  assert.equal(Object.keys(NOTIFY.IDS).length, 7); // one id per scheduled slot
+  // V4/G53 (PLAN4 §B10): +modifier:8, cap 7 → 8
+  assert.equal(NOTIFY.IDS.modifier, 8);
+  assert.equal(NOTIFY.MAX_SCHEDULED, 8);
+  assert.equal(Object.keys(NOTIFY.IDS).length, 8); // one id per scheduled slot
   // §C2.4 / §C3.5 copy, verbatim
   assert.equal(EN['notify.harvest.body'], 'Your crops are ready! 🥕');
   assert.equal(DE['notify.harvest.body'], 'Deine Ernte ist reif! 🥕');

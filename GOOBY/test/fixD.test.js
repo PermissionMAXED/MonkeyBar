@@ -135,6 +135,10 @@ function applyFireStickerRecipe(state, def) {
     // The panel emits store.emit('stickerHook', {id: cond.event}); the engine
     // maps hook id → def and latches directly — modelled here as the latch.
     state.stickers.unlocked[def.id] = 1;
+  } else if (cond.code) {
+    // V4/G53 (PLAN4 §C-SYS5): secret sticker #29 — redeeming its code flips
+    // codes.redeemed, which stickerProgress reads as a 0/1 gate.
+    state.codes.redeemed[cond.code] = Date.now();
   } else if (cond.counter) {
     const counters = state.achievements.counters;
     counters[cond.counter] = Math.max(Math.floor(Number(counters[cond.counter]) || 0), target);
@@ -165,7 +169,7 @@ function applyFireStickerRecipe(state, def) {
 }
 
 test('FIX-D E14 P1-3: the fire recipe unlocks each of the 28 sticker defs', () => {
-  assert.equal(STICKERS.length, 28);
+  assert.equal(STICKERS.length, 29); // V4/G53: 28 + the secret herzGooby (#29)
   for (const def of STICKERS) {
     const state = applyFireStickerRecipe(defaultState(), def);
     if (def.cond.event) {

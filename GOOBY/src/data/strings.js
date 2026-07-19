@@ -41,6 +41,29 @@ import { EN as V3_DEPTH_A_EN, DE as V3_DEPTH_A_DE } from './strings/v3-depth-a.j
 import { EN as V3_DEPTH_B_EN, DE as V3_DEPTH_B_DE } from './strings/v3-depth-b.js';
 import { EN as V3_DEPTH_C_EN, DE as V3_DEPTH_C_DE } from './strings/v3-depth-c.js';
 import { EN as V3_POLISH_EN, DE as V3_POLISH_DE } from './strings/v3-polish.js';
+// V4/G53 (PLAN4 §E0.1-8 — the SINGLE 4.0 edit of this file): static imports +
+// spreads of the 19 per-feature 4.0 modules (after all v3 spreads); every 4.0
+// agent adds keys ONLY to their own v4-*.js module, always EN + DE.
+import { EN as V4_CORE_EN, DE as V4_CORE_DE } from './strings/v4-core.js';
+import { EN as V4_RADIO_EN, DE as V4_RADIO_DE } from './strings/v4-radio.js';
+import { EN as V4_CODES_EN, DE as V4_CODES_DE } from './strings/v4-codes.js';
+import { EN as V4_SETTINGS_EN, DE as V4_SETTINGS_DE } from './strings/v4-settings.js';
+import { EN as V4_DEV_EN, DE as V4_DEV_DE } from './strings/v4-dev.js';
+import { EN as V4_CONTROLS_EN, DE as V4_CONTROLS_DE } from './strings/v4-controls.js';
+import { EN as V4_DIFFICULTY_EN, DE as V4_DIFFICULTY_DE } from './strings/v4-difficulty.js';
+import { EN as V4_RECAP_EN, DE as V4_RECAP_DE } from './strings/v4-recap.js';
+import { EN as V4_XP_EN, DE as V4_XP_DE } from './strings/v4-xp.js';
+import { EN as V4_MODIFIER_EN, DE as V4_MODIFIER_DE } from './strings/v4-modifier.js';
+import { EN as V4_SICK_EN, DE as V4_SICK_DE } from './strings/v4-sick.js';
+import { EN as V4_SURF_EN, DE as V4_SURF_DE } from './strings/v4-surf.js';
+import { EN as V4_ARCADE_EN, DE as V4_ARCADE_DE } from './strings/v4-arcade.js';
+import { EN as V4_CAKE_EN, DE as V4_CAKE_DE } from './strings/v4-cake.js';
+import { EN as V4_WELT_EN, DE as V4_WELT_DE } from './strings/v4-welt.js';
+import { EN as V4_GALLERY_EN, DE as V4_GALLERY_DE } from './strings/v4-gallery.js';
+import { EN as V4_FOODS_EN, DE as V4_FOODS_DE } from './strings/v4-foods.js';
+import { EN as V4_CREDITS_EN, DE as V4_CREDITS_DE } from './strings/v4-credits.js';
+import { EN as V4_SHIP_EN, DE as V4_SHIP_DE } from './strings/v4-ship.js';
+// end V4/G53 imports
 
 /** @type {Record<string, string>} */
 export const EN = {
@@ -546,6 +569,26 @@ export const EN = {
   ...V3_DEPTH_B_EN,
   ...V3_DEPTH_C_EN,
   ...V3_POLISH_EN,
+  // V4/G53 (§E0.1-8): the 19 4.0 per-feature modules, after all v3 spreads
+  ...V4_CORE_EN,
+  ...V4_RADIO_EN,
+  ...V4_CODES_EN,
+  ...V4_SETTINGS_EN,
+  ...V4_DEV_EN,
+  ...V4_CONTROLS_EN,
+  ...V4_DIFFICULTY_EN,
+  ...V4_RECAP_EN,
+  ...V4_XP_EN,
+  ...V4_MODIFIER_EN,
+  ...V4_SICK_EN,
+  ...V4_SURF_EN,
+  ...V4_ARCADE_EN,
+  ...V4_CAKE_EN,
+  ...V4_WELT_EN,
+  ...V4_GALLERY_EN,
+  ...V4_FOODS_EN,
+  ...V4_CREDITS_EN,
+  ...V4_SHIP_EN,
 };
 
 /** @type {Record<string, string>} */
@@ -1052,6 +1095,26 @@ export const DE = {
   ...V3_DEPTH_B_DE,
   ...V3_DEPTH_C_DE,
   ...V3_POLISH_DE,
+  // V4/G53 (§E0.1-8): the 19 4.0 per-feature modules, after all v3 spreads
+  ...V4_CORE_DE,
+  ...V4_RADIO_DE,
+  ...V4_CODES_DE,
+  ...V4_SETTINGS_DE,
+  ...V4_DEV_DE,
+  ...V4_CONTROLS_DE,
+  ...V4_DIFFICULTY_DE,
+  ...V4_RECAP_DE,
+  ...V4_XP_DE,
+  ...V4_MODIFIER_DE,
+  ...V4_SICK_DE,
+  ...V4_SURF_DE,
+  ...V4_ARCADE_DE,
+  ...V4_CAKE_DE,
+  ...V4_WELT_DE,
+  ...V4_GALLERY_DE,
+  ...V4_FOODS_DE,
+  ...V4_CREDITS_DE,
+  ...V4_SHIP_DE,
 };
 
 const DICTS = { en: EN, de: DE };

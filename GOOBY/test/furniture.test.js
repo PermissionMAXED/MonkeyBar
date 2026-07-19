@@ -275,7 +275,8 @@ test('place requires ownership; buy → place persists to furniture.placed', () 
   assert.deepEqual(place(store, 'loungeDesignSofa', 'living', 'sofa'), { ok: true });
   assert.equal(store.get('furniture.placed')['living:sofa'], 'loungeDesignSofa');
   assert.ok(isPlaced(store, 'loungeDesignSofa', 'living', 'sofa'));
-  assert.equal(placedNonDefaultCount(store), 1);
+  // V4/G53 (PLAN4 §B1): fresh saves carry the placed radio gift → baseline 1
+  assert.equal(placedNonDefaultCount(store), 2);
 
   // invalid placement never writes
   assert.deepEqual(place(store, 'loungeDesignSofa', 'kitchen', 'sofa'), {
@@ -286,7 +287,7 @@ test('place requires ownership; buy → place persists to furniture.placed', () 
   // unplace → back to the free default
   unplace(store, 'living', 'sofa');
   assert.equal(placedItem(store, 'living', 'sofa'), 'loungeSofa');
-  assert.equal(placedNonDefaultCount(store), 0);
+  assert.equal(placedNonDefaultCount(store), 1); // radio gift remains
 });
 
 test('placing the slot default clears the override (no stale placed keys)', () => {
@@ -297,7 +298,8 @@ test('placing the slot default clears the override (no stale placed keys)', () =
   assert.equal(placedItem(store, 'living', 'tv'), 'televisionModern');
   place(store, 'televisionVintage', 'living', 'tv'); // the free default
   assert.equal(placedItem(store, 'living', 'tv'), 'televisionVintage');
-  assert.deepEqual(store.get('furniture.placed'), {});
+  // V4/G53 (PLAN4 §B1): only the fresh-save radio gift remains
+  assert.deepEqual(store.get('furniture.placed'), { 'living:shelf1': 'radio' });
 });
 
 test('shared rug: buy once, place in living AND bedroom', () => {
@@ -325,7 +327,8 @@ test('buyFurniture is atomic: not enough coins → nothing changes', () => {
   store.set('coins', 100);
   assert.deepEqual(buyFurniture(store, 'bedDouble'), { ok: false, reason: 'coins' });
   assert.equal(store.get('coins'), 100);
-  assert.deepEqual(store.get('furniture.owned'), []);
+  // V4/G53 (PLAN4 §B1): fresh saves own the radio gift
+  assert.deepEqual(store.get('furniture.owned'), ['radio']);
 });
 
 test('slotOptions reports owned/placed per variant for the decorate picker', () => {
