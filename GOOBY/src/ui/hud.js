@@ -118,6 +118,27 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
     </svg>
     <span class="g5-ring-label"><span class="g5-ring-lvl">1</span><span class="g5-ring-cap">${t('ui.level')}</span></span>`;
 
+  // ══════════════════════════════════════════════════════════ V4/G69 ═══
+  // §C-SYS3.2: the HUD level pill is a 44px+ keyboard-accessible entry point
+  // to the shared „Wie levle ich?" info sheet.
+  ring.dataset.hud = 'xpInfo';
+  ring.setAttribute('role', 'button');
+  ring.setAttribute('tabindex', '0');
+  ring.setAttribute('aria-label', t('xp.openLabel'));
+  ring.style.pointerEvents = 'auto';
+  ring.style.cursor = 'pointer';
+  const openXpInfo = () => {
+    audio.play('ui.tap');
+    ui.openPanel('xpInfo');
+  };
+  ring.addEventListener('click', openXpInfo);
+  ring.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    openXpInfo();
+  });
+  // ══════════════════════════════════════════════════════ end V4/G69 ═══
+
   // ---- V4/G52: playing-only HUD radio chip (§C-SYS1.3) --------------------
   // It lives inside the safe-area-aware meta row, so the transient fixed
   // now-playing chip never overlaps it or any bottom action.
@@ -447,6 +468,7 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
     }
     for (const key of STATS.KEYS) statEls[key].pill.title = t(`stat.${key}`);
     ring.querySelector('.g5-ring-cap').textContent = t('ui.level');
+    ring.setAttribute('aria-label', t('xp.openLabel')); // V4/G69: live-language XP entry label
   }
   const offs = [
     store.on('statsChanged', refresh),

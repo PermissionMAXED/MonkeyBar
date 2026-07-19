@@ -24,6 +24,8 @@ import { icon } from './icons.js';
 import { STICKERS } from '../data/stickers.js';
 import { stickerCounts } from '../systems/stickerBook.js';
 import { tG } from '../systems/gallery.logic.js';
+// V4/G69 (§C-SYS3): session/lifetime XP-source summaries for the profile row.
+import { sessionXpSources, knownLifetimeXpSources } from './xpInfoSheet.js';
 
 const RING_R = 20;
 const RING_C = 2 * Math.PI * RING_R;
@@ -83,6 +85,16 @@ const PROFILE_CSS = `
 .g59-pr-row-k{flex:1;min-width:0;font-size:0.8125rem;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .g59-pr-row-v{flex:none;font-size:0.75rem;font-weight:800;opacity:.6;font-variant-numeric:tabular-nums;}
 /* ── end V4/G59 ── */
+/* ── V4/G69 (§C-SYS3.2): XP guide entry + compact source stats ─────────── */
+.g23-pr-ring[role="button"]{border:0;padding:0;background:transparent;font-family:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+.g69-pr-xp{display:flex;flex-direction:column;gap:.375rem;}
+.g69-pr-xp-open{display:flex;align-items:center;gap:.5rem;width:100%;min-height:max(44px,2.75rem);padding:.4375rem .625rem;border:0;border-radius:.875rem;background:rgba(89,201,185,.12);color:var(--brown);font:800 .8125rem/1.2 system-ui;text-align:left;cursor:pointer;}
+.g69-pr-xp-open svg{flex:none;color:var(--teal-dark);}
+.g69-pr-xp-open span{flex:1;min-width:0;}
+.g69-pr-xp-stat{display:grid;grid-template-columns:minmax(5.5rem,.38fr) 1fr;gap:.5rem;align-items:baseline;font-size:.6875rem;line-height:1.25;}
+.g69-pr-xp-stat-k{font-weight:800;opacity:.55;}
+.g69-pr-xp-stat-v{min-width:0;font-weight:800;overflow-wrap:anywhere;font-variant-numeric:tabular-nums;}
+/* ── end V4/G69 ── */
 `;
 
 /** V3/FIX-C: make long DE compounds line-breakable. Chrome's hyphens:auto
@@ -214,6 +226,32 @@ export function registerProfileScreen({ store, ui, audio, sceneManager }) {
             </span>
           </div>
         </div>
+        ${(() => {
+          // ── V4/G69 (§C-SYS3): profile entry + top XP sources. Lifetime is
+          // explicitly the exact counter-derived subset; variable/capped
+          // historical grants are not guessed.
+          const describe = (rows) => rows.slice(0, 2)
+            .map((row) => `${t(`xp.source.${row.id}`)} ${row.amount} XP`)
+            .join(' · ') || t('xp.profile.none');
+          return `
+        <div class="g23-pr-card">
+          <div class="g69-pr-xp">
+            <button class="g69-pr-xp-open" data-g69="open">
+              ${icon('star', 16)}
+              <span>${t('xp.open')}</span>
+              ${icon('arrowRight', 14)}
+            </button>
+            <div class="g69-pr-xp-stat">
+              <span class="g69-pr-xp-stat-k">${t('xp.profile.session')}</span>
+              <span class="g69-pr-xp-stat-v">${describe(sessionXpSources())}</span>
+            </div>
+            <div class="g69-pr-xp-stat">
+              <span class="g69-pr-xp-stat-k">${t('xp.profile.lifetime')}</span>
+              <span class="g69-pr-xp-stat-v">${describe(knownLifetimeXpSources(state))}</span>
+            </div>
+          </div>
+        </div>`;
+        })()}
         <div class="g23-pr-card">
           <h2>${t('profile.vitals')}</h2>
           <div class="g23-pr-vitals">
@@ -302,6 +340,25 @@ export function registerProfileScreen({ store, ui, audio, sceneManager }) {
         audio.play('ui.tap');
         ui.showScreen('album', { tab: 'photos' });
       });
+
+      // ── V4/G69 (§C-SYS3.2): both the profile ring and explicit row open
+      // the same xpInfo sheet; listeners are re-attached after each render.
+      const openXpInfo = () => {
+        audio.play('ui.tap');
+        ui.openPanel('xpInfo');
+      };
+      const profileRing = body.querySelector('.g23-pr-ring');
+      profileRing?.setAttribute('role', 'button');
+      profileRing?.setAttribute('tabindex', '0');
+      profileRing?.setAttribute('aria-label', t('xp.openLabel'));
+      profileRing?.addEventListener('click', openXpInfo);
+      profileRing?.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        openXpInfo();
+      });
+      body.querySelector('[data-g69="open"]')?.addEventListener('click', openXpInfo);
+      // ── end V4/G69 ──
 
       // ① portrait: live mini render via sceneManager.captureFrame (§C12.1);
       // graceful icon fallback when no scene is active (e.g. headless boot).

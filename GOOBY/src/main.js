@@ -44,6 +44,7 @@ import { registerQuestBoard } from './ui/questBoard.js';
 import { registerAlbumScreen } from './ui/albumScreen.js';
 import { registerProfileScreen } from './ui/profileScreen.js';
 import { initPhotoMode } from './ui/photoMode.js';
+import { registerXpInfoSheet, consumeRecentXpSource } from './ui/xpInfoSheet.js'; // V4/G69: XP sheet + level-up source (§C-SYS3)
 // end V2/G23 imports
 // V2/G19: garden panels + interactions — imports for the marked block below
 import { registerGardenUi } from './ui/gardenPanel.js';
@@ -260,6 +261,7 @@ async function boot() {
   registerAlbumScreen({ store, ui, audio });
   registerProfileScreen({ store, ui, audio, sceneManager });
   initPhotoMode({ ui, audio, sceneManager });
+  registerXpInfoSheet({ store, ui, audio }); // V4/G69: §E6 panel `xpInfo`
   // ---- end V2/G23 block ----
 
   // ---- V2/G22: fur-skin boot application (PLAN2 §C8.5) ----
@@ -279,6 +281,7 @@ async function boot() {
   // exact v3 copy — never a raw key on screen.
   store.on('levelUp', ({ level }) => {
     const coins = XP.LEVEL_UP_COINS_PER_LEVEL * level;
+    const xpSource = consumeRecentXpSource(); // V4/G69: source that triggered this coalesced level-up event
     Promise.all([import('./systems/leveling.js'), import('./data/strings/v4-difficulty.js'), import('./data/strings.js')])
       .then(([{ nextUnlock }, diffStrings, { t, getLang }]) => {
         const next = nextUnlock(level);
@@ -290,14 +293,20 @@ async function boot() {
           ui.toast('toast.levelUp', { level, coins }); // fallback: v3 copy
           return;
         }
-        const text = next
-          ? template
-            .replaceAll('{level}', String(level))
-            .replaceAll('{coins}', String(coins))
-            .replaceAll('{name}', name)
-            .replaceAll('{n}', String(next.level))
-          : `${t('toast.levelUp', { level, coins })} · ${name}`;
-        ui.toast(text); // pre-substituted — ui.toast's t() misses and passes it through
+        const vars = {
+          level,
+          coins,
+          name,
+          n: next?.level ?? level,
+          source: xpSource ? t(`xp.source.${xpSource}`) : '',
+        };
+        if (xpSource) {
+          ui.toast(next ? 'xp.toast.levelUpNextSource' : 'xp.toast.levelUpAllSource', vars);
+        } else if (next) {
+          ui.toast('toast.levelUpNext', vars);
+        } else {
+          ui.toast('xp.toast.levelUpAll', vars);
+        }
       })
       .catch(() => ui.toast('toast.levelUp', { level, coins }));
     audio.play('jingle.levelUp');
