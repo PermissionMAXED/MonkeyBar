@@ -117,6 +117,6 @@ export const DE = {
   'dev.debug.noStickers': 'Sticker-Engine noch nicht gebaut',
   'dev.debug.quests': 'Quests abschließen',
   'dev.debug.questsDone': 'Aktive Quests abgeschlossen',
-  'dev.debug.daily': 'Daily Tag N…',
-  'dev.debug.daily.prompt': 'Daily-Bonus-Tag erzwingen (1–9999):',
+  'dev.debug.daily': 'Tagesbonus: Tag N…',
+  'dev.debug.daily.prompt': 'Tagesbonus-Tag erzwingen (1–9999):',
 };

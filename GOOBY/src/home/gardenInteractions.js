@@ -266,7 +266,8 @@ function renderPlots() {
  * ready (9.999999999999996 vs 10 when one watering window exactly equals the
  * remaining growth — radish's 10/10 case). Snap within EPS so exact-boundary
  * waterings still ripen; 1e-6 min = 60 µs of growth, imperceptible.
- * TODO(G19→engine owner): fold this epsilon into systems/garden.js tick().
+ * Kept at this live-integration boundary because both tick sources converge
+ * here before readiness feedback is presented.
  * @param {import('../systems/garden.js').GardenSlice} g
  * @param {{type: string, plotIdx: number, cropId: string}[]} [events]
  *        ready events appended for snapped plots (same shape as tick())

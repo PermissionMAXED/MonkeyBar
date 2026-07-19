@@ -68,5 +68,5 @@ export const DE = {
   'mg.hunt.booBonus': 'Buh-Bonus +{n}!',
   'mg.hunt.booMiss': 'Welle vorbei — {n}/5 gefangen',
   'mg.hunt.lantern': 'Laterne! Verstecke enthüllt',
-  'mg.hunt.net': 'Netz! Nächste 3 Fänge auto-verkettet',
+  'mg.hunt.net': 'Netz! Die nächsten 3 Fänge bilden automatisch eine Kette.',
 };

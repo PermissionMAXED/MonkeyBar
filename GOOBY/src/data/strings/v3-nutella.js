@@ -12,7 +12,6 @@ export const EN = {
 
   // §C6.3: shop furniture card + install moment
   'nougat.shopName': 'Nougat Sluice',
-  'nougat.shopDesc': 'Wall-mounted chocolate dispenser. Crank it, Gooby chomps it.',
   'nougat.installed': 'The Nougat Sluice is installed!',
 
   // §C6.4: use + refusal toasts
@@ -26,10 +25,9 @@ export const DE = {
   'food.nutella': 'Nutella',
 
   'nougat.shopName': 'Nougatschleuse',
-  'nougat.shopDesc': 'Wandmontierter Schoko-Spender. Kurbeln, Gooby mampft.',
   'nougat.installed': 'Die Nougatschleuse ist installiert!',
 
   'nougat.jarUsed': '−1 Nutella',
   'nougat.cooldown': 'Gooby braucht eine Nougat-Pause',
-  'nougat.noJar': 'Keine Nutella! Ab in den Laden',
+  'nougat.noJar': 'Kein Nutella mehr! Ab in den Laden',
 };

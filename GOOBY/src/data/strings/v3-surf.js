@@ -14,11 +14,9 @@ export const EN = {
   'mg.surf.shield': 'Shield!',
   'mg.surf.shieldPop': 'Shield used up!',
   'mg.surf.turbo': 'Turbo carrot!',
-  'mg.surf.puddle': 'Splash!',
   'mg.surf.jog': 'Phew! Easy jog from here.',
   'mg.surf.finish': 'Made it to the shop!',
   'mg.surf.cleanRun': 'Clean run! +{coins}',
-  'mg.surf.distance': '{m} m',
 };
 
 /** @type {Record<string, string>} */
@@ -32,9 +30,7 @@ export const DE = {
   'mg.surf.shield': 'Schild!',
   'mg.surf.shieldPop': 'Schild verbraucht!',
   'mg.surf.turbo': 'Turbo-Möhre!',
-  'mg.surf.puddle': 'Platsch!',
   'mg.surf.jog': 'Puh! Ab hier gemütlich weiter.',
   'mg.surf.finish': 'Beim Laden angekommen!',
   'mg.surf.cleanRun': 'Sauberer Lauf! +{coins}',
-  'mg.surf.distance': '{m} m',
 };

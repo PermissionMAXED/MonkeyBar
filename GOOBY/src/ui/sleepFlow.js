@@ -293,13 +293,6 @@ export function initSleepFlow({ store, ui, roomManager, homeScene, gooby }) {
       tries += 1;
       if (homeWired || tries > 60) {
         clearInterval(poll);
-        if (!homeWired) {
-          console.warn(
-            '[sleepFlow] TODO(G6→G4): home/homeScene.js is present but ' +
-              'getRoomManager() never returned an instance — wire manually via ' +
-              'initSleepFlow(...).wireHome({ roomManager, homeScene, gooby }).'
-          );
-        }
         return;
       }
       try {

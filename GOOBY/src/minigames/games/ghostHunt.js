@@ -19,6 +19,7 @@ import { t } from '../../data/strings.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js';
 import { createParticles } from '../../gfx/particles.js';
+import { getAchievementsEngine } from '../../systems/achievementsEngine.js';
 import { clampFloatTextToView } from '../framework.js';
 import {
   HUNT,
@@ -605,7 +606,13 @@ export default {
       this.endT += dt;
       if (this.endT >= 1.4) {
         this.phase = 'done';
-        ctx.onEnd({ score: huntScore(this.hunt), meta: runMeta(this.hunt) });
+        const meta = runMeta(this.hunt);
+        try {
+          getAchievementsEngine()?.track?.('ghostsCaught', meta.ghostsCaught);
+        } catch (err) {
+          console.warn('[ghostHunt] counter tracking failed:', err);
+        }
+        ctx.onEnd({ score: huntScore(this.hunt), meta });
       }
       return;
     }

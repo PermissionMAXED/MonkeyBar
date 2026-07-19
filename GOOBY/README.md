@@ -251,4 +251,6 @@ splash (committed under `ios/App/App/Assets.xcassets/`) with `npm run icons`.
 
 - 3D models & audio: [Kenney](https://kenney.nl) CC0 asset packs and
   [KayKit](https://kaylousberg.itch.io/) asset packs (see committed licenses).
+- The 28 sticker-book images are AI-generated originals created for this
+  project (CC0-equivalent, no third-party IP).
 - Gooby’s body and voice remain procedural; no library model replaces him.

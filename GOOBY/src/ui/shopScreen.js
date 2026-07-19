@@ -44,6 +44,7 @@ import {
   buyItem, // V2/G22: medicine/fertilizer (§C3.5/§C2.2)
   buySeed, // V2/G22: seed packets (§C2.3)
   buySkin, // V2/G22: fur skins (§C8.5)
+  spend, // V3/FIX-F: Nougatschleuse uses the single money path
 } from '../systems/economy.js';
 import {
   isOwned,
@@ -553,12 +554,11 @@ function createShopScreen({ store, ui, audio, goHome, getArrival }) {
         ui.toast('shop.browseHint');
         return;
       }
-      if ((store.get('coins') ?? 0) < NOUGAT.PRICE) {
+      if (!spend(store, NOUGAT.PRICE, 'nougatschleuse')) {
         ui.toast('toast.notEnoughCoins');
         return;
       }
       store.update((st) => {
-        st.coins -= NOUGAT.PRICE;
         st.nougat = { ...(st.nougat ?? {}), installed: true };
       });
       audio.play('coin.spend');

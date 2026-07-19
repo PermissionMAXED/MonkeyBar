@@ -17,6 +17,7 @@ import { t } from '../../data/strings.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js';
 import { createParticles } from '../../gfx/particles.js';
+import { getAchievementsEngine } from '../../systems/achievementsEngine.js';
 import { clampFloatTextToView } from '../framework.js';
 import {
   RACER,
@@ -514,7 +515,15 @@ export default {
       this.endT += dt;
       if (this.endT >= 1.6) {
         this.phase = 'done';
-        ctx.onEnd({ score: runScore(this.race), meta: runMeta(this.race) });
+        const meta = runMeta(this.race);
+        try {
+          const achievements = getAchievementsEngine();
+          achievements?.track?.('races', meta.races);
+          achievements?.track?.('wins', meta.wins);
+        } catch (err) {
+          console.warn('[toyRacer] counter tracking failed:', err);
+        }
+        ctx.onEnd({ score: runScore(this.race), meta });
       }
       return;
     }

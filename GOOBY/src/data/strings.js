@@ -589,7 +589,7 @@ export const DE = {
   'mg.title.memoryMatch': 'Memory',
   'mg.title.runner': 'Gooby-Renner',
   'mg.title.basketBounce': 'Korbwurf',
-  'mg.title.pancakeTower': 'Pfannkuchenturm',
+  'mg.title.pancakeTower': 'Pancake-Turm',
   'mg.title.danceParty': 'Tanzparty',
   'mg.title.fishingPond': 'Angelteich',
   'mg.title.bubblePop': 'Blasen-Platzer',
@@ -821,7 +821,7 @@ export const DE = {
   'mg.tramp.butt': 'Autsch – Po-Landung!',
 
   // --- G12: wardrobe & outfits (§C5.3) ---
-  'wardrobe.title': 'Garderobe', // F3: never collides with the coins pill at 320px
+  'wardrobe.title': 'Outfits', // compact enough beside the coins pill at 320px
   'wardrobe.slot.hat': 'Hüte',
   'wardrobe.slot.glasses': 'Brillen',
   'wardrobe.slot.neck': 'Halsschmuck',
@@ -1060,13 +1060,15 @@ const DICTS = { en: EN, de: DE };
 let activeLang = 'en';
 
 /**
- * Resolve 'auto' to a concrete language from navigator.language ('de*' → German).
+ * Resolve 'auto' from the browser language ('de*' → German).
  * @param {string} [pref] 'en' | 'de' | 'auto'
  * @returns {'en'|'de'}
  */
 export function resolveLang(pref = 'auto') {
   if (pref === 'en' || pref === 'de') return pref;
-  const nav = typeof navigator !== 'undefined' ? navigator.language || '' : '';
+  // Resolve lazily so importing the dictionary in Node never reads a browser
+  // global (systems/offline and achievementsEngine import this module too).
+  const nav = typeof globalThis === 'undefined' ? '' : globalThis.navigator?.language || '';
   return /^de/i.test(nav) ? 'de' : 'en';
 }
 

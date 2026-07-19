@@ -49,8 +49,6 @@
 
 import { DRIVE, COIN_TABLE, MINIGAME, VET } from '../data/constants.js'; // V2/G21: + VET (§C9.2)
 import { t } from '../data/strings.js';
-import { registerShopScreen } from '../ui/shopScreen.js';
-import { registerVetPanel } from '../ui/vetPanel.js'; // V2/G21 (§C9.2)
 import { award as awardSticker } from './collections.js'; // V2/G21 (§C9.3)
 import { onDistance } from './profileStats.js'; // V2/G21 (§C12.1)
 
@@ -315,11 +313,19 @@ let wired = false;
  * Wire the §C4 shop-trip flow. Idempotent; called from the marked G7 hook in
  * ui/hud.js at boot.
  * @param {{store: object, ui: object, audio: object,
- *   framework: {launch: Function}, sceneManager: object}} deps
+ *   framework: {launch: Function}, sceneManager: object,
+ *   eventTarget?: EventTarget}} deps
  * @returns {{machine: ReturnType<typeof createTripMachine>,
  *   requestShopTrip: () => void, startTrip: () => Promise<boolean>}|null}
  */
-export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
+export function initShopTrip({
+  store,
+  ui,
+  audio,
+  framework,
+  sceneManager,
+  eventTarget = globalThis.window,
+}) {
   if (wired) return null;
   wired = true;
 
@@ -454,23 +460,30 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
   // G11: the real shop UI (§C5) — ui/shopScreen.js registers the 'shop'
   // full-screen (trip + browse modes, quick-delivery order flow) and boots the
   // decor wiring (home/decor.js). Arrival hands off via openShop() below.
-  registerShopScreen({
-    store,
-    ui,
-    audio,
-    goHome: () => goHome(),
-    getArrival: () => lastArrival,
-    isAtShop: () => machine.state() === TRIP_STATE.SHOP,
-  });
+  const destinationScreensReady = Promise.all([
+    import('../ui/shopScreen.js'),
+    import('../ui/vetPanel.js'),
+  ]).then(([shopMod, vetMod]) => {
+    shopMod.registerShopScreen({
+      store,
+      ui,
+      audio,
+      goHome: () => goHome(),
+      getArrival: () => lastArrival,
+      isAtShop: () => machine.state() === TRIP_STATE.SHOP,
+    });
 
-  // V2/G21: the vet arrival panel (§C9.2) — same registration pattern.
-  registerVetPanel({
-    store,
-    ui,
-    audio,
-    goHome: () => goHome(),
-    getArrival: () => lastArrival,
-    isVetArrival: () => machine.state() === TRIP_STATE.SHOP && tripMode === 'vetTrip',
+    // V2/G21: the vet arrival panel (§C9.2) — same registration pattern.
+    vetMod.registerVetPanel({
+      store,
+      ui,
+      audio,
+      goHome: () => goHome(),
+      getArrival: () => lastArrival,
+      isVetArrival: () => machine.state() === TRIP_STATE.SHOP && tripMode === 'vetTrip',
+    });
+  }).catch((err) => {
+    console.error('[shopTrip] destination screen wiring failed:', err);
   });
 
   // ---------------------------------------------------------------- flow
@@ -484,22 +497,24 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
   }
 
   /** Opens the shop over the parked-at-the-shop backdrop (state 'shop'). */
-  function openShop() {
+  async function openShop() {
+    await destinationScreensReady;
     ui.closeAll();
     ui.showScreen('shop', { mode: 'trip' }); // G11: real shop UI (§C5)
   }
 
   // ── V2/G21: destination handoff (§C9.2) ────────────────────────────────────
   /** Opens the vet panel over the parked-at-the-clinic backdrop. */
-  function openVet() {
+  async function openVet() {
+    await destinationScreensReady;
     ui.closeAll();
     ui.showScreen('vetPanel');
   }
 
   /** Post-results handoff for the trip in flight (shop screen or vet panel). */
-  function openDestination() {
-    if (tripMode === 'vetTrip') openVet();
-    else openShop();
+  async function openDestination() {
+    if (tripMode === 'vetTrip') await openVet();
+    else await openShop();
   }
   // ── end V2/G21 ─────────────────────────────────────────────────────────────
 
@@ -616,7 +631,7 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
   // award happens here; `detail.first` is reflected back (dispatchEvent runs
   // listeners synchronously) so the drive can play the one-time camera-flash
   // gag. Toast + sfx only on a first-time sticker.
-  window.addEventListener('gooby:landmark', (e) => {
+  eventTarget?.addEventListener('gooby:landmark', (e) => {
     const id = e?.detail?.id;
     if (!id) return;
     let first = false;
@@ -634,7 +649,7 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
 
   // §C12.1 distance feed: cityDrive reports accumulated meters (end of run /
   // dispose fallback) → profile.distanceM via the pure profileStats helper.
-  window.addEventListener('gooby:driveDistance', (e) => {
+  eventTarget?.addEventListener('gooby:driveDistance', (e) => {
     const meters = Number(e?.detail?.meters) || 0;
     if (meters <= 0) return;
     store.update((state) => {
@@ -645,7 +660,7 @@ export function initShopTrip({ store, ui, audio, framework, sceneManager }) {
 
   // ---------------------------------------------------------------- wiring
   // HUD shop button (ui/hud.js dispatches this — marked G7 hook).
-  window.addEventListener('gooby:shopTrip', requestShopTrip);
+  eventTarget?.addEventListener('gooby:shopTrip', requestShopTrip);
 
   // ── G7 front-door wiring (the single marked G7 room hook) ────────────────
   // The living-room front door emits roomManager 'tap:frontDoor' (G4). The

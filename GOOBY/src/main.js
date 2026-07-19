@@ -97,13 +97,12 @@ async function boot() {
   const store = createStore(loaded.state);
   setLang(store.get('settings.lang'));
 
-  // ---- V3/G33: UI scale boot-apply (PLAN3 §B3, single marked block) ----
+  // Apply the validated UI scale before the first rendered scene.
   // Root font-size + data-ui-scale from settings.uiScale BEFORE the first
   // paint (index.html's inline pre-boot line already set it from the raw
   // save to avoid FOUC — this re-applies from the validated store and then
   // follows it live, emitting 'uiScaleChanged' §B10 on every change).
   initUiScale({ store });
-  // ---- end V3/G33 block ----
 
   const assets = await loadAssets();
 

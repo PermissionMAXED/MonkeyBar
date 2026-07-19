@@ -161,15 +161,7 @@ function assetKeyToFile(key) {
     : path.join(KENNEY, slug, `${name}.glb`);
 }
 
-// TODO(G1): data/foods.js and data/minigames.js are owned by agent G1 (in
-// flight during Wave 1). Until they exist these sub-tests skip; the
-// coordinator re-runs the full suite at the checkpoint, where they must pass.
-test('every asset key referenced in data/foods.js resolves to a file', async (t) => {
-  const foodsPath = path.join(ROOT, 'src', 'data', 'foods.js');
-  if (!fs.existsSync(foodsPath)) {
-    t.skip('TODO(G1): src/data/foods.js not created yet');
-    return;
-  }
+test('every asset key referenced in data/foods.js resolves to a file', async () => {
   const mod = await import('../src/data/foods.js');
   // §C5.1: each food id doubles as its food-kit GLB name — except rows with
   // an explicit modelKey override (V3/G35 §C6.1: 'nutella' re-tints the
@@ -186,12 +178,7 @@ test('every asset key referenced in data/foods.js resolves to a file', async (t)
   }
 });
 
-test('every asset key referenced in data/minigames.js resolves to a file', async (t) => {
-  const miniPath = path.join(ROOT, 'src', 'data', 'minigames.js');
-  if (!fs.existsSync(miniPath)) {
-    t.skip('TODO(G1): src/data/minigames.js not created yet');
-    return;
-  }
+test('every asset key referenced in data/minigames.js resolves to a file', async () => {
   const mod = await import('../src/data/minigames.js');
   for (const key of collectAssetKeys(mod)) {
     assert.ok(

@@ -90,6 +90,8 @@ GOOBY/
   and `'dance'` (100 BPM, seeded by `DANCE.PATTERN_SEED` — §D6 contract with
   danceParty's chart). Ambience loops (`ambience.rain`, `ambience.birdsong`)
   start via `audio.play` and stop via `audio.stop`.
+- The 28 sticker-book images are AI-generated originals created for this
+  project (CC0-equivalent, no third-party IP).
 
 ## Key §E contracts (summary — PLAN.md, PLAN2 §B3, PLAN3 §B)
 
