@@ -45,7 +45,45 @@ export const CHOP = Object.freeze({
   /** Each frenzy launches exactly 8 veggies over 3 s, with zero junk. */
   FRENZY_DURATION_SEC: 3,
   FRENZY_ITEMS: 8,
+  /** V4/G73 §G5/§C-SYS4.2 run flags. */
+  ENDLESS: false,
+  ENDLESS_JUNK_HITS: 3,
+  SPEED_MULT: 1,
+  SCORE_MULT: 1,
+  ENDLESS_BOT_JUNK_RATE: 0.55,
 });
+
+/** V4/G73 timed-arena mode rows (§G5.3). */
+export const CHOP_DIFFICULTY = Object.freeze({
+  easy: Object.freeze({ spawnMult: 1.2, windowMult: 1.25, durationMult: 1.2, botRate: 0.99 }),
+  hard: Object.freeze({ spawnMult: 0.85, windowMult: 0.8, durationMult: 1, botRate: 0.81 }),
+  endless: Object.freeze({ spawnMult: 0.85, windowMult: 0.8, durationMult: 1, botRate: 0.81 }),
+});
+
+/** Derive a frozen tune; normal returns the exact Mittel object. */
+export function applyDifficulty(tune = CHOP, mode = 'normal') {
+  if (mode === 'normal' || !Object.hasOwn(CHOP_DIFFICULTY, mode)) return tune;
+  const row = CHOP_DIFFICULTY[mode];
+  return Object.freeze({
+    ...tune,
+    DURATION_SEC: tune.DURATION_SEC * row.durationMult,
+    SPAWN_START_SEC: tune.SPAWN_START_SEC * row.spawnMult,
+    SPAWN_END_SEC: tune.SPAWN_END_SEC * row.spawnMult,
+    HIT_RADIUS: Math.max(tune.HIT_RADIUS * 0.55, tune.HIT_RADIUS * row.windowMult),
+    AUTOPLAY_CHOP_RATE: row.botRate,
+    ENDLESS: mode === 'endless',
+    ENDLESS_SPAWN_FLOOR_SEC: 0.8,
+  });
+}
+
+/** Apply the plain Turbo payload derived by the scene (§E0.1-3). */
+export function applyTurbo(tune, { speedMult = 1, scoreMult = 1 } = {}) {
+  return Object.freeze({
+    ...tune,
+    SPEED_MULT: Math.max(1, Number(speedMult) || 1),
+    SCORE_MULT: Math.max(1, Number(scoreMult) || 1),
+  });
+}
 
 /**
  * The 8 whole+half food-kit pairs (§C1.2 — committed by wave-1 G15; keys
@@ -92,9 +130,12 @@ export function waveSizeAt(rng, elapsed) {
  * @param {number} [duration]
  * @returns {number}
  */
-export function spawnIntervalAt(elapsed, duration = CHOP.DURATION_SEC) {
-  const t = Math.min(1, Math.max(0, elapsed / duration));
-  return CHOP.SPAWN_START_SEC + (CHOP.SPAWN_END_SEC - CHOP.SPAWN_START_SEC) * t;
+export function spawnIntervalAt(elapsed, duration = CHOP.DURATION_SEC, tune = CHOP) {
+  const t = tune.ENDLESS
+    ? Math.max(0, elapsed / duration)
+    : Math.min(1, Math.max(0, elapsed / duration));
+  const value = tune.SPAWN_START_SEC + (tune.SPAWN_END_SEC - tune.SPAWN_START_SEC) * t;
+  return Math.max(tune.ENDLESS_SPAWN_FLOOR_SEC ?? tune.SPAWN_END_SEC, value);
 }
 
 /**
@@ -103,9 +144,9 @@ export function spawnIntervalAt(elapsed, duration = CHOP.DURATION_SEC) {
  * @param {number} [duration]
  * @returns {number}
  */
-export function junkChanceAt(elapsed, duration = CHOP.DURATION_SEC) {
+export function junkChanceAt(elapsed, duration = CHOP.DURATION_SEC, tune = CHOP) {
   const t = Math.min(1, Math.max(0, elapsed / duration));
-  return CHOP.JUNK_CHANCE_START + (CHOP.JUNK_CHANCE_END - CHOP.JUNK_CHANCE_START) * t;
+  return tune.JUNK_CHANCE_START + (tune.JUNK_CHANCE_END - tune.JUNK_CHANCE_START) * t;
 }
 
 /**
@@ -114,8 +155,8 @@ export function junkChanceAt(elapsed, duration = CHOP.DURATION_SEC) {
  * @param {number} elapsed seconds
  * @returns {{kind: 'veggie'|'junk', key: string, half?: string, juice?: string}}
  */
-export function rollItem(rng, elapsed) {
-  if (rng() < junkChanceAt(elapsed)) {
+export function rollItem(rng, elapsed, tune = CHOP) {
+  if (rng() < junkChanceAt(elapsed, tune.DURATION_SEC, tune)) {
     const key = JUNK_ITEMS[Math.min(JUNK_ITEMS.length - 1, Math.floor(rng() * JUNK_ITEMS.length))];
     return { kind: 'junk', key };
   }
@@ -242,6 +283,52 @@ export function swipeScore(n) {
  */
 export function applyPoints(score, delta) {
   return Math.max(0, score + delta);
+}
+
+/** Turbo's ×1.5 score is rounded once, at the end of the run. */
+export function finalScore(score, tune = CHOP) {
+  return Math.round(Math.max(0, score) * (tune.SCORE_MULT ?? 1));
+}
+
+/** §G5.4 Endlos ends on the third chopped junk item. */
+export function endlessShouldEnd(junkHits, tune = CHOP) {
+  return tune.ENDLESS === true && junkHits >= tune.ENDLESS_JUNK_HITS;
+}
+
+/** Deterministic tune-driven certification for the shipped apex-swipe bot. */
+export function simulateAutoplay(seed, mode = 'normal') {
+  const tune = applyDifficulty(CHOP, mode);
+  let a = seed >>> 0;
+  const rng = () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) | 0;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+  let elapsed = 0;
+  let score = 0;
+  let misses = 0;
+  let junkHits = 0;
+  const limit = tune.ENDLESS ? 600 : tune.DURATION_SEC;
+  while (elapsed < limit && !endlessShouldEnd(junkHits, tune)) {
+    const size = waveSizeAt(rng, elapsed);
+    for (let i = 0; i < size; i += 1) {
+      const item = rollItem(rng, elapsed, tune);
+      if (item.kind === 'veggie') {
+        if (rng() < tune.AUTOPLAY_CHOP_RATE) score += tune.CHOP_PTS;
+        else misses += 1;
+      } else if (tune.ENDLESS && rng() < tune.ENDLESS_BOT_JUNK_RATE) {
+        junkHits += 1;
+        if (endlessShouldEnd(junkHits, tune)) break;
+      }
+    }
+    elapsed += spawnIntervalAt(elapsed, tune.DURATION_SEC, tune);
+  }
+  // The two fixed no-junk frenzies are deterministic score opportunities.
+  const frenzyVeggies = tune.ENDLESS ? 0 : frenzyCountAt(tune.DURATION_SEC) * tune.FRENZY_ITEMS;
+  score += Math.round(frenzyVeggies * tune.AUTOPLAY_CHOP_RATE) * tune.CHOP_PTS;
+  return Object.freeze({ seed, mode, score, misses, junkHits, elapsed });
 }
 
 /**

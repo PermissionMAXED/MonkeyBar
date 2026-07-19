@@ -54,7 +54,49 @@ export const GOALIE = Object.freeze({
   SHOOTOUT_FLIGHT_SEC: 0.42,
   SHOOTOUT_GAP_SEC: 0.28,
   SHOOTOUT_SAVE_MULT: 2,
+  /** V4/G73 run flags + plain Riesen-Gooby tuning defaults. */
+  ENDLESS: false,
+  ENDLESS_GOALS: 3,
+  RENDER_SCALE: 1,
+  HITBOX_MULT: 1,
+  AUTOPLAY_SKILL_MULT: 0.12,
 });
+
+/** V4/G73 timed-arena mode rows (§G5.3). */
+export const GOALIE_DIFFICULTY = Object.freeze({
+  easy: Object.freeze({ spawnMult: 1.2, windowMult: 1.25, durationMult: 1.2, botSkillMult: 0.08 }),
+  hard: Object.freeze({ spawnMult: 0.85, windowMult: 0.8, durationMult: 1, botSkillMult: 0.2 }),
+  endless: Object.freeze({ spawnMult: 0.85, windowMult: 0.8, durationMult: 1, botSkillMult: 0.2 }),
+});
+
+/** Derive a frozen tune; normal returns the bit-identical Mittel table. */
+export function applyDifficulty(tune = GOALIE, mode = 'normal') {
+  if (mode === 'normal' || !Object.hasOwn(GOALIE_DIFFICULTY, mode)) return tune;
+  const row = GOALIE_DIFFICULTY[mode];
+  return Object.freeze({
+    ...tune,
+    DURATION_SEC: tune.DURATION_SEC * row.durationMult,
+    GAP_SEC: tune.GAP_SEC * row.spawnMult,
+    TELEGRAPH_START_SEC: Math.max(0.35, tune.TELEGRAPH_START_SEC * row.windowMult),
+    TELEGRAPH_END_SEC: Math.max(0.35, tune.TELEGRAPH_END_SEC * row.windowMult),
+    DIVE_HOLD_SEC: Math.max(0.35, tune.DIVE_HOLD_SEC * row.windowMult),
+    SHOOTOUT_TELEGRAPH_SEC: Math.max(0.35, tune.SHOOTOUT_TELEGRAPH_SEC * row.windowMult),
+    ENDLESS: mode === 'endless',
+    AUTOPLAY_SKILL_MULT: row.botSkillMult,
+  });
+}
+
+/** Apply Riesen-Gooby's plain scale/hitbox payload (§C-SYS4.2). */
+export function applyRiesenGooby(tune, { scale = 1, hitboxMult = 1 } = {}) {
+  const safeScale = Math.max(1, Number(scale) || 1);
+  const safeHitbox = Math.max(1, Number(hitboxMult) || 1);
+  return Object.freeze({
+    ...tune,
+    RENDER_SCALE: safeScale,
+    HITBOX_MULT: safeHitbox,
+    DIVE_HOLD_SEC: tune.DIVE_HOLD_SEC * safeHitbox,
+  });
+}
 
 /** @typedef {'straight'|'lob'|'roller'} KickKind */
 /** @typedef {{lane: number, kind: KickKind}} Kick */
@@ -65,9 +107,9 @@ export const GOALIE = Object.freeze({
  * @param {number} elapsed seconds since round start
  * @returns {number} seconds
  */
-export function telegraphSecAt(elapsed) {
-  const t = Math.min(1, Math.max(0, elapsed / GOALIE.TELEGRAPH_RAMP_SEC));
-  return GOALIE.TELEGRAPH_START_SEC + (GOALIE.TELEGRAPH_END_SEC - GOALIE.TELEGRAPH_START_SEC) * t;
+export function telegraphSecAt(elapsed, tune = GOALIE) {
+  const t = Math.min(1, Math.max(0, elapsed / tune.TELEGRAPH_RAMP_SEC));
+  return tune.TELEGRAPH_START_SEC + (tune.TELEGRAPH_END_SEC - tune.TELEGRAPH_START_SEC) * t;
 }
 
 /**
@@ -75,8 +117,8 @@ export function telegraphSecAt(elapsed) {
  * @param {number} cheers cheers so far (= floor(saves / 10))
  * @returns {number} ≥ 1
  */
-export function speedMultAt(cheers) {
-  return Math.pow(GOALIE.CHEER_SPEED_MULT, Math.max(0, cheers));
+export function speedMultAt(cheers, tune = GOALIE) {
+  return Math.pow(tune.CHEER_SPEED_MULT, Math.max(0, cheers));
 }
 
 /**
@@ -84,8 +126,8 @@ export function speedMultAt(cheers) {
  * @param {number} cheers
  * @returns {number} seconds
  */
-export function flightSecAt(cheers) {
-  return GOALIE.FLIGHT_SEC / speedMultAt(cheers);
+export function flightSecAt(cheers, tune = GOALIE) {
+  return tune.FLIGHT_SEC / speedMultAt(cheers, tune);
 }
 
 /**
@@ -153,10 +195,10 @@ export function saveMatches(kick, dive) {
  * @param {number} arriveT seconds (round clock)
  * @returns {boolean}
  */
-export function diveCovers(diveT, arriveT) {
+export function diveCovers(diveT, arriveT, tune = GOALIE) {
   const lead = arriveT - diveT;
   // 1e-9 pads float noise on the boundary (e.g. 10.45 − 10 > 0.45).
-  return lead >= 0 && lead <= GOALIE.DIVE_HOLD_SEC + 1e-9;
+  return lead >= 0 && lead <= tune.DIVE_HOLD_SEC + 1e-9;
 }
 
 /**
@@ -166,10 +208,10 @@ export function diveCovers(diveT, arriveT) {
  * @param {number} arriveT seconds (round clock)
  * @returns {boolean}
  */
-export function isSuperSave(diveT, arriveT) {
+export function isSuperSave(diveT, arriveT, tune = GOALIE) {
   const lead = arriveT - diveT;
   // 1e-9 pads float noise on the boundary (e.g. 10.15 − 10 > 0.15).
-  return lead >= 0 && lead <= GOALIE.SUPER_WINDOW_SEC + 1e-9;
+  return lead >= 0 && lead <= tune.SUPER_WINDOW_SEC + 1e-9;
 }
 
 /**
@@ -177,9 +219,9 @@ export function isSuperSave(diveT, arriveT) {
  * @param {boolean} superSave
  * @returns {number}
  */
-export function savePoints(superSave, shootout = false) {
-  const base = GOALIE.SAVE_PTS + (superSave ? GOALIE.SUPER_PTS : 0);
-  return base * (shootout ? GOALIE.SHOOTOUT_SAVE_MULT : 1);
+export function savePoints(superSave, shootout = false, tune = GOALIE) {
+  const base = tune.SAVE_PTS + (superSave ? tune.SUPER_PTS : 0);
+  return base * (shootout ? tune.SHOOTOUT_SAVE_MULT : 1);
 }
 
 /**
@@ -187,8 +229,8 @@ export function savePoints(superSave, shootout = false) {
  * @param {number} elapsed round seconds
  * @returns {boolean}
  */
-export function isShootoutAt(elapsed) {
-  return elapsed >= GOALIE.SHOOTOUT_START_SEC && elapsed <= GOALIE.DURATION_SEC;
+export function isShootoutAt(elapsed, tune = GOALIE) {
+  return !tune.ENDLESS && elapsed >= tune.SHOOTOUT_START_SEC && elapsed <= tune.DURATION_SEC;
 }
 
 /**
@@ -196,11 +238,11 @@ export function isShootoutAt(elapsed) {
  * @param {number} index zero-based
  * @returns {number}
  */
-export function shootoutShotAt(index) {
-  const cycle = GOALIE.SHOOTOUT_TELEGRAPH_SEC
-    + GOALIE.SHOOTOUT_FLIGHT_SEC
-    + GOALIE.SHOOTOUT_GAP_SEC;
-  return GOALIE.SHOOTOUT_START_SEC + Math.max(0, index) * cycle;
+export function shootoutShotAt(index, tune = GOALIE) {
+  const cycle = tune.SHOOTOUT_TELEGRAPH_SEC
+    + tune.SHOOTOUT_FLIGHT_SEC
+    + tune.SHOOTOUT_GAP_SEC;
+  return tune.SHOOTOUT_START_SEC + Math.max(0, index) * cycle;
 }
 
 /**
@@ -218,8 +260,46 @@ export function cheersAt(saves) {
  * @param {number} telegraphSec
  * @returns {number} 0..1
  */
-export function autoplayErrAt(telegraphSec) {
-  const span = GOALIE.TELEGRAPH_START_SEC - GOALIE.TELEGRAPH_END_SEC;
-  const t = Math.min(1, Math.max(0, (GOALIE.TELEGRAPH_START_SEC - telegraphSec) / span));
-  return GOALIE.AUTOPLAY_ERR_BASE + GOALIE.AUTOPLAY_ERR_RAMP * t;
+export function autoplayErrAt(telegraphSec, tune = GOALIE, skillMult = 1) {
+  const span = tune.TELEGRAPH_START_SEC - tune.TELEGRAPH_END_SEC;
+  const t = span <= 0
+    ? 1
+    : Math.min(1, Math.max(0, (tune.TELEGRAPH_START_SEC - telegraphSec) / span));
+  return (tune.AUTOPLAY_ERR_BASE + tune.AUTOPLAY_ERR_RAMP * t) * skillMult;
+}
+
+/** §G5.4 Endlos ends on the third conceded goal. */
+export function endlessShouldEnd(goals, tune = GOALIE) {
+  return tune.ENDLESS === true && goals >= tune.ENDLESS_GOALS;
+}
+
+/** Deterministic tune-driven certification for the live telegraph-reading bot. */
+export function simulateAutoplay(seed, mode = 'normal') {
+  const tune = applyDifficulty(GOALIE, mode);
+  let a = seed >>> 0;
+  const rng = () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) | 0;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+  let elapsed = 0;
+  let score = 0;
+  let saves = 0;
+  let goals = 0;
+  const limit = tune.ENDLESS ? 600 : tune.DURATION_SEC;
+  while (elapsed < limit && goals < tune.ENDLESS_GOALS) {
+    const shootout = isShootoutAt(elapsed, tune);
+    const telegraph = shootout ? tune.SHOOTOUT_TELEGRAPH_SEC : telegraphSecAt(elapsed, tune);
+    const flight = shootout ? tune.SHOOTOUT_FLIGHT_SEC : flightSecAt(cheersAt(saves), tune);
+    elapsed += telegraph + flight + (shootout ? tune.SHOOTOUT_GAP_SEC : tune.GAP_SEC);
+    const error = autoplayErrAt(telegraph, tune, tune.AUTOPLAY_SKILL_MULT);
+    if (rng() < error) goals += 1;
+    else {
+      saves += 1;
+      score += savePoints(false, shootout, tune);
+    }
+  }
+  return Object.freeze({ seed, mode, score, saves, goals, elapsed });
 }

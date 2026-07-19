@@ -17,6 +17,7 @@ import { applyEquippedOutfits } from '../../character/outfitAttach.js';
 import { clampFloatTextToView } from '../framework.js';
 import {
   RUSH,
+  applyDifficulty,
   wiltWindowAt,
   spawnIntervalAt,
   activePotsAt,
@@ -27,6 +28,7 @@ import {
   shouldSpawnSprinkler,
   rollWeed,
   applyPoints,
+  endlessShouldEnd,
 } from './gardenRush.logic.js';
 
 /** Pot grid (portrait-friendly 2 columns × 3 rows) — pots #7/#8 (indices 6/7)
@@ -146,9 +148,14 @@ export default {
     this.ctx = ctx;
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
+    this.difficulty = ['easy', 'normal', 'hard', 'endless'].includes(ctx.params?.difficulty)
+      ? ctx.params.difficulty
+      : 'normal';
+    this.tune = applyDifficulty(RUSH, this.difficulty);
 
     this.phase = 'play'; // 'play' | 'ending' | 'done'
     this.score = 0;
+    this.withered = 0;
     this.spawnT = 0.8;
     this.endT = 0;
     this.autoT = 0;
@@ -355,7 +362,7 @@ export default {
     el.addEventListener('pointercancel', this.onPointerUp);
 
     ctx.hud.setScore(0);
-    ctx.hud.setTime(RUSH.DURATION_SEC);
+    ctx.hud.setTime(this.tune.ENDLESS ? 0 : this.tune.DURATION_SEC);
   },
 
   /** Sprout a seedling (or a decoy weed) in a free pot. */
@@ -367,8 +374,8 @@ export default {
     pot.group.add(holder);
     pot.sprout = holder;
     pot.state = weed ? 'weed' : 'sprout';
-    pot.wiltWindow = wiltWindowAt(elapsed);
-    pot.wiltT = weed ? RUSH.WEED_LIFE_SEC : pot.wiltWindow;
+    pot.wiltWindow = wiltWindowAt(elapsed, this.tune.DURATION_SEC, this.tune);
+    pot.wiltT = weed ? this.tune.WEED_LIFE_SEC : pot.wiltWindow;
     pot.ring.visible = !weed;
     tween({
       from: 0.01, to: 1, duration: 0.3, ease: easings.easeOutBack,
@@ -384,7 +391,7 @@ export default {
       pot.sprout = null;
     }
     pot.state = 'cooldown';
-    pot.cooldownT = RUSH.RESPAWN_SEC;
+    pot.cooldownT = this.tune.RESPAWN_SEC;
     pot.ring.visible = false;
     if (this.hold?.pot === pot) this.cancelHold();
   },
@@ -417,12 +424,12 @@ export default {
     const eventHeldSec = Number.isFinite(hold.inputStartMs) && Number.isFinite(inputEndMs)
       ? Math.max(0, (inputEndMs - hold.inputStartMs) / 1000)
       : 0;
-    const frac = holdFillFraction(Math.max(hold.fillT, eventHeldSec));
+    const frac = holdFillFraction(Math.max(hold.fillT, eventHeldSec), this.tune);
     this.cancelHold();
     const popPos = pot.pos.clone().add(new THREE.Vector3(0, 1.7, 0));
     if (pot.state === 'weed') {
       // Watering a weed = −1 … and it grows bigger (funny, §C1.2).
-      this.addPoints(RUSH.WEED_PTS);
+      this.addPoints(this.tune.WEED_PTS);
       this.floats.spawn(t('mg.rush.weed'), popPos, '#D64570');
       this.ctx.audio.play('bubble.wrong');
       const weedHolder = pot.sprout;
@@ -436,8 +443,8 @@ export default {
       return;
     }
     if (pot.state !== 'sprout') return;
-    this.addPoints(releasePoints(frac));
-    const perfect = inPerfectZone(frac);
+    this.addPoints(releasePoints(frac, this.tune));
+    const perfect = inPerfectZone(frac, this.tune);
     this.floats.spawn(perfect ? t('mg.rush.perfect') : t('mg.rush.early'), popPos, perfect ? '#2E8B57' : '#4A3B36');
     this.ctx.audio.play(perfect ? 'pancake.perfect' : 'catch.good');
     this.particles.emit('sparkles', pot.pos.clone().add(new THREE.Vector3(0, 1.1, 0)), { count: perfect ? 8 : 4 });
@@ -486,7 +493,8 @@ export default {
 
   /** A seedling fully wilted: droop, −2, respawn (§C1.2). */
   wiltOut(pot) {
-    this.addPoints(RUSH.WILT_PTS);
+    this.addPoints(this.tune.WILT_PTS);
+    this.withered += 1;
     this.floats.spawn(t('mg.rush.wilted'), pot.pos.clone().add(new THREE.Vector3(0, 1.7, 0)), '#D64570');
     this.ctx.audio.play('mole.steal');
     const holder = pot.sprout;
@@ -504,19 +512,20 @@ export default {
     } else {
       this.clearPot(pot);
     }
+    if (endlessShouldEnd(this.withered, this.tune)) this.endRound();
   },
 
   /** Dev-only autoplay (§C1.2): lowest remaining wilt, hold 0.75 s. */
   autoplayTick(dt, elapsed) {
     const { rng } = this.ctx;
     if (this.hold) {
-      if (this.hold.fillT >= RUSH.AUTOPLAY_HOLD_SEC) this.releaseHold();
+      if (this.hold.fillT >= this.tune.FILL_SEC * 0.9375) this.releaseHold();
       return;
     }
     this.autoT -= dt;
     if (this.autoT > 0) return;
     this.autoT = 0.3;
-    if (rng() < 0.32) {
+    if (rng() < this.tune.AUTOPLAY_DISTRACT) {
       this.autoT = 0.8 + rng() * 1.1; // distraction — very human
       return;
     }
@@ -533,8 +542,20 @@ export default {
     if (target) {
       this.startHold(target);
       // Occasional nervous early release (+1 instead of +3).
-      if (rng() < 0.18) this.hold.early = 0.25 + rng() * 0.35;
+      if (rng() < this.tune.AUTOPLAY_EARLY) {
+        this.hold.early = this.tune.FILL_SEC * (0.3 + rng() * 0.4);
+      }
     }
+  },
+
+  endRound() {
+    if (this.phase !== 'play') return;
+    this.phase = 'ending';
+    this.cancelHold();
+    this.ctx.audio.play('ui.win');
+    this.gooby.setEmotion('ecstatic');
+    this.gooby.play('happyBounce');
+    this.particles.emit('confetti', this.gooby.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)), { count: 16 });
   },
 
   update(dt, elapsed) {
@@ -553,8 +574,8 @@ export default {
       return;
     }
 
-    const remaining = RUSH.DURATION_SEC - elapsed;
-    ctx.hud.setTime(remaining);
+    const remaining = this.tune.DURATION_SEC - elapsed;
+    ctx.hud.setTime(this.tune.ENDLESS ? elapsed : remaining);
 
     if (shouldSpawnSprinkler(elapsed, this.sprinklerSpawned)) {
       this.sprinklerSpawned = true;
@@ -598,7 +619,7 @@ export default {
         const pick = free[Math.min(free.length - 1, Math.floor(ctx.rng() * free.length))];
         this.sprout(pick, elapsed);
       }
-      this.spawnT = spawnIntervalAt(elapsed);
+      this.spawnT = spawnIntervalAt(elapsed, this.tune.DURATION_SEC, this.tune);
     }
 
     // per-pot timers
@@ -618,7 +639,10 @@ export default {
         pot.ring.scale.setScalar(0.35 + 0.65 * frac);
         pot.ringMat.color.setStyle(frac > 0.5 ? '#66BB55' : frac > 0.25 ? '#E8A857' : '#D64570');
         if (pot.sprout) pot.sprout.rotation.z = (1 - frac) * 0.35; // gentle pre-droop
-        if (pot.wiltT <= 0) this.wiltOut(pot);
+        if (pot.wiltT <= 0) {
+          this.wiltOut(pot);
+          if (this.phase !== 'play') break;
+        }
       } else if (pot.state === 'weed') {
         pot.wiltT -= dt;
         if (pot.wiltT <= 0) {
@@ -643,7 +667,7 @@ export default {
     // active watering hold: fill ring + can tilt + droplets
     if (this.hold) {
       this.hold.fillT += dt;
-      const frac = Math.min(1, this.hold.fillT / RUSH.FILL_SEC);
+      const frac = Math.min(1, this.hold.fillT / this.tune.FILL_SEC);
       this.drawFillRing(frac);
       this.can.rotation.z = -0.5 - frac * 0.45;
       if (Math.floor(elapsed * 10) % 2 === 0) {
@@ -655,14 +679,7 @@ export default {
 
     if (this.autoplay) this.autoplayTick(dt, elapsed);
 
-    if (remaining <= 0 && this.phase === 'play') {
-      this.phase = 'ending';
-      this.cancelHold();
-      ctx.audio.play('ui.win');
-      this.gooby.setEmotion('ecstatic');
-      this.gooby.play('happyBounce');
-      this.particles.emit('confetti', this.gooby.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)), { count: 16 });
-    }
+    if (!this.tune.ENDLESS && remaining <= 0) this.endRound();
   },
 
   /** Redraw the hold-to-fill arc (green zone = last 25%, §C1.2). */
@@ -681,10 +698,10 @@ export default {
     // green zone (last 25%)
     g.strokeStyle = 'rgba(102,187,85,0.85)';
     g.beginPath();
-    g.arc(cx, cy, r, start + Math.PI * 2 * (1 - RUSH.PERFECT_ZONE), start + Math.PI * 2);
+    g.arc(cx, cy, r, start + Math.PI * 2 * (1 - this.tune.PERFECT_ZONE), start + Math.PI * 2);
     g.stroke();
     // fill arc
-    g.strokeStyle = inPerfectZone(frac) ? '#2E8B57' : '#6EC6FF';
+    g.strokeStyle = inPerfectZone(frac, this.tune) ? '#2E8B57' : '#6EC6FF';
     g.beginPath();
     g.arc(cx, cy, r, start, start + Math.PI * 2 * frac);
     g.stroke();
@@ -715,6 +732,7 @@ export default {
     this.ownedGeos = [];
     this.ownedMats = [];
     this.ownedTexs = [];
+    this.tune = null;
   },
 };
 export const controls = Object.freeze({ invertible: false }); // V4/G57 (§G2.1 rule 4, §G3.3): positional/tap/semantic input — inverting is nonsense here

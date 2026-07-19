@@ -18,6 +18,8 @@ import { applyEquippedOutfits } from '../../character/outfitAttach.js';
 import { clampFloatTextToView } from '../framework.js';
 import {
   CHOP,
+  applyDifficulty,
+  applyTurbo,
   VEGGIES,
   waveSizeAt,
   spawnIntervalAt,
@@ -31,6 +33,8 @@ import {
   chopPoints,
   comboAfterHit,
   applyPoints,
+  finalScore,
+  endlessShouldEnd,
   segmentHitsMovingCircle,
 } from './veggieChop.logic.js';
 
@@ -217,10 +221,21 @@ export default {
     this.ctx = ctx;
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
+    this.difficulty = ['easy', 'normal', 'hard', 'endless'].includes(ctx.params?.difficulty)
+      ? ctx.params.difficulty
+      : 'normal';
+    const modifier = ctx.params?.modifier?.type === 'turbo'
+      ? {
+        speedMult: ctx.params.modifier.speedMult,
+        scoreMult: ctx.params.modifier.scoreMult,
+      }
+      : {};
+    this.tune = applyTurbo(applyDifficulty(CHOP, this.difficulty), modifier);
 
     this.phase = 'play'; // 'play' | 'ending' | 'done'
     this.score = 0;
     this.misses = 0;
+    this.junkHits = 0;
     this.stunT = 0;
     this.endT = 0;
     this.spawnT = 0.7; // head start before the first lob
@@ -364,7 +379,10 @@ export default {
     });
 
     ctx.hud.setScore(0);
-    ctx.hud.setTime(CHOP.DURATION_SEC);
+    ctx.hud.setTime(this.tune.ENDLESS ? 0 : this.tune.DURATION_SEC);
+    if (this.autoplay && ctx.params?.modifier?.type === 'turbo') {
+      console.log(`[veggieChop] turbo speedMult=${this.tune.SPEED_MULT} scoreMult=${this.tune.SCORE_MULT}`);
+    }
   },
 
   /** Take (or build) a model holder for an item key. */
@@ -400,7 +418,7 @@ export default {
     const { rng } = this.ctx;
     const size = forcedSize ?? waveSizeAt(rng, elapsed);
     for (let i = 0; i < size; i += 1) {
-      const roll = veggieOnly ? rollVeggie(rng) : rollItem(rng, elapsed);
+      const roll = veggieOnly ? rollVeggie(rng) : rollItem(rng, elapsed, this.tune);
       const arc = makeArc(rng, this.halfW, this.launchY);
       const holder = this.takeModel(roll.key);
       holder.position.set(arc.x0, arc.y0, 0);
@@ -422,7 +440,10 @@ export default {
         spinZ: (rng() - 0.5) * 2.2,
         active: true,
         // dev bot plan (§C1.2: swipe at apex, ignore junk; human-ish skips)
-        botAt: roll.kind === 'veggie' && rng() < CHOP.AUTOPLAY_CHOP_RATE
+        botAt: (
+          (roll.kind === 'veggie' && rng() < this.tune.AUTOPLAY_CHOP_RATE)
+          || (roll.kind === 'junk' && this.tune.ENDLESS && rng() < this.tune.ENDLESS_BOT_JUNK_RATE)
+        )
           ? apex.t + (rng() - 0.5) * 0.12
           : -1,
       };
@@ -496,7 +517,7 @@ export default {
         ax, ay, bx, by,
         item.prevX ?? p.x, item.prevY ?? p.y,
         p.x, p.y,
-        CHOP.HIT_RADIUS
+        this.tune.HIT_RADIUS
       )) continue;
       if (item.kind === 'veggie') this.chopVeggie(item);
       else {
@@ -546,21 +567,23 @@ export default {
     const pos = item.holder.position.clone();
     item.active = false;
     this.returnModel(item.key, item.holder);
-    this.score = applyPoints(this.score, CHOP.JUNK_PTS);
-    this.ctx.onScore(CHOP.JUNK_PTS);
+    this.score = applyPoints(this.score, this.tune.JUNK_PTS);
+    this.ctx.onScore(this.tune.JUNK_PTS);
     this.ctx.hud.setScore(this.score);
-    this.stunT = CHOP.STUN_SEC;
+    this.stunT = this.tune.STUN_SEC;
+    this.junkHits += 1;
     this.swipeChops = comboAfterHit(this.swipeChops, 'junk');
     this.trail.length = 0;
     this.lastDrag = null;
     this.ctx.audio.play('chop.junk');
     this.juice.emit(pos, '#8A7A5C', 10, this.ctx.rng);
     this.particles.emit('dizzyStars', pos);
-    this.floats.spawn(`${CHOP.JUNK_PTS}`, pos, '#D64570');
+    this.floats.spawn(`${this.tune.JUNK_PTS}`, pos, '#D64570');
     this.ctx.hud.banner(t('mg.chop.junk'));
     this.gooby.setEmotion('dizzy');
-    this.gooby.play('dizzy', { speed: 2.0 / CHOP.STUN_SEC });
+    this.gooby.play('dizzy', { speed: 2.0 / this.tune.STUN_SEC });
     this.emotionT = 0.9;
+    if (endlessShouldEnd(this.junkHits, this.tune)) this.endRound();
   },
 
   /** A veggie fell unchopped: miss pip out, 3 misses end early (§C1.2). */
@@ -572,16 +595,21 @@ export default {
     if (this.missMats[this.misses - 1]) this.missMats[this.misses - 1].color.set('#B9A88F');
     this.gooby.setEmotion('sad');
     this.emotionT = 0.8;
-    if (this.misses >= CHOP.MAX_MISSES) {
+    if (!this.tune.ENDLESS && this.misses >= this.tune.MAX_MISSES) {
       this.ctx.hud.banner(t('mg.chop.over'));
       this.endRound();
     } else {
-      this.ctx.hud.banner(t('mg.chop.miss', { n: CHOP.MAX_MISSES - this.misses }));
+      this.ctx.hud.banner(t('mg.chop.miss', { n: Math.max(0, this.tune.MAX_MISSES - this.misses) }));
     }
   },
 
   endRound() {
     if (this.phase !== 'play') return;
+    const scored = finalScore(this.score, this.tune);
+    const bonus = scored - this.score;
+    this.score = scored;
+    if (bonus !== 0) this.ctx.onScore(bonus);
+    this.ctx.hud.setScore(this.score);
     this.phase = 'ending';
     this.endT = 0;
     this.ctx.audio.play('ui.win');
@@ -612,11 +640,12 @@ export default {
 
   update(dt, elapsed) {
     const ctx = this.ctx;
-    this.gooby.update(dt);
-    this.particles.update(dt);
+    const gdt = dt * this.tune.SPEED_MULT;
+    this.gooby.update(gdt);
+    this.particles.update(gdt);
     this.floats.update(dt);
-    this.juice.update(dt);
-    this.updateTrail(dt);
+    this.juice.update(gdt);
+    this.updateTrail(gdt);
 
     if (this.emotionT > 0) {
       this.emotionT -= dt;
@@ -625,11 +654,11 @@ export default {
 
     // loose halves tumble off under gravity
     for (const h of this.halves) {
-      h.age += dt;
-      h.vy -= CHOP.GRAVITY * 0.8 * dt;
-      h.holder.position.x += h.vx * dt;
-      h.holder.position.y += h.vy * dt;
-      h.holder.rotation.z += h.spin * dt;
+      h.age += gdt;
+      h.vy -= this.tune.GRAVITY * 0.8 * gdt;
+      h.holder.position.x += h.vx * gdt;
+      h.holder.position.y += h.vy * gdt;
+      h.holder.rotation.z += h.spin * gdt;
       if (h.holder.position.y < this.launchY - 0.6) {
         this.returnModel(h.key, h.holder);
         h.done = true;
@@ -647,8 +676,8 @@ export default {
     }
     if (this.phase !== 'play') return;
 
-    const remaining = CHOP.DURATION_SEC - elapsed;
-    ctx.hud.setTime(remaining);
+    const remaining = this.tune.DURATION_SEC - elapsed;
+    ctx.hud.setTime(this.tune.ENDLESS ? elapsed : remaining);
     if (this.autoplay && !this.propLogged && elapsed > 0.5) {
       this.propLogged = true;
       console.log(`[veggieChop] prop kaykit-restaurant/cuttingboard — drawCalls ${ctx.renderer.info.render.calls}`);
@@ -662,7 +691,7 @@ export default {
       this.startFrenzy();
     }
     if (this.frenzy) {
-      this.frenzy.spawnT -= dt;
+      this.frenzy.spawnT -= gdt;
       const cadence = frenzySpawnInterval();
       while (this.frenzy.spawnT <= 0 && this.frenzy.remaining > 0) {
         this.spawnWave(elapsed, { size: 1, veggieOnly: true, quiet: true });
@@ -675,31 +704,32 @@ export default {
       }
     } else {
       // normal wave cadence (§C1.2: arcs of 1–3, ramping)
-      this.spawnT -= dt;
+      this.spawnT -= gdt;
       if (this.spawnT <= 0 && remaining > 1.2) {
         this.spawnWave(elapsed);
-        this.spawnT = spawnIntervalAt(elapsed);
+        this.spawnT = spawnIntervalAt(elapsed, this.tune.DURATION_SEC, this.tune);
       }
     }
 
     // flying items along their arcs
     for (const item of this.items) {
       if (!item.active) continue;
-      item.t += dt;
+      item.t += gdt;
       if (item.t < 0) continue; // wave stagger
-      const p = arcPos(item.arc, item.t);
+      const p = arcPos(item.arc, item.t, this.tune.GRAVITY);
       item.prevX = item.holder.position.x;
       item.prevY = item.holder.position.y;
       item.holder.position.set(p.x, p.y, 0);
-      item.holder.rotation.x += item.spinX * dt;
-      item.holder.rotation.z += item.spinZ * dt;
+      item.holder.rotation.x += item.spinX * gdt;
+      item.holder.rotation.z += item.spinZ * gdt;
       if (this.autoplay && item.botAt >= 0 && item.t >= item.botAt) {
         item.botAt = -1;
         this.botSwipe(item);
+        if (this.phase !== 'play') break;
         if (!item.active) continue;
       }
       // fell past the launch line on the way down
-      if (item.t > item.arc.vy / CHOP.GRAVITY && p.y < this.launchY - 0.3) {
+      if (item.t > item.arc.vy / this.tune.GRAVITY && p.y < this.launchY - 0.3) {
         if (item.kind === 'veggie') {
           this.missVeggie(item);
           if (this.phase !== 'play') break;
@@ -711,7 +741,7 @@ export default {
     }
     this.items = this.items.filter((i) => i.active);
 
-    if (remaining <= 0) this.endRound();
+    if (!this.tune.ENDLESS && remaining <= 0) this.endRound();
   },
 
   dispose() {
@@ -746,6 +776,7 @@ export default {
     this.ownedGeos = [];
     this.ownedMats = [];
     this.ownedTexs = [];
+    this.tune = null;
   },
 };
 export const controls = Object.freeze({ invertible: false }); // V4/G57 (§G2.1 rule 4, §G3.3): positional/tap/semantic input — inverting is nonsense here

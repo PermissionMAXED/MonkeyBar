@@ -44,7 +44,39 @@ export const RUSH = Object.freeze({
   SPRINKLER_AT_SEC: 30,
   /** Sprinkler restores half of every live plant's wilt ring. */
   SPRINKLER_FILL_FRAC: 0.5,
+  /** V4/G73 §G5 defaults: normal is timer-bound; Endlos ends at 3 wilts. */
+  ENDLESS: false,
+  ENDLESS_WILTS: 3,
+  AUTOPLAY_DISTRACT: 0.32,
+  AUTOPLAY_EARLY: 0.18,
 });
+
+/** V4/G73 timed-arena multipliers (§G5.3). */
+export const RUSH_DIFFICULTY = Object.freeze({
+  easy: Object.freeze({ spawnMult: 1.2, windowMult: 1.25, durationMult: 1.2, botSuccess: 0.995, distract: 0.18 }),
+  hard: Object.freeze({ spawnMult: 0.85, windowMult: 0.8, durationMult: 1, botSuccess: 0.77, distract: 0.26 }),
+  endless: Object.freeze({ spawnMult: 0.85, windowMult: 0.8, durationMult: 1, botSuccess: 0.77, distract: 0.26 }),
+});
+
+/** Derive a frozen tune; normal returns the bit-identical Mittel table. */
+export function applyDifficulty(tune = RUSH, mode = 'normal') {
+  if (mode === 'normal' || !Object.hasOwn(RUSH_DIFFICULTY, mode)) return tune;
+  const row = RUSH_DIFFICULTY[mode];
+  return Object.freeze({
+    ...tune,
+    DURATION_SEC: tune.DURATION_SEC * row.durationMult,
+    SPAWN_START_SEC: tune.SPAWN_START_SEC * row.spawnMult,
+    SPAWN_END_SEC: tune.SPAWN_END_SEC * row.spawnMult,
+    WILT_START_SEC: Math.max(0.35, tune.WILT_START_SEC * row.windowMult),
+    WILT_END_SEC: Math.max(0.35, tune.WILT_END_SEC * row.windowMult),
+    FILL_SEC: Math.max(0.35, tune.FILL_SEC * row.windowMult),
+    ENDLESS: mode === 'endless',
+    ENDLESS_SPAWN_FLOOR_SEC: 1,
+    ENDLESS_WILT_FLOOR_SEC: 1.2,
+    AUTOPLAY_SUCCESS: row.botSuccess,
+    AUTOPLAY_DISTRACT: row.distract,
+  });
+}
 
 /**
  * Wilt window at a moment of the round: linear 6 s → 3 s (§C1.2), clamped.
@@ -52,9 +84,12 @@ export const RUSH = Object.freeze({
  * @param {number} [duration] round length (defaults to the §C1.2 60 s)
  * @returns {number} seconds a fresh sprout survives unwatered
  */
-export function wiltWindowAt(elapsed, duration = RUSH.DURATION_SEC) {
-  const t = Math.min(1, Math.max(0, elapsed / duration));
-  return RUSH.WILT_START_SEC + (RUSH.WILT_END_SEC - RUSH.WILT_START_SEC) * t;
+export function wiltWindowAt(elapsed, duration = RUSH.DURATION_SEC, tune = RUSH) {
+  const t = tune.ENDLESS
+    ? Math.max(0, elapsed / duration)
+    : Math.min(1, Math.max(0, elapsed / duration));
+  const value = tune.WILT_START_SEC + (tune.WILT_END_SEC - tune.WILT_START_SEC) * t;
+  return Math.max(tune.ENDLESS_WILT_FLOOR_SEC ?? tune.WILT_END_SEC, value);
 }
 
 /**
@@ -63,9 +98,12 @@ export function wiltWindowAt(elapsed, duration = RUSH.DURATION_SEC) {
  * @param {number} [duration]
  * @returns {number}
  */
-export function spawnIntervalAt(elapsed, duration = RUSH.DURATION_SEC) {
-  const t = Math.min(1, Math.max(0, elapsed / duration));
-  return RUSH.SPAWN_START_SEC + (RUSH.SPAWN_END_SEC - RUSH.SPAWN_START_SEC) * t;
+export function spawnIntervalAt(elapsed, duration = RUSH.DURATION_SEC, tune = RUSH) {
+  const t = tune.ENDLESS
+    ? Math.max(0, elapsed / duration)
+    : Math.min(1, Math.max(0, elapsed / duration));
+  const value = tune.SPAWN_START_SEC + (tune.SPAWN_END_SEC - tune.SPAWN_START_SEC) * t;
+  return Math.max(tune.ENDLESS_SPAWN_FLOOR_SEC ?? tune.SPAWN_END_SEC, value);
 }
 
 /**
@@ -87,9 +125,9 @@ export function activePotsAt(elapsed) {
  * @param {number} fillFrac 0..1 fraction of the 0.8 s ring filled
  * @returns {number} +3 | +1
  */
-export function releasePoints(fillFrac) {
+export function releasePoints(fillFrac, tune = RUSH) {
   const f = Math.min(1, Math.max(0, fillFrac));
-  return f >= 1 - RUSH.PERFECT_ZONE ? RUSH.PERFECT_PTS : RUSH.EARLY_PTS;
+  return f >= 1 - tune.PERFECT_ZONE ? tune.PERFECT_PTS : tune.EARLY_PTS;
 }
 
 /**
@@ -97,8 +135,8 @@ export function releasePoints(fillFrac) {
  * @param {number} fillFrac 0..1
  * @returns {boolean}
  */
-export function inPerfectZone(fillFrac) {
-  return Math.min(1, Math.max(0, fillFrac)) >= 1 - RUSH.PERFECT_ZONE;
+export function inPerfectZone(fillFrac, tune = RUSH) {
+  return Math.min(1, Math.max(0, fillFrac)) >= 1 - tune.PERFECT_ZONE;
 }
 
 /**
@@ -108,8 +146,8 @@ export function inPerfectZone(fillFrac) {
  * @param {number} heldSec
  * @returns {number} clamped 0..1
  */
-export function holdFillFraction(heldSec) {
-  return Math.min(1, Math.max(0, heldSec / RUSH.FILL_SEC));
+export function holdFillFraction(heldSec, tune = RUSH) {
+  return Math.min(1, Math.max(0, heldSec / tune.FILL_SEC));
 }
 
 /**
@@ -153,4 +191,35 @@ export function rollWeed(rng, elapsed) {
  */
 export function applyPoints(score, points) {
   return Math.max(0, score + points);
+}
+
+/** §G5.4 Endlos ends after three cumulative withered pots. */
+export function endlessShouldEnd(withered, tune = RUSH) {
+  return tune.ENDLESS === true && withered >= tune.ENDLESS_WILTS;
+}
+
+/** Deterministic, tune-driven autoplay certification model. */
+export function simulateAutoplay(seed, mode = 'normal') {
+  const tune = applyDifficulty(RUSH, mode);
+  let a = seed >>> 0;
+  const rng = () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) | 0;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+  const duration = tune.DURATION_SEC;
+  const limit = tune.ENDLESS ? 600 : duration;
+  let elapsed = 0;
+  let score = 0;
+  let withered = 0;
+  const success = tune.AUTOPLAY_SUCCESS ?? 0.97;
+  while (elapsed < limit && !endlessShouldEnd(withered, tune)) {
+    elapsed += spawnIntervalAt(elapsed, duration, tune);
+    if (elapsed > limit) break;
+    if (rng() < success) score += tune.PERFECT_PTS;
+    else withered += 1;
+  }
+  return Object.freeze({ seed, mode, score, withered, elapsed });
 }

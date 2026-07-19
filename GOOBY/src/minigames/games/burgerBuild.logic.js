@@ -44,7 +44,34 @@ export const BURGER = Object.freeze({
   ORDER_TIMER_SEC: 30,
   RUSH_TIMER_MULT: 0.8,
   MAX_RUSH_ORDERS: 2,
+  /** V4/G73 timed-arena hit window and Endlos failure budget. */
+  PLATE_HALF_WIDTH: 0.78,
+  ENDLESS: false,
+  ENDLESS_EXPIRES: 3,
 });
+
+/** V4/G73 timed-arena mode rows (§G5.3). */
+export const BURGER_DIFFICULTY = Object.freeze({
+  easy: Object.freeze({ spawnMult: 1.2, windowMult: 1.25, durationMult: 1.2, botSkill: 0.99, distract: 0.25 }),
+  hard: Object.freeze({ spawnMult: 0.85, windowMult: 0.8, durationMult: 1, botSkill: 0.55, distract: 0.34 }),
+  endless: Object.freeze({ spawnMult: 0.85, windowMult: 0.8, durationMult: 1, botSkill: 0.55, distract: 0.34 }),
+});
+
+/** Derive a frozen tune; normal is the exact existing table. */
+export function applyDifficulty(tune = BURGER, mode = 'normal') {
+  if (mode === 'normal' || !Object.hasOwn(BURGER_DIFFICULTY, mode)) return tune;
+  const row = BURGER_DIFFICULTY[mode];
+  return Object.freeze({
+    ...tune,
+    DURATION_SEC: tune.DURATION_SEC * row.durationMult,
+    SPAWN_SEC: tune.SPAWN_SEC * row.spawnMult,
+    ORDER_TIMER_SEC: Math.max(0.35, tune.ORDER_TIMER_SEC * row.windowMult),
+    PLATE_HALF_WIDTH: Math.max(tune.PLATE_HALF_WIDTH * 0.55, tune.PLATE_HALF_WIDTH * row.windowMult),
+    ENDLESS: mode === 'endless',
+    BOT_SKILL: row.botSkill,
+    AUTOPLAY_DISTRACT: row.distract,
+  });
+}
 
 /** The 5 middle-layer ingredients (§C1.2 — bun/patty/cheese/tomato/salad/onion). */
 export const INGREDIENTS = Object.freeze(['patty', 'cheese', 'tomato', 'salad', 'onion']);
@@ -102,8 +129,8 @@ export function isComplete(ticket, placed) {
  * @param {number} completedBurgers
  * @returns {number}
  */
-export function fallSpeedAt(completedBurgers) {
-  return BURGER.FALL_BASE_SPEED * Math.pow(1 + BURGER.FALL_RAMP_PCT, Math.max(0, completedBurgers));
+export function fallSpeedAt(completedBurgers, tune = BURGER) {
+  return tune.FALL_BASE_SPEED * Math.pow(1 + tune.FALL_RAMP_PCT, Math.max(0, completedBurgers));
 }
 
 /**
@@ -132,8 +159,8 @@ export function isRushOrder(orderNumber) {
  * @param {boolean} rush
  * @returns {number} seconds
  */
-export function orderTimerSec(rush) {
-  return BURGER.ORDER_TIMER_SEC * (rush ? BURGER.RUSH_TIMER_MULT : 1);
+export function orderTimerSec(rush, tune = BURGER) {
+  return tune.ORDER_TIMER_SEC * (rush ? tune.RUSH_TIMER_MULT : 1);
 }
 
 /**
@@ -156,8 +183,8 @@ export function orderPoints(points, rush) {
  * @param {number} sinceNeededSec seconds since a next-needed item last spawned
  * @returns {string}
  */
-export function rollSpawn(rng, needed, sinceNeededSec) {
-  if (needed != null && (sinceNeededSec >= BURGER.FORCE_NEXT_SEC || rng() < BURGER.NEXT_WEIGHT)) {
+export function rollSpawn(rng, needed, sinceNeededSec, tune = BURGER) {
+  if (needed != null && (sinceNeededSec >= tune.FORCE_NEXT_SEC || rng() < tune.NEXT_WEIGHT)) {
     return needed;
   }
   const pick = FALLING_IDS[Math.min(FALLING_IDS.length - 1, Math.floor(rng() * FALLING_IDS.length))];
@@ -171,7 +198,48 @@ export function rollSpawn(rng, needed, sinceNeededSec) {
  * @param {boolean} correct whether the caught item was the next-needed layer
  * @returns {number} new score ≥ 0
  */
-export function applyCatch(score, correct, rush = false) {
-  const points = correct ? orderPoints(BURGER.CATCH_PTS, rush) : BURGER.WRONG_PTS;
+export function applyCatch(score, correct, rush = false, tune = BURGER) {
+  const points = correct ? orderPoints(tune.CATCH_PTS, rush) : tune.WRONG_PTS;
   return Math.max(0, score + points);
+}
+
+/** §G5.4 Endlos ends after three expired orders. */
+export function endlessShouldEnd(expired, tune = BURGER) {
+  return tune.ENDLESS === true && expired >= tune.ENDLESS_EXPIRES;
+}
+
+/** Deterministic tune-driven certification for the existing chase bot. */
+export function simulateAutoplay(seed, mode = 'normal') {
+  const tune = applyDifficulty(BURGER, mode);
+  let a = seed >>> 0;
+  const rng = () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) | 0;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+  let elapsed = 0;
+  let score = 0;
+  let completed = 0;
+  let expired = 0;
+  let orderNumber = 1;
+  const limit = tune.ENDLESS ? 600 : tune.DURATION_SEC;
+  while (elapsed < limit && !endlessShouldEnd(expired, tune)) {
+    const ticket = makeTicket(rng);
+    const rush = isRushOrder(orderNumber);
+    const skill = tune.BOT_SKILL ?? 0.95;
+    const buildSec = ticket.length * tune.SPAWN_SEC * (1.45 + rng() * 0.25) / skill;
+    const deadline = orderTimerSec(rush, tune);
+    if (buildSec <= deadline) {
+      elapsed += buildSec + tune.BITE_SEC;
+      score += orderPoints(ticket.length * tune.CATCH_PTS + tune.COMPLETE_PTS, rush);
+      completed += 1;
+    } else {
+      elapsed += deadline;
+      expired += 1;
+    }
+    orderNumber += 1;
+  }
+  return Object.freeze({ seed, mode, score, completed, expired });
 }

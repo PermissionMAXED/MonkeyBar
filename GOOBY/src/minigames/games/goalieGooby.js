@@ -19,6 +19,8 @@ import { applyEquippedOutfits } from '../../character/outfitAttach.js';
 import { clampFloatTextToView } from '../framework.js';
 import {
   GOALIE,
+  applyDifficulty,
+  applyRiesenGooby,
   telegraphSecAt,
   speedMultAt,
   flightSecAt,
@@ -32,6 +34,7 @@ import {
   isShootoutAt,
   cheersAt,
   autoplayErrAt,
+  endlessShouldEnd,
 } from './goalieGooby.logic.js';
 
 const GOAL_Z = -2.2;
@@ -156,6 +159,16 @@ export default {
     this.ctx = ctx;
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
+    this.difficulty = ['easy', 'normal', 'hard', 'endless'].includes(ctx.params?.difficulty)
+      ? ctx.params.difficulty
+      : 'normal';
+    const modifier = ctx.params?.modifier?.type === 'riesenGooby'
+      ? {
+        scale: ctx.params.modifier.scale,
+        hitboxMult: ctx.params.modifier.hitboxMult,
+      }
+      : {};
+    this.tune = applyRiesenGooby(applyDifficulty(GOALIE, this.difficulty), modifier);
 
     this.phase = 'play'; // 'play' | 'ending' | 'done'
     this.score = 0;
@@ -309,7 +322,7 @@ export default {
     this.floats = createFloatTexts(scene, ctx.camera);
     this.gooby = createGooby({ particles: this.particles });
     applyEquippedOutfits(this.gooby);
-    this.gooby.group.scale.setScalar(0.78);
+    this.gooby.group.scale.setScalar(0.78 * this.tune.RENDER_SCALE);
     this.gooby.group.position.set(0, GROUND_Y + 0.02, GOALIE_Z);
     this.gooby.setEmotion('happy');
     this.gooby.lookAt(new THREE.Vector3(0, 0, 8));
@@ -372,7 +385,10 @@ export default {
     });
 
     ctx.hud.setScore(0);
-    ctx.hud.setTime(GOALIE.DURATION_SEC);
+    ctx.hud.setTime(this.tune.ENDLESS ? 0 : this.tune.DURATION_SEC);
+    if (this.autoplay && ctx.params?.modifier?.type === 'riesenGooby') {
+      console.log(`[goalieGooby] riesenGooby scale=${this.tune.RENDER_SCALE} hitboxMult=${this.tune.HITBOX_MULT} diveWindow=${this.tune.DIVE_HOLD_SEC}`);
+    }
   },
 
   /** Gooby-recipe mini bunny (shared geos/mats — crowd + kicker, §D4). */
@@ -449,8 +465,8 @@ export default {
     k.lane = kick.lane;
     k.kind = kick.kind;
     k.shootout = shootout;
-    k.telegraph = shootout ? GOALIE.SHOOTOUT_TELEGRAPH_SEC : telegraphSecAt(elapsed);
-    k.flight = shootout ? GOALIE.SHOOTOUT_FLIGHT_SEC : flightSecAt(this.cheers);
+    k.telegraph = shootout ? this.tune.SHOOTOUT_TELEGRAPH_SEC : telegraphSecAt(elapsed, this.tune);
+    k.flight = shootout ? this.tune.SHOOTOUT_FLIGHT_SEC : flightSecAt(this.cheers, this.tune);
     if (shootout) this.shootoutShots += 1;
     // kicker trots to the lane and winds up
     const kx = this.laneXs[k.lane] * 0.55;
@@ -466,7 +482,7 @@ export default {
       k.botAt = this.now + Math.max(0.05, arriveIn - lead);
       k.botLane = k.lane;
       k.botV = k.kind === 'lob' ? 'up' : k.kind === 'roller' ? 'down' : 'mid';
-      if (rng() < autoplayErrAt(k.telegraph)) {
+      if (rng() < autoplayErrAt(k.telegraph, this.tune, this.tune.AUTOPLAY_SKILL_MULT)) {
         // human-ish flub: wrong lane (or wrong height for specials)
         if (k.kind !== 'straight' && rng() < 0.4) k.botV = 'mid';
         else k.botLane = (k.lane + 1 + Math.floor(rng() * (GOALIE.LANES - 1))) % GOALIE.LANES;
@@ -508,10 +524,10 @@ export default {
     const arriveT = this.now;
     const dive = this.dive;
     const kicked = { lane: k.lane, kind: k.kind };
-    const saved = dive != null && diveCovers(dive.t, arriveT) && saveMatches(kicked, dive);
+    const saved = dive != null && diveCovers(dive.t, arriveT, this.tune) && saveMatches(kicked, dive);
     if (saved) {
-      const superSave = isSuperSave(dive.t, arriveT);
-      const pts = savePoints(superSave, k.shootout);
+      const superSave = isSuperSave(dive.t, arriveT, this.tune);
+      const pts = savePoints(superSave, k.shootout, this.tune);
       this.score += pts;
       this.saves += 1;
       this.ctx.onScore(pts);
@@ -564,7 +580,10 @@ export default {
       this.gooby.setEmotion('sad');
       this.gooby.play('sadSlump');
       this.emotionT = 1.2;
-      if (this.goals >= GOALIE.MAX_GOALS && !this.shootoutStarted) {
+      if (
+        endlessShouldEnd(this.goals, this.tune)
+        || (this.goals >= this.tune.MAX_GOALS && !this.shootoutStarted)
+      ) {
         this.ctx.hud.banner(t('mg.goalie.over'));
         this.endRound();
         return;
@@ -655,12 +674,12 @@ export default {
     }
     if (this.phase !== 'play') return;
 
-    const remaining = GOALIE.DURATION_SEC - elapsed;
-    ctx.hud.setTime(remaining);
-    if (!this.shootoutStarted && isShootoutAt(elapsed)) this.startShootout(elapsed);
+    const remaining = this.tune.DURATION_SEC - elapsed;
+    ctx.hud.setTime(this.tune.ENDLESS ? elapsed : remaining);
+    if (!this.shootoutStarted && isShootoutAt(elapsed, this.tune)) this.startShootout(elapsed);
 
     // dive recovery once its cover window lapses
-    if (this.dive && this.now - this.dive.t > GOALIE.DIVE_HOLD_SEC) this.recoverDive();
+    if (this.dive && this.now - this.dive.t > this.tune.DIVE_HOLD_SEC) this.recoverDive();
 
     // --- kick state machine ---
     const k = this.kick;
@@ -673,12 +692,15 @@ export default {
       if (this.shootoutStarted) {
         if (
           this.shootoutShots < GOALIE.SHOOTOUT_SHOTS
-          && k.t >= GOALIE.SHOOTOUT_GAP_SEC
-          && remaining > GOALIE.SHOOTOUT_TELEGRAPH_SEC + GOALIE.SHOOTOUT_FLIGHT_SEC
+          && k.t >= this.tune.SHOOTOUT_GAP_SEC
+          && remaining > this.tune.SHOOTOUT_TELEGRAPH_SEC + this.tune.SHOOTOUT_FLIGHT_SEC
         ) {
           this.startTelegraph(elapsed, true);
         }
-      } else if (k.t >= GOALIE.GAP_SEC / speedMultAt(this.cheers) && remaining > 1.4) {
+      } else if (
+        k.t >= this.tune.GAP_SEC / speedMultAt(this.cheers, this.tune)
+        && (this.tune.ENDLESS || remaining > 1.4)
+      ) {
         this.startTelegraph(elapsed);
       }
     } else if (k.state === 'telegraph') {
@@ -701,7 +723,7 @@ export default {
       if (t01 >= 1) this.resolveKick();
     }
 
-    if (remaining <= 0) this.endRound();
+    if (!this.tune.ENDLESS && remaining <= 0) this.endRound();
   },
 
   dispose() {
@@ -738,6 +760,7 @@ export default {
     this.ownedGeos = [];
     this.ownedMats = [];
     this.ownedTexs = [];
+    this.tune = null;
   },
 };
 export const controls = Object.freeze({ invertible: true }); // V4/G57 (§G2.1 rule 4, §G3.3): global „Steuerung invertieren“ applies (G56 proxy / carController invertSteer param)

@@ -13,6 +13,9 @@ import { fileURLToPath } from 'node:url';
 
 import {
   SAYS,
+  applyDifficulty as applySaysDifficulty,
+  endlessShouldEnd as saysEndlessShouldEnd,
+  simulateAutoplay as simulateSaysAutoplay,
   seqLengthAt,
   stepMsAt,
   extendSequence,
@@ -24,6 +27,9 @@ import {
 } from '../src/minigames/games/goobySays.logic.js';
 import {
   RUSH,
+  applyDifficulty as applyRushDifficulty,
+  endlessShouldEnd as rushEndlessShouldEnd,
+  simulateAutoplay as simulateRushAutoplay,
   wiltWindowAt,
   spawnIntervalAt,
   activePotsAt,
@@ -37,6 +43,9 @@ import {
 } from '../src/minigames/games/gardenRush.logic.js';
 import {
   BURGER,
+  applyDifficulty as applyBurgerDifficulty,
+  endlessShouldEnd as burgerEndlessShouldEnd,
+  simulateAutoplay as simulateBurgerAutoplay,
   INGREDIENTS,
   MODEL_KEYS,
   FALLING_IDS,
@@ -54,6 +63,11 @@ import {
 // --- V2/G27 imports (wave-4 append: veggieChop + goalieGooby, §C1.2 #4/#7) ---
 import {
   CHOP,
+  applyDifficulty as applyChopDifficulty,
+  applyTurbo,
+  finalScore as chopFinalScore,
+  endlessShouldEnd as chopEndlessShouldEnd,
+  simulateAutoplay as simulateChopAutoplay,
   VEGGIES,
   JUNK_ITEMS,
   maxWaveSizeAt,
@@ -77,6 +91,10 @@ import {
 } from '../src/minigames/games/veggieChop.logic.js';
 import {
   GOALIE,
+  applyDifficulty as applyGoalieDifficulty,
+  applyRiesenGooby,
+  endlessShouldEnd as goalieEndlessShouldEnd,
+  simulateAutoplay as simulateGoalieAutoplay,
   telegraphSecAt,
   speedMultAt,
   flightSecAt,
@@ -94,6 +112,7 @@ import {
 } from '../src/minigames/games/goalieGooby.logic.js';
 // --- end V2/G27 imports ---
 import { COIN_TABLE, ROOMS } from '../src/data/constants.js';
+import { TARGETS } from '../src/data/difficultyTargets.js';
 import { computeCoins } from '../src/data/minigames.js';
 import { EN, DE } from '../src/data/strings.js';
 
@@ -876,3 +895,134 @@ test('V3/G45 depth strings are bilingual and payout caps remain intact', () => {
   }
 });
 // ═══════════════════════════════════════════════════════════ end V3/G45 ═══
+
+// ═══════════════════════════════════════════════════════════════ V4/G73 ═══
+// PLAN4 §E G73 + PLAN4-GAMES §G5: difficulty batch C, Endlos end
+// conditions, eligible modifier tuning, and deterministic Schwer certification.
+
+test('V4/G73: Mittel is bit-identical and every derived tune is frozen', () => {
+  const rows = [
+    [SAYS, applySaysDifficulty],
+    [RUSH, applyRushDifficulty],
+    [BURGER, applyBurgerDifficulty],
+    [CHOP, applyChopDifficulty],
+    [GOALIE, applyGoalieDifficulty],
+  ];
+  for (const [base, apply] of rows) {
+    assert.strictEqual(apply(base, 'normal'), base);
+    assert.strictEqual(apply(base, 'unknown'), base);
+    assert.ok(Object.isFrozen(apply(base, 'easy')));
+    assert.ok(Object.isFrozen(apply(base, 'hard')));
+    assert.ok(Object.isFrozen(apply(base, 'endless')));
+  }
+});
+
+test('V4/G73: sequence and timed-arena parameters follow §G5.3 monotonically', () => {
+  const saysEasy = applySaysDifficulty(SAYS, 'easy');
+  const saysHard = applySaysDifficulty(SAYS, 'hard');
+  const saysEndless = applySaysDifficulty(SAYS, 'endless');
+  assert.ok(stepMsAt(1, saysEasy) > stepMsAt(1, SAYS));
+  assert.ok(stepMsAt(1, SAYS) > stepMsAt(1, saysHard));
+  assert.ok(saysHard.CHORD_WINDOW_MS >= 350, 'Schwer reaction guardrail');
+  assert.ok(stepMsAt(80, saysEndless) < SAYS.STEP_FLOOR_MS, 'Endlos ramps past Mittel floor');
+
+  for (const [base, apply, spawnKey, windowKey] of [
+    [RUSH, applyRushDifficulty, 'SPAWN_START_SEC', 'WILT_END_SEC'],
+    [BURGER, applyBurgerDifficulty, 'SPAWN_SEC', 'PLATE_HALF_WIDTH'],
+    [CHOP, applyChopDifficulty, 'SPAWN_START_SEC', 'HIT_RADIUS'],
+    [GOALIE, applyGoalieDifficulty, 'GAP_SEC', 'TELEGRAPH_END_SEC'],
+  ]) {
+    const easy = apply(base, 'easy');
+    const hard = apply(base, 'hard');
+    assert.ok(easy[spawnKey] > base[spawnKey], `${spawnKey}: easy`);
+    assert.ok(hard[spawnKey] < base[spawnKey], `${spawnKey}: hard`);
+    assert.ok(easy[windowKey] > base[windowKey], `${windowKey}: easy`);
+    assert.ok(hard[windowKey] < base[windowKey], `${windowKey}: hard`);
+    assert.equal(easy.DURATION_SEC, base.DURATION_SEC * 1.2);
+    assert.equal(hard.DURATION_SEC, base.DURATION_SEC);
+  }
+});
+
+test('V4/G73: Schwer guardrails keep windows >=350ms and hitboxes >=55%', () => {
+  const rush = applyRushDifficulty(RUSH, 'hard');
+  const burger = applyBurgerDifficulty(BURGER, 'hard');
+  const chop = applyChopDifficulty(CHOP, 'hard');
+  const goalie = applyGoalieDifficulty(GOALIE, 'hard');
+  assert.ok(rush.FILL_SEC >= 0.35);
+  assert.ok(rush.WILT_END_SEC >= 0.35);
+  assert.ok(burger.PLATE_HALF_WIDTH >= BURGER.PLATE_HALF_WIDTH * 0.55);
+  assert.ok(chop.HIT_RADIUS >= CHOP.HIT_RADIUS * 0.55);
+  assert.ok(goalie.TELEGRAPH_END_SEC >= 0.35);
+  assert.ok(goalie.SHOOTOUT_TELEGRAPH_SEC >= 0.35);
+  assert.ok(goalie.DIVE_HOLD_SEC >= 0.35);
+});
+
+test('V4/G73: each §G5.4 Endlos condition is exact and timer-free', () => {
+  const rush = applyRushDifficulty(RUSH, 'endless');
+  const burger = applyBurgerDifficulty(BURGER, 'endless');
+  const chop = applyChopDifficulty(CHOP, 'endless');
+  const goalie = applyGoalieDifficulty(GOALIE, 'endless');
+  assert.equal(saysEndlessShouldEnd('endless', 0), false);
+  assert.equal(saysEndlessShouldEnd('endless', 1), true);
+  assert.equal(rushEndlessShouldEnd(2, rush), false);
+  assert.equal(rushEndlessShouldEnd(3, rush), true);
+  assert.equal(burgerEndlessShouldEnd(2, burger), false);
+  assert.equal(burgerEndlessShouldEnd(3, burger), true);
+  assert.equal(chopEndlessShouldEnd(2, chop), false);
+  assert.equal(chopEndlessShouldEnd(3, chop), true);
+  assert.equal(goalieEndlessShouldEnd(2, goalie), false);
+  assert.equal(goalieEndlessShouldEnd(3, goalie), true);
+  for (const tune of [rush, burger, chop, goalie]) assert.equal(tune.ENDLESS, true);
+  assert.equal(simulateRushAutoplay(73, 'endless').withered, 3);
+  assert.equal(simulateBurgerAutoplay(73, 'endless').expired, 3);
+  assert.equal(simulateChopAutoplay(73, 'endless').junkHits, 3);
+  assert.equal(simulateGoalieAutoplay(73, 'endless').goals, 3);
+});
+
+test('V4/G73: Turbo and Riesen-Gooby apply only plain eligible tuning', () => {
+  const chopHard = applyChopDifficulty(CHOP, 'hard');
+  const turbo = applyTurbo(chopHard, { speedMult: 1.25, scoreMult: 1.5 });
+  assert.equal(turbo.SPEED_MULT, 1.25);
+  assert.equal(turbo.SCORE_MULT, 1.5);
+  assert.equal(chopFinalScore(101, turbo), 152, 'score multiplier rounds once at end');
+  assert.equal(turbo.HIT_RADIUS, chopHard.HIT_RADIUS, 'Turbo does not alter hitboxes');
+
+  const goalieHard = applyGoalieDifficulty(GOALIE, 'hard');
+  const giant = applyRiesenGooby(goalieHard, { scale: 1.6, hitboxMult: 1.3 });
+  assert.equal(giant.RENDER_SCALE, 1.6);
+  assert.equal(giant.HITBOX_MULT, 1.3);
+  assert.ok(Math.abs(giant.DIVE_HOLD_SEC - goalieHard.DIVE_HOLD_SEC * 1.3) < 1e-12);
+});
+
+test('V4/G73: ten-seed bot means are easy >= Mittel >= Schwer', () => {
+  for (const [id, simulate] of [
+    ['goobySays', simulateSaysAutoplay],
+    ['gardenRush', simulateRushAutoplay],
+    ['burgerBuild', simulateBurgerAutoplay],
+    ['veggieChop', simulateChopAutoplay],
+    ['goalieGooby', simulateGoalieAutoplay],
+  ]) {
+    const mean = (mode) => Array.from({ length: 10 }, (_, i) => simulate(i + 1, mode).score)
+      .reduce((sum, score) => sum + score, 0) / 10;
+    const easy = mean('easy');
+    const normal = mean('normal');
+    const hard = mean('hard');
+    assert.ok(easy >= normal, `${id}: easy ${easy} < normal ${normal}`);
+    assert.ok(normal >= hard, `${id}: normal ${normal} < hard ${hard}`);
+  }
+});
+
+test('V4/G73: five-seed Schwer certification reaches every frozen target', () => {
+  for (const [id, simulate] of [
+    ['goobySays', simulateSaysAutoplay],
+    ['gardenRush', simulateRushAutoplay],
+    ['burgerBuild', simulateBurgerAutoplay],
+    ['veggieChop', simulateChopAutoplay],
+    ['goalieGooby', simulateGoalieAutoplay],
+  ]) {
+    const scores = [1, 2, 3, 4, 5].map((seed) => simulate(seed, 'hard').score);
+    const target = TARGETS[id].target;
+    assert.ok(scores.some((score) => score >= target), `${id}: ${scores.join(',')} never reaches ${target}`);
+  }
+});
+// ═══════════════════════════════════════════════════════════ end V4/G73 ═══

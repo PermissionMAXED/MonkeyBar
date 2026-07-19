@@ -15,6 +15,7 @@ import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js';
 import {
   SAYS,
+  applyDifficulty,
   seqLengthAt,
   stepMsAt,
   extendSequence,
@@ -70,6 +71,10 @@ export default {
     this.ctx = ctx;
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
+    this.difficulty = ['easy', 'normal', 'hard', 'endless'].includes(ctx.params?.difficulty)
+      ? ctx.params.difficulty
+      : 'normal';
+    this.tune = applyDifficulty(SAYS, this.difficulty);
 
     // --- round state (all timing dt-accumulated → pause-safe) ---
     this.phase = 'idle'; // 'idle'|'watch'|'repeat'|'roundWon'|'over'|'done'
@@ -259,7 +264,7 @@ export default {
     this.lightPad(i);
     if (isChordStep(expected)) {
       if (!this.chordPending) {
-        const status = chordTapResult(expected, i);
+      const status = chordTapResult(expected, i, null, 0, this.tune);
         if (status !== 'waiting') {
           this.gameOver('mg.says.oops');
           return;
@@ -275,7 +280,8 @@ export default {
         expected,
         this.chordPending.firstPad,
         i,
-        this.chordPending.gapT * 1000
+        this.chordPending.gapT * 1000,
+        this.tune
       );
       this.chordPending = null;
       if (status !== 'complete') {
@@ -297,8 +303,8 @@ export default {
     if (this.inputIdx >= this.sequence.length) {
       this.roundsCompleted = this.round;
       this.round += 1;
-      this.score = SAYS.ROUND_POINTS * this.roundsCompleted;
-      this.ctx.onScore(SAYS.ROUND_POINTS);
+      this.score = this.tune.ROUND_POINTS * this.roundsCompleted;
+      this.ctx.onScore(this.tune.ROUND_POINTS);
       this.ctx.audio.play('combo.up');
       this.gooby.play('happyBounce');
       this.particles.emit('sparkles', this.gooby.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)), { count: 8 });
@@ -347,7 +353,7 @@ export default {
         if (this.playIdx < this.sequence.length) {
           this.lightStep(this.sequence[this.playIdx], { sing: true });
           this.playIdx += 1;
-          this.stepT = stepMsAt(this.round) / 1000;
+          this.stepT = stepMsAt(this.round, this.tune) / 1000;
         } else {
           this.startRepeat();
         }
@@ -359,12 +365,12 @@ export default {
       this.reactT += dt;
       if (this.chordPending) {
         this.chordPending.gapT += dt;
-        if (this.chordPending.gapT * 1000 > SAYS.CHORD_WINDOW_MS) {
+        if (this.chordPending.gapT * 1000 > this.tune.CHORD_WINDOW_MS) {
           this.gameOver('mg.says.chordLate');
           return;
         }
       }
-      if (this.reactT * 1000 > SAYS.INPUT_TIMEOUT_MS) {
+      if (this.reactT * 1000 > this.tune.INPUT_TIMEOUT_MS) {
         this.gameOver('mg.says.timeout');
         return;
       }
@@ -374,13 +380,13 @@ export default {
           const step = this.sequence[this.inputIdx];
           const chord = isChordStep(step);
           this.autoT = chord && !this.chordPending
-            ? Math.min(0.12, SAYS.CHORD_WINDOW_MS / 2000)
-            : SAYS.AUTOPLAY_TAP_MS / 1000;
+            ? Math.min(0.12, this.tune.CHORD_WINDOW_MS / 2000)
+            : this.tune.AUTOPLAY_TAP_MS / 1000;
           const want = chord
             ? (this.chordPending ? step.find((pad) => pad !== this.chordPending.firstPad) : step[0])
             : step;
           // Human-ish slip: ramps with round length, ends typical runs ~round 8.
-          const slip = !this.chordPending && this.ctx.rng() < autoplayErrAt(this.round);
+          const slip = !this.chordPending && this.ctx.rng() < autoplayErrAt(this.round, this.tune);
           this.pressPad(slip ? (want + 1 + Math.floor(this.ctx.rng() * (SAYS.PADS - 1))) % SAYS.PADS : want);
         }
       }
@@ -397,7 +403,7 @@ export default {
       this.endT += dt;
       if (this.endT >= 1.6) {
         this.phase = 'done';
-        const finalScore = roundScore(this.roundsCompleted, this.avgReactionMs());
+        const finalScore = roundScore(this.roundsCompleted, this.avgReactionMs(), this.tune);
         if (this.autoplay) {
           console.log(`[goobySays] autoplay run ended — score ${finalScore} (rounds ${this.roundsCompleted})`);
         }
@@ -421,6 +427,7 @@ export default {
     this.beams = [];
     this.ball = null;
     this.chordPending = null;
+    this.tune = null;
     this.stageGroup = null;
     this.ownedGeos = [];
     this.ownedMats = [];

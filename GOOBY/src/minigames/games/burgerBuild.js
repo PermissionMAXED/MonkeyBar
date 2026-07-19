@@ -16,6 +16,7 @@ import { applyEquippedOutfits } from '../../character/outfitAttach.js';
 import { clampFloatTextToView } from '../framework.js';
 import {
   BURGER,
+  applyDifficulty,
   MODEL_KEYS,
   makeTicket,
   nextNeeded,
@@ -27,9 +28,9 @@ import {
   orderPoints,
   rollSpawn,
   applyCatch,
+  endlessShouldEnd,
 } from './burgerBuild.logic.js';
 
-const PLATE_HALF_WIDTH = 0.78;
 const ITEM_SIZE = 0.62;
 /** Visual stack heights per layer id (world units). */
 const LAYER_HEIGHT = { bun: 0.2, patty: 0.13, cheese: 0.06, tomato: 0.07, salad: 0.1, onion: 0.07 };
@@ -129,6 +130,10 @@ export default {
     this.ctx = ctx;
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
+    this.difficulty = ['easy', 'normal', 'hard', 'endless'].includes(ctx.params?.difficulty)
+      ? ctx.params.difficulty
+      : 'normal';
+    this.tune = applyDifficulty(BURGER, this.difficulty);
 
     this.phase = 'play'; // 'play' | 'bite' | 'ending' | 'done'
     this.score = 0;
@@ -141,8 +146,9 @@ export default {
     this.autoTargetX = 0;
     this.orderNumber = 1;
     this.rushOrders = 0;
+    this.expired = 0;
     this.rush = isRushOrder(this.orderNumber);
-    this.orderT = orderTimerSec(this.rush);
+    this.orderT = orderTimerSec(this.rush, this.tune);
     this.ticketSecond = -1;
     this.propLogged = false;
 
@@ -265,7 +271,7 @@ export default {
     });
 
     ctx.hud.setScore(0);
-    ctx.hud.setTime(BURGER.DURATION_SEC);
+    ctx.hud.setTime(this.tune.ENDLESS ? 0 : this.tune.DURATION_SEC);
   },
 
   /** Redraw the order ticket: chips bottom-to-top, ✓ done, ▶ next needed. */
@@ -332,7 +338,7 @@ export default {
   spawnItem(elapsed) {
     const { rng } = this.ctx;
     const needed = this.phase === 'play' ? nextNeeded(this.ticket, this.placed) : null;
-    const id = rollSpawn(rng, needed, this.sinceNeeded);
+    const id = rollSpawn(rng, needed, this.sinceNeeded, this.tune);
     if (id === needed) this.sinceNeeded = 0;
     const holder = this.takeItem(id);
     const col = Math.min(2, Math.floor(rng() * 3));
@@ -356,7 +362,7 @@ export default {
    * @param {boolean} correct next-needed catch?
    */
   addCatchPoints(correct) {
-    const next = applyCatch(this.score, correct, this.rush);
+    const next = applyCatch(this.score, correct, this.rush, this.tune);
     const delta = next - this.score;
     this.score = next;
     if (delta !== 0) this.ctx.onScore(delta);
@@ -432,6 +438,13 @@ export default {
 
   /** After the bite: clear the plate and pull the next seeded ticket. */
   newTicket({ expired = false } = {}) {
+    if (expired) {
+      this.expired += 1;
+      if (endlessShouldEnd(this.expired, this.tune)) {
+        this.endRound();
+        return;
+      }
+    }
     for (const mesh of this.stackMeshes) this.plate.remove(mesh);
     this.stackMeshes = [];
     for (const item of this.items) {
@@ -445,7 +458,7 @@ export default {
     this.orderNumber += 1;
     this.rush = isRushOrder(this.orderNumber);
     if (this.rush) this.rushOrders += 1;
-    this.orderT = orderTimerSec(this.rush);
+    this.orderT = orderTimerSec(this.rush, this.tune);
     this.ticketSecond = -1;
     this.drawTicket();
     this.gooby.setEmotion('happy');
@@ -465,8 +478,8 @@ export default {
     this.autoT -= dt;
     if (this.autoT > 0) return;
     const { rng } = this.ctx;
-    this.autoT = BURGER.AUTOPLAY_TICK_SEC;
-    if (rng() < BURGER.AUTOPLAY_DISTRACT) {
+    this.autoT = this.tune.AUTOPLAY_TICK_SEC;
+    if (rng() < this.tune.AUTOPLAY_DISTRACT) {
       this.autoT = 0.7 + rng() * 1.0; // distraction — stop tracking for a bit
       return;
     }
@@ -484,6 +497,16 @@ export default {
       if (any) target = any.holder.position.x;
     }
     this.autoTargetX = THREE.MathUtils.clamp(target + (rng() - 0.5) * 0.5, -this.boundX, this.boundX);
+  },
+
+  endRound() {
+    if (this.phase === 'ending' || this.phase === 'done') return;
+    this.phase = 'ending';
+    this.endT = 0;
+    this.ctx.audio.play('ui.win');
+    this.gooby.setEmotion('ecstatic');
+    this.gooby.play('happyBounce');
+    this.particles.emit('confetti', this.gooby.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)), { count: 16 });
   },
 
   update(dt, elapsed) {
@@ -504,8 +527,8 @@ export default {
       return;
     }
 
-    const remaining = BURGER.DURATION_SEC - elapsed;
-    ctx.hud.setTime(remaining);
+    const remaining = this.tune.DURATION_SEC - elapsed;
+    ctx.hud.setTime(this.tune.ENDLESS ? elapsed : remaining);
     if (this.autoplay && !this.propLogged && elapsed > 0.5) {
       this.propLogged = true;
       console.log(`[burgerBuild] prop kaykit-restaurant/kitchencounter_straight — drawCalls ${ctx.renderer.info.render.calls}`);
@@ -525,7 +548,10 @@ export default {
         this.ticketSecond = ticketSecond;
         this.drawTicket();
       }
-      if (this.orderT <= 0) this.newTicket({ expired: true });
+      if (this.orderT <= 0) {
+        this.newTicket({ expired: true });
+        if (this.phase !== 'play') return;
+      }
     }
 
     if (this.autoplay) {
@@ -543,11 +569,11 @@ export default {
     this.spawnT -= dt;
     if (this.spawnT <= 0) {
       this.spawnItem(elapsed);
-      this.spawnT = BURGER.SPAWN_SEC;
+      this.spawnT = this.tune.SPAWN_SEC;
     }
 
     // falling items: §C1.2 +8%-per-burger ramp; catch at the plate band
-    const speed = fallSpeedAt(this.completed);
+    const speed = fallSpeedAt(this.completed, this.tune);
     const catchY = this.plateY + this.stackTopY + 0.12;
     for (const item of this.items) {
       if (!item.active) continue;
@@ -559,7 +585,7 @@ export default {
         this.phase === 'play' &&
         prevY > catchY &&
         h.position.y <= catchY &&
-        Math.abs(h.position.x - this.plateX) <= PLATE_HALF_WIDTH
+        Math.abs(h.position.x - this.plateX) <= this.tune.PLATE_HALF_WIDTH
       ) {
         this.catchItem(item);
         continue;
@@ -568,13 +594,7 @@ export default {
     }
     this.items = this.items.filter((i) => i.active);
 
-    if (remaining <= 0) {
-      this.phase = 'ending';
-      ctx.audio.play('ui.win');
-      this.gooby.setEmotion('ecstatic');
-      this.gooby.play('happyBounce');
-      this.particles.emit('confetti', this.gooby.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)), { count: 16 });
-    }
+    if (!this.tune.ENDLESS && remaining <= 0) this.endRound();
   },
 
   dispose() {
@@ -600,6 +620,7 @@ export default {
     this.ownedGeos = [];
     this.ownedMats = [];
     this.ownedTexs = [];
+    this.tune = null;
   },
 };
 export const controls = Object.freeze({ invertible: true }); // V4/G57 (§G2.1 rule 4, §G3.3): global „Steuerung invertieren“ applies (G56 proxy / carController invertSteer param)

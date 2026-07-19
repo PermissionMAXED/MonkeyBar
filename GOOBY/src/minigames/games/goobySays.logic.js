@@ -45,6 +45,40 @@ export const SAYS = Object.freeze({
   CHORD_WINDOW_MS: 250,
 });
 
+/** V4/G73 §G5 sequence/puzzle mode multipliers (base table stays Mittel). */
+export const SAYS_DIFFICULTY = Object.freeze({
+  easy: Object.freeze({ replaySpeed: 0.85, windowMult: 1.25, floorSteps: 0, botErrorMult: 0.75 }),
+  hard: Object.freeze({ replaySpeed: 1.15, windowMult: 0.8, floorSteps: 1, botErrorMult: 1.15 }),
+  endless: Object.freeze({ replaySpeed: 1.15, windowMult: 0.8, floorSteps: 1, botErrorMult: 1.15 }),
+});
+
+/**
+ * Derive a frozen §G5 tune. Mittel returns the exact base object; Endlos uses
+ * Schwer tuning but lets replay cadence continue below Mittel's 320 ms floor.
+ * @param {object} tune
+ * @param {'easy'|'normal'|'hard'|'endless'} mode
+ */
+export function applyDifficulty(tune = SAYS, mode = 'normal') {
+  if (mode === 'normal' || !Object.hasOwn(SAYS_DIFFICULTY, mode)) return tune;
+  const row = SAYS_DIFFICULTY[mode];
+  const hardFloor = tune.STEP_FLOOR_MS
+    * Math.pow(1 - tune.STEP_DECAY_PCT, row.floorSteps);
+  return Object.freeze({
+    ...tune,
+    STEP_BASE_MS: tune.STEP_BASE_MS / row.replaySpeed,
+    STEP_FLOOR_MS: mode === 'endless' ? 0 : hardFloor / (mode === 'easy' ? row.replaySpeed : 1),
+    INPUT_TIMEOUT_MS: Math.max(350, tune.INPUT_TIMEOUT_MS * row.windowMult),
+    // The inherited 250 ms chord window is below the v4 Schwer guardrail;
+    // hard/endless clamp to 350 ms instead of becoming impossible.
+    CHORD_WINDOW_MS: mode === 'hard' || mode === 'endless'
+      ? Math.max(350, tune.CHORD_WINDOW_MS * row.windowMult)
+      : tune.CHORD_WINDOW_MS * row.windowMult,
+    REACTION_FULL_MS: tune.REACTION_FULL_MS * row.windowMult,
+    REACTION_ZERO_MS: tune.REACTION_ZERO_MS * row.windowMult,
+    AUTOPLAY_ERR_MULT: row.botErrorMult,
+  });
+}
+
 /**
  * Sequence length played back in a given round (1-based): 3, 4, 5, … (§C1.2).
  * @param {number} round 1-based round number
@@ -59,9 +93,9 @@ export function seqLengthAt(round) {
  * @param {number} round 1-based round number
  * @returns {number} milliseconds per step
  */
-export function stepMsAt(round) {
-  const mult = Math.pow(1 - SAYS.STEP_DECAY_PCT, Math.max(1, round) - 1);
-  return Math.max(SAYS.STEP_FLOOR_MS, SAYS.STEP_BASE_MS * mult);
+export function stepMsAt(round, tune = SAYS) {
+  const mult = Math.pow(1 - tune.STEP_DECAY_PCT, Math.max(1, round) - 1);
+  return Math.max(tune.STEP_FLOOR_MS, tune.STEP_BASE_MS * mult);
 }
 
 /**
@@ -99,11 +133,11 @@ export function isChordStep(step) {
  * @param {number} gapMs elapsed between first and second tap
  * @returns {'waiting'|'complete'|'wrong'|'late'}
  */
-export function chordTapResult(step, firstPad, secondPad = null, gapMs = 0) {
+export function chordTapResult(step, firstPad, secondPad = null, gapMs = 0, tune = SAYS) {
   if (!isChordStep(step) || !step.includes(firstPad)) return 'wrong';
   if (secondPad == null) return 'waiting';
   if (secondPad === firstPad || !step.includes(secondPad)) return 'wrong';
-  return gapMs <= SAYS.CHORD_WINDOW_MS ? 'complete' : 'late';
+  return gapMs <= tune.CHORD_WINDOW_MS ? 'complete' : 'late';
 }
 
 /**
@@ -113,8 +147,9 @@ export function chordTapResult(step, firstPad, secondPad = null, gapMs = 0) {
  * @param {number} round 1-based round number
  * @returns {number} 0..AUTOPLAY_ERR_CAP
  */
-export function autoplayErrAt(round) {
-  return Math.min(SAYS.AUTOPLAY_ERR_CAP, SAYS.AUTOPLAY_ERR_RAMP * (Math.max(1, round) - 1));
+export function autoplayErrAt(round, tune = SAYS) {
+  const mult = tune.AUTOPLAY_ERR_MULT ?? 1;
+  return Math.min(tune.AUTOPLAY_ERR_CAP, tune.AUTOPLAY_ERR_RAMP * (Math.max(1, round) - 1) * mult);
 }
 
 /**
@@ -123,12 +158,12 @@ export function autoplayErrAt(round) {
  * @param {number} avgReactionMs
  * @returns {number} integer 0..8
  */
-export function speedBonus(avgReactionMs) {
+export function speedBonus(avgReactionMs, tune = SAYS) {
   if (!Number.isFinite(avgReactionMs)) return 0;
-  if (avgReactionMs <= SAYS.REACTION_FULL_MS) return SAYS.SPEED_BONUS_MAX;
-  if (avgReactionMs >= SAYS.REACTION_ZERO_MS) return 0;
-  const t = (avgReactionMs - SAYS.REACTION_FULL_MS) / (SAYS.REACTION_ZERO_MS - SAYS.REACTION_FULL_MS);
-  return Math.round(SAYS.SPEED_BONUS_MAX * (1 - t));
+  if (avgReactionMs <= tune.REACTION_FULL_MS) return tune.SPEED_BONUS_MAX;
+  if (avgReactionMs >= tune.REACTION_ZERO_MS) return 0;
+  const t = (avgReactionMs - tune.REACTION_FULL_MS) / (tune.REACTION_ZERO_MS - tune.REACTION_FULL_MS);
+  return Math.round(tune.SPEED_BONUS_MAX * (1 - t));
 }
 
 /**
@@ -138,7 +173,43 @@ export function speedBonus(avgReactionMs) {
  * @param {number} avgReactionMs average per-step reaction over the whole run
  * @returns {number}
  */
-export function roundScore(roundsCompleted, avgReactionMs) {
+export function roundScore(roundsCompleted, avgReactionMs, tune = SAYS) {
   if (roundsCompleted <= 0) return 0;
-  return SAYS.ROUND_POINTS * roundsCompleted + speedBonus(avgReactionMs);
+  return tune.ROUND_POINTS * roundsCompleted + speedBonus(avgReactionMs, tune);
+}
+
+/** Gooby Says is already run-until-fail; Endlos keeps the same one-mistake end. */
+export function endlessShouldEnd(mode, mistakes) {
+  return mode === 'endless' && mistakes >= 1;
+}
+
+/**
+ * Deterministic headless version of the shipped autoplay decisions. It is a
+ * certification surface, not a second rules engine: same round sizes, slip
+ * curve and derived tune as the live bot.
+ */
+export function simulateAutoplay(seed, mode = 'normal') {
+  const tune = applyDifficulty(SAYS, mode);
+  let a = seed >>> 0;
+  const rng = () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) | 0;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+  let completed = 0;
+  for (let round = 1; round <= 40; round += 1) {
+    let failed = false;
+    for (let step = 0; step < seqLengthAt(round); step += 1) {
+      if (rng() < autoplayErrAt(round, tune)) {
+        failed = true;
+        break;
+      }
+    }
+    if (failed) break;
+    completed = round;
+  }
+  const reactionMs = Math.min(tune.REACTION_FULL_MS, tune.AUTOPLAY_TAP_MS);
+  return Object.freeze({ seed, mode, rounds: completed, score: roundScore(completed, reactionMs, tune) });
 }
