@@ -1421,7 +1421,12 @@ function onHealthEvent(s, ev) {
     ui.toast('health.becameQueasy');
     audio.play('gooby.refuse');
   } else if (ev === 'becameSick') {
-    ui.toast('toast.sickNow'); // V4/G70 §C-SYS7.3: medicine + shop + vet options
+    // V4/G70b: the three cure routes are useful only if the transition notice
+    // leads straight to them. The optional toast action is one-shot and keeps
+    // every other passive toast unchanged.
+    ui.toast('toast.sickNow', undefined, {
+      onTap: () => ui.openPanel('careSheet'),
+    });
     audio.play('gooby.squeakDizzy');
   } else if (ev === 'recovered') {
     ui.toast('health.recovered');

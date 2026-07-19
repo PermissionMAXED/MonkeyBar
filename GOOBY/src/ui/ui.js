@@ -8,6 +8,7 @@
 import { t } from '../data/strings.js';
 
 /** @typedef {{mount: (el: HTMLElement, params?: object) => void, unmount: () => void}} UiModule */
+/** @typedef {{onTap?: () => void}} ToastOptions */
 
 const TOAST_MS = 2500;
 
@@ -30,30 +31,68 @@ export function createUi() {
   const activePanels = [];
   // V3/FIX-D (E20 P1-1): toast gate state — hold depth, held texts, live els.
   let toastHold = 0;
-  /** @type {string[]} */
+  /** @type {Array<{text: string, options?: ToastOptions}>} */
   const heldToasts = [];
   /** @type {Set<HTMLElement>} */
   const liveToasts = new Set();
+  /** @type {WeakMap<HTMLElement, ToastOptions|undefined>} */
+  const liveToastOptions = new WeakMap();
 
-  /** V3/FIX-D: render one toast element now (the pre-gate toast() body). */
-  function spawnToast(text) {
+  /**
+   * V3/FIX-D: render one toast element now (the pre-gate toast() body).
+   * V4/G70b: an optional tap action turns the notice into an accessible,
+   * one-shot button without changing passive toast behavior.
+   * @param {string} text
+   * @param {ToastOptions} [options]
+   */
+  function spawnToast(text, options) {
     const el = document.createElement('div');
     el.className = 'toast';
     el.textContent = text;
     root.appendChild(el);
     liveToasts.add(el);
-    setTimeout(() => {
+    liveToastOptions.set(el, options);
+
+    const dismiss = () => {
+      if (!el.isConnected || el.classList.contains('toast-out')) return;
       el.classList.add('toast-out');
       setTimeout(() => {
         liveToasts.delete(el);
         el.remove();
       }, 300);
-    }, TOAST_MS);
+    };
+    const timer = setTimeout(dismiss, TOAST_MS);
+
+    if (typeof options?.onTap === 'function') {
+      el.classList.add('toast-action');
+      el.setAttribute('role', 'button');
+      el.tabIndex = 0;
+      el.style.pointerEvents = 'auto';
+      el.style.cursor = 'pointer';
+      el.style.minHeight = '44px';
+      let activated = false;
+      const activate = () => {
+        if (activated) return;
+        activated = true;
+        clearTimeout(timer);
+        liveToasts.delete(el);
+        el.remove();
+        options.onTap();
+      };
+      el.addEventListener('click', activate, { once: true });
+      el.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        activate();
+      });
+    }
   }
 
-  /** V3/FIX-D: queue a toast text while the gate is closed (deduped). */
-  function holdToast(text) {
-    if (!heldToasts.includes(text)) heldToasts.push(text);
+  /** V3/FIX-D: queue a toast while the gate is closed (deduped by text). */
+  function holdToast(text, options) {
+    const existing = heldToasts.find((entry) => entry.text === text);
+    if (!existing) heldToasts.push({ text, options });
+    else if (!existing.options?.onTap && options?.onTap) existing.options = options;
   }
 
   const ui = {
@@ -169,14 +208,15 @@ export function createUi() {
      * closed — see holdToasts()/releaseToasts().
      * @param {string} textKey strings.js key
      * @param {Record<string, string|number>} [vars]
+     * @param {ToastOptions} [options]
      */
-    toast(textKey, vars) {
+    toast(textKey, vars, options) {
       const text = t(textKey, vars);
       if (toastHold > 0) {
-        holdToast(text);
+        holdToast(text, options);
         return;
       }
-      spawnToast(text);
+      spawnToast(text, options);
     },
 
     /**
@@ -190,7 +230,7 @@ export function createUi() {
       if (toastHold > 1) return;
       for (const el of [...liveToasts]) {
         const text = el.textContent ?? '';
-        if (text) holdToast(text);
+        if (text) holdToast(text, liveToastOptions.get(el));
         liveToasts.delete(el);
         el.remove();
       }
@@ -204,10 +244,10 @@ export function createUi() {
       toastHold = Math.max(0, toastHold - 1);
       if (toastHold > 0) return;
       const pending = heldToasts.splice(0);
-      pending.forEach((text, i) => {
+      pending.forEach((entry, i) => {
         setTimeout(() => {
-          if (toastHold > 0) holdToast(text); // a new modal opened mid-flush
-          else spawnToast(text);
+          if (toastHold > 0) holdToast(entry.text, entry.options); // a new modal opened mid-flush
+          else spawnToast(entry.text, entry.options);
         }, i * TOAST_FLUSH_STAGGER_MS);
       });
     },

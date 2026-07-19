@@ -83,11 +83,19 @@ test('G70 owned wiring opens existing chooser/fridge focus and marks both medici
   assert.match(care, /openPanel\('foodTray', \{ focusMedicine: true \}\)/);
   assert.match(care, /openPanel\('shopTripConfirm', \{ mode: 'shopTrip' \}\)/);
   assert.equal((care.match(/data-care-action="/g) ?? []).length, 4);
+  assert.match(care, /\.panel-careSheet\{max-height:100%;overflow-y:auto/);
+  assert.match(care, /data-ui-scale="130".+g20-care \.btn.+2\.75rem/);
 
   const interactions = read('../src/home/interactions.js');
-  assert.match(interactions, /ui\.toast\('toast\.sickNow'\)/);
+  assert.match(interactions, /ui\.toast\('toast\.sickNow', undefined, \{/);
+  assert.match(interactions, /onTap: \(\) => ui\.openPanel\('careSheet'\)/);
   assert.match(interactions, /tray-care-item\.g70-sick-medicine/);
   assert.match(interactions, /store\.get\('health\.state'\) === 'sick'/);
+
+  const ui = read('../src/ui/ui.js');
+  assert.match(ui, /toast\(textKey, vars, options\)/);
+  assert.match(ui, /classList\.add\('toast-action'\)/);
+  assert.match(ui, /role', 'button'/);
 
   const shop = read('../src/ui/shopScreen.js');
   assert.match(shop, /\['care', 'shop\.tab\.care', renderCare\]/);

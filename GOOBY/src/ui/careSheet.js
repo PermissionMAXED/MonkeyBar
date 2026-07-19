@@ -34,6 +34,14 @@ const CSS = `
 .g20-care .btn{width:100%;min-height:max(44px, 3.25rem);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;}
 .g20-care-sub{font-size:0.6875rem;font-weight:700;opacity:.85;}
 .g20-care .btn:disabled{opacity:.55;}
+/* V4/G70b: this is the tallest bottom sheet at maximum UI scale. Keep the
+   frame inside the viewport and retain touch scrolling for shorter devices. */
+.panel-careSheet{max-height:100%;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;}
+@media (max-width:340px){
+  :root[data-ui-scale="130"] .g20-care{gap:0.5rem;}
+  :root[data-ui-scale="130"] .g20-care-actions{gap:0.375rem;}
+  :root[data-ui-scale="130"] .g20-care .btn{min-height:max(44px, 2.75rem);}
+}
 `;
 
 let stylesInjected = false;
