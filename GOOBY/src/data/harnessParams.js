@@ -51,6 +51,7 @@ export const HARNESS_PARAM_GROUPS = Object.freeze([
       Object.freeze({ param: 'minigame', example: '?minigame=carrotCatch', en: 'direct minigame launch (bypasses level locks)', de: 'Minispiel direkt starten (umgeht Level-Locks)' }),
       Object.freeze({ param: 'open', example: '?open=settings', en: 'open a screen (shop|wardrobe|achievements|arcade|settings|questBoard|album|profile|devPanel)', de: 'Screen öffnen (shop|wardrobe|achievements|arcade|settings|questBoard|album|profile|devPanel)' }),
       Object.freeze({ param: 'travel', example: '?travel=surf', en: 'direct shop trip via surf|drive', de: 'Einkaufsfahrt direkt via surf|drive' }),
+      Object.freeze({ param: 'recappreview', example: '?recappreview=meadow', en: 'standalone recap-vignette preview (biome id or 1..8) — V4/G63', de: 'Recap-Vignette einzeln rendern (Biome-Id oder 1..8) — V4/G63' }), // V4/G63 one-liner
     ]),
   }),
   Object.freeze({

@@ -24,6 +24,8 @@
 //                            lock like ?minigame= bypasses level locks)
 //   ?invertx=1 ?inverty=1    V4/G56 (§G3.3): set the „Steuerung invertieren"
 //                            toggles for this session
+//   ?recappreview=<biome>    V4/G63 (§C-SYS2.3): standalone recap-vignette
+//                            preview (biome id or 1..8) + __recapPreview probe
 //
 // `?scene=gooby` expects agent G3's `src/character/showcase.js` to provide:
 //
@@ -158,6 +160,22 @@ export async function postBoot({ store, ui, sceneManager, framework }) {
     await sceneManager.switchTo('home', { room: q.get('room') ?? undefined });
     return true;
   }
+
+  // ---- V4/G63: ?recappreview=<biome|1..8> (PLAN4 §B5.4/§C-SYS2.3, marked
+  // append) ---- dev-only standalone render of ONE recap biome vignette
+  // (meadow|city|harbor|space|spookGarden|bakery|nightSky|toyRoom) with its
+  // dolly looping — the §E evidence surface for draw calls/leak cycles via
+  // window.__recapPreview. Production playback is G64's recap screen.
+  const recapPreview = q.get('recappreview');
+  if (recapPreview) {
+    const { createVignettePreviewScene, PREVIEW_ASSET_KEYS } = await import('../recap/vignettePreview.js');
+    if (!sceneManager.has('recapPreview')) {
+      sceneManager.register('recapPreview', createVignettePreviewScene, [...PREVIEW_ASSET_KEYS]);
+    }
+    await sceneManager.switchTo('recapPreview', { biome: recapPreview });
+    return true;
+  }
+  // ---- end V4/G63 append ----
 
   // ---- V3/G39: ?scene=roadtest (PLAN3 §C7.1-1, marked append) ----
   // Dev-only road-piece orientation grid: all 5 city-kit-roads pieces at
