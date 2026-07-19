@@ -32,6 +32,12 @@
 //                         — this module store-follows them live and applies
 //                         gain = (v/100)² per bus (§B2.2), master ×0.9 base.
 //   stop(id)            — stop a looping sfx (snore).
+//   setLoopGain(id, g)  — V4/G51 (§E0.1-16): live gain 0..1 of a RUNNING loop
+//                         sfx (the §G4.5 surf wind layer); no-op otherwise.
+//   radio               — V4/G51 (§B2.3): the MediaElement radio engine
+//                         (radioPlayer.js) — element→trackGain→radioGain→
+//                         bus.music, attached in init(), muted airtight with
+//                         settings.music, ducked by danceParty/recap.
 //   impact(style)       — haptics: guarded @capacitor/haptics dynamic import
 //                         + navigator.vibrate fallback; sfxMap defs carry a
 //                         `haptic` field.
@@ -54,6 +60,9 @@ import { DANCE } from '../data/constants.js';
 import { getSfxDef, busFor } from './sfxMap.js';
 import { VOICE_RECIPES } from './goobyVoice.js';
 import musicDirector, { MEDLEY, MEDLEY_CONTEXTS } from './musicDirector.js';
+// V4/G51 (PLAN4 §B2.3): the MediaElement radio engine — deps injected in
+// init() (radio.attach), no import cycle (radioPlayer never imports audio.js).
+import radio from './radioPlayer.js';
 
 const DEV = !!import.meta.env?.DEV;
 
@@ -69,6 +78,9 @@ let analyser = null;
 let analyserBuf = null;
 /** @type {GainNode|null} quiet staging of the synth sequencer (MUSIC_LEVEL) */
 let seqGain = null;
+/** @type {GainNode|null} V4/G51 (§B2.3): the radio's fade stage under
+ * bus.music — element → mediaElementSource → trackGain → radioGain → music. */
+let radioGain = null;
 
 /** Runtime volume multipliers (setVolume) — combined with the enabled flags. */
 const volumes = { sfx: 1, music: 1 };
@@ -173,6 +185,9 @@ function applySettings(settings) {
   // V3/G32 (§C2.3): the same airtight rule extends to the medley director —
   // setEnabled tears its scheduler down / resumes the remembered context.
   musicDirector.setEnabled(enabled.music);
+  // V4/G51 (§B2.4): …and verbatim to the radio — element pause() + zero node
+  // creation while settings.music is off; the persisted wish resumes on re-on.
+  radio.setEnabled(enabled.music);
   if (!enabled.music) {
     stopMusic();
   } else if (ctx && wantTrack != null && wantTrack === 'dance' && seq?.id !== wantTrack) {
@@ -303,6 +318,18 @@ export function init() {
     loadBuffer,
     getCachedBuffer,
   });
+  // ── V4/G51 (PLAN4 §B2.3/§B2.4): radio wiring ───────────────────────────────
+  // radioGain sits UNDER bus.music so the music slider/mute stay exactly
+  // (v/100)² on the bus; the engine drives its 300 ms transition fades here.
+  // The HTMLAudioElement itself is created lazily on the first radio start
+  // (createMediaElementSource exactly once per element — §B2.3 reuse rule).
+  // attach() also resumes the persisted radio.playing wish — init() runs on
+  // the first user gesture, so el.play() is gesture-sanctioned.
+  radioGain = ctx.createGain();
+  radioGain.gain.value = 1;
+  radioGain.connect(bus.music);
+  radio.attach({ ctx, radioGain });
+  // ── end V4/G51 ─────────────────────────────────────────────────────────────
 
   // Mute persistence (§D6): follow save settings now + live (§E2 store events).
   try {
@@ -1007,6 +1034,41 @@ const LOOP_RECIPES = {
 // play / stop
 // ---------------------------------------------------------------------------
 
+// ── V4/G51 (PLAN4 §E0.1-16): per-loop gain stage for setLoopGain ─────────────
+/**
+ * Wrap a STARTING loop with its own gain node so setLoopGain(id, g) can ride
+ * the live loop (PLAN4-GAMES §G4.5 wind layer). wrap(handle) produces the
+ * loops-map entry ({stop, gain}); stop() defers the stage disconnect past the
+ * recipe's own fade-out (rain fades ~1.2 s).
+ * @param {AudioNode} dest the routed bus
+ */
+function loopStage(dest) {
+  const gain = ctx.createGain();
+  gain.gain.value = 1;
+  gain.connect(dest);
+  return {
+    dest: gain,
+    wrap(handle) {
+      return {
+        gain,
+        stop() {
+          try {
+            handle.stop();
+          } catch { /* already stopped */ }
+          const cleanup = () => {
+            try {
+              gain.disconnect();
+            } catch { /* already gone */ }
+          };
+          if (typeof setTimeout === 'function') setTimeout(cleanup, 1500);
+          else cleanup();
+        },
+      };
+    },
+  };
+}
+// ── end V4/G51 ───────────────────────────────────────────────────────────────
+
 /**
  * Play a one-shot sfx by semantic id (§D6). Unknown ids warn in dev builds
  * (the coverage test in test/onboarding.test.js keeps the map complete).
@@ -1051,8 +1113,16 @@ export function play(id, opts = {}) {
       if (loops.has(id)) return; // already running
       const make = LOOP_RECIPES[def.name];
       if (make) {
-        const handle = make(dest, vol);
-        if (handle?.stop) loops.set(id, handle);
+        // V4/G51 (§E0.1-16): loops start behind their own gain stage.
+        const stage = loopStage(dest);
+        const handle = make(stage.dest, vol);
+        if (handle?.stop) {
+          loops.set(id, stage.wrap(handle));
+        } else {
+          try {
+            stage.dest.disconnect();
+          } catch { /* already gone */ }
+        }
       } else if (DEV) console.warn(`[audio] unknown loop recipe '${def.name}'`);
     } else if (def.kind === 'synth') {
       const recipe = SYNTH_RECIPES[def.name];
@@ -1068,8 +1138,16 @@ export function play(id, opts = {}) {
       }
       if (def.loop) {
         if (loops.has(id)) return; // already snoring
-        const handle = recipe(ctx, dest, { volume: vol });
-        if (handle?.stop) loops.set(id, handle);
+        // V4/G51 (§E0.1-16): loops start behind their own gain stage.
+        const stage = loopStage(dest);
+        const handle = recipe(ctx, stage.dest, { volume: vol });
+        if (handle?.stop) {
+          loops.set(id, stage.wrap(handle));
+        } else {
+          try {
+            stage.dest.disconnect();
+          } catch { /* already gone */ }
+        }
       } else {
         recipe(ctx, dest, { volume: vol });
       }
@@ -1217,6 +1295,9 @@ export function music(id) {
     return;
   }
   musicDirector.setSuppressed(id === 'dance');
+  // V4/G51 (§B2.4): danceParty ALWAYS ducks the radio (pause + remember) —
+  // the radio resumes when the dance track releases the bus.
+  radio.duck(id === 'dance', 'dance');
   if (id == null) {
     stopMusic();
     musicDirector.setContext(null);
@@ -1273,6 +1354,24 @@ export function setVolume(kind, v) {
   }
   applyGains();
 }
+
+// ── V4/G51 (PLAN4 §E0.1-16 / PLAN4-GAMES §G4.5): live loop gain ──────────────
+/**
+ * Set the gain of a RUNNING loop sfx (e.g. 'ambience.windRun' intensity
+ * 0→0.5 with surf speed, updated every 0.25 s). Contract per §E0.1-16:
+ * no-op when the loop isn't playing; zero nodes while music-muted (a muted
+ * bus parks its loops, so the not-playing no-op covers it — this function
+ * only writes an AudioParam, it never creates nodes).
+ * @param {string} id loop sfx id
+ * @param {number} gain01 0..1
+ */
+export function setLoopGain(id, gain01) {
+  const handle = loops.get(id);
+  if (!ctx || !handle?.gain) return;
+  const g = Math.min(1, Math.max(0, Number(gain01) || 0));
+  ramp(handle.gain.gain, g, ctx.currentTime, 0.05);
+}
+// ── end V4/G51 ───────────────────────────────────────────────────────────────
 
 /** @type {Promise<object|null>|null} cached Haptics plugin lookup */
 let hapticsPlugin = null;
@@ -1375,7 +1474,12 @@ export function previewBus(busId) {
  *                 overlays, bar, phrase, sourcesLive, nextBarAt,
  *                 schedule[≤24 of {bar, key, at}], barsScheduled,
  *                 jinglesScheduled, contextSwitches, barsSkipped (V3/FIX-B:
- *                 bars fast-forwarded past after a stall), enabled, suppressed}
+ *                 bars fast-forwarded past after a stall), enabled, suppressed,
+ *                 radioActive (V4/G51 §B2.4)}
+ *   radio       — V4/G51 (§B2.3): radioPlayer.getStats(): {playing, station,
+ *                 trackId, t, duration, gain, radioGain, elementState,
+ *                 shuffle, replaceContext, enabled, ducked[], context, queue,
+ *                 allDisabled, started, transitions, errors}
  *   masterPeakDb — instantaneous post-limiter peak (dBFS; null pre-init/stub)
  */
 export function getStats() {
@@ -1407,6 +1511,7 @@ export function getStats() {
       pinned: [...(pinnedKeys() ?? [])].filter((k) => bufferCache.get(k)?.buffer != null).length,
     },
     medley,
+    radio: radio.getStats(), // V4/G51 (§B2.3)
     masterPeakDb: masterPeakDb(),
   };
 }
@@ -1414,4 +1519,8 @@ export function getStats() {
 export default {
   init, play, music, getMusicTime, setVolume, stop, impact, getStats,
   preloadSamples, previewBus, volumeGain, sanitizeVolumes,
+  // V4/G51: setLoopGain per §E0.1-16; `radio` exposes the §B2.3 engine
+  // (start/stop/toggle/skip/setStation/setShuffle/setTrim/now/duck/
+  // playContext/getTime/getStats) for G52's panel + the recap director.
+  setLoopGain, radio,
 };

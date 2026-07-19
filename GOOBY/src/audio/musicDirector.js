@@ -261,6 +261,12 @@ let deps = null; // { ctx, dest, loadBuffer, getCachedBuffer }
 let enabled = true;
 /** True while the danceParty synth sequencer owns the music bus (§C3.4). */
 let suppressed = false;
+// ── V4/G51 (PLAN4 §B2.4): radio suppression gate ─────────────────────────────
+/** True while the radio is audible AND radio.replaceContext — the radio
+ * REPLACES the medley (owner 1f: the medley stays the fallback only). Same
+ * mechanics as the danceParty setSuppressed gate; radioPlayer.js drives it. */
+let radioActive = false;
+// ── end V4/G51 ───────────────────────────────────────────────────────────────
 /** Base (scene-level) context — setContext(). */
 let baseCtx = null;
 /** Overlay stack (arcade/shop screens) — pushContext/popContext. */
@@ -420,7 +426,9 @@ function stopPlayer(fadeSec = CONTEXT_FADE_SEC) {
 
 /** Reconcile the live player with the wanted context (the single decider). */
 function apply(fadeSec = CONTEXT_FADE_SEC) {
-  const want = !deps || !enabled || suppressed ? null : effectiveContext();
+  // V4/G51 (§B2.4): radioActive joins the gate chain — while the radio owns
+  // the music bus the medley is silent (and creates zero nodes).
+  const want = !deps || !enabled || suppressed || radioActive ? null : effectiveContext();
   if (player?.context === want) return;
   if (player) stopPlayer(fadeSec);
   if (want) startPlayer(want);
@@ -452,6 +460,21 @@ export function setSuppressed(on) {
   suppressed = !!on;
   apply(suppressed ? 0.2 : CONTEXT_FADE_SEC);
 }
+
+// ── V4/G51 (PLAN4 §B2.4): the radio suppression gate ─────────────────────────
+/**
+ * True while the radio is audible AND radio.replaceContext (§B2.4) — the
+ * medley crossfades out (0.4 s) and stays torn down (zero nodes) until the
+ * radio releases the bus; the context WISH is remembered, so stopping the
+ * radio resumes the scene's medley exactly like a danceParty exit.
+ * @param {boolean} on
+ */
+export function setRadioActive(on) {
+  if (radioActive === !!on) return;
+  radioActive = !!on;
+  apply(radioActive ? 0.4 : CONTEXT_FADE_SEC);
+}
+// ── end V4/G51 ───────────────────────────────────────────────────────────────
 
 /**
  * §B2.4 contract: set the scene-level medley context (crossfades 800 ms).
@@ -506,6 +529,7 @@ export function getStats() {
     overlays: [...overlays],
     enabled,
     suppressed,
+    radioActive, // V4/G51 (§B2.4)
     bar: player?.bar ?? 0,
     phrase: player?.phrase ?? 0,
     sourcesLive: player?.sources.size ?? 0,
@@ -551,9 +575,10 @@ export function reset() {
   baseCtx = null;
   overlays = [];
   suppressed = false;
+  radioActive = false; // V4/G51
 }
 
 export default {
-  attach, setEnabled, setSuppressed, setContext, pushContext, popContext,
-  activeContext, getTime, getStats, previewJingle, reset,
+  attach, setEnabled, setSuppressed, setRadioActive, setContext, pushContext,
+  popContext, activeContext, getTime, getStats, previewJingle, reset,
 };

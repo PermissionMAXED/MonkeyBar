@@ -70,7 +70,10 @@ export default [
   js.configs.recommended,
   {
     languageOptions: {
-      ecmaVersion: 2023,
+      // V4/G51: 2023 → 2025 so import attributes parse — Node 22 REQUIRES
+      // `with { type: 'json' }` on the §B2.2 committed musicManifest.json
+      // import (musicRegistry.js); espree 10.4 supports it from 2025.
+      ecmaVersion: 2025,
       sourceType: 'module',
       globals: { ...sharedGlobals, ...browserGlobals, ...nodeGlobals },
     },
