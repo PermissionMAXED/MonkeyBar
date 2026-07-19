@@ -99,15 +99,20 @@ test('G69: daily pet/photo counters are live and stale days display zero', () =>
   assert.equal(rows.photo.used, 0);
 });
 
-test('G69: next unlock and recap preview are correct at L11 and the L40 cap', () => {
-  const beforeWelt = buildXpInfoData({ level: 11, xp: 0, achievements: { counters: {} } });
-  assert.deepEqual(beforeWelt.nextUnlock, {
-    level: 12,
-    kind: 'minigame',
-    nameKey: 'mg.title.goobyWelt',
-  });
-  assert.equal(beforeWelt.recapLevel, 15);
+test('G69: next unlock preview is correct at the L4/L9/L11 acceptance fixtures', () => {
+  const fixtures = [
+    [4, 5, 'minigame', 'mg.title.burgerBuild', 5],
+    [9, 10, 'minigame', 'mg.title.trampoline', 10],
+    [11, 12, 'minigame', 'mg.title.goobyWelt', 15],
+  ];
+  for (const [level, unlockLevel, kind, nameKey, recapLevel] of fixtures) {
+    const data = buildXpInfoData({ level, xp: 0, achievements: { counters: {} } });
+    assert.deepEqual(data.nextUnlock, { level: unlockLevel, kind, nameKey });
+    assert.equal(data.recapLevel, recapLevel);
+  }
+});
 
+test('G69: max level shows all content and recaps unlocked', () => {
   const maxed = buildXpInfoData({ level: 40, xp: 999, achievements: { counters: {} } });
   assert.equal(maxed.nextUnlock, null);
   assert.equal(maxed.recapLevel, null);
@@ -177,6 +182,8 @@ test('G69: EN/DE keys are complete and UI entry/toast wiring is marked', () => {
   assert.match(main, /registerXpInfoSheet\(\{ store, ui, audio \}\)/);
   assert.match(main, /consumeRecentXpSource\(\)/);
   assert.match(hud, /V4\/G69[\s\S]*?ui\.openPanel\('xpInfo'\)/);
+  assert.match(hud, /dataset\.hud = 'xpHelp'/);
+  assert.match(hud, /ring\.before\(xpHelp\)/);
   assert.match(profile, /data-g69="open"/);
   assert.match(profile, /ui\.openPanel\('xpInfo'\)/);
 });

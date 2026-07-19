@@ -137,6 +137,24 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
     event.preventDefault();
     openXpInfo();
   });
+  // Keep the full ring tap target, and add the requested compact visual cue
+  // beside it. The visible dot is small; the button still has a 44px hit area.
+  if (!document.querySelector('style[data-owner="v4-g69-hud-xp"]')) {
+    const xpHelpStyle = document.createElement('style');
+    xpHelpStyle.dataset.owner = 'v4-g69-hud-xp';
+    xpHelpStyle.textContent = `
+.g69-hud-xp-help{pointer-events:auto;display:inline-flex;align-items:center;justify-content:center;width:max(44px,1.75rem);height:max(44px,1.75rem);padding:0;border:0;background:transparent;color:var(--teal-dark);cursor:pointer;-webkit-tap-highlight-color:transparent;}
+.g69-hud-xp-help-mark{display:inline-flex;align-items:center;justify-content:center;width:1.375rem;height:1.375rem;border-radius:50%;background:rgba(255,255,255,.94);box-shadow:var(--shadow-soft);font:900 .75rem/1 system-ui,sans-serif;}
+.g69-hud-xp-help:active .g69-hud-xp-help-mark{transform:scale(.9);}
+`;
+    document.head.appendChild(xpHelpStyle);
+  }
+  const xpHelp = document.createElement('button');
+  xpHelp.className = 'g69-hud-xp-help';
+  xpHelp.dataset.hud = 'xpHelp';
+  xpHelp.setAttribute('aria-label', t('xp.openLabel'));
+  xpHelp.innerHTML = '<span class="g69-hud-xp-help-mark" aria-hidden="true">?</span>';
+  xpHelp.addEventListener('click', openXpInfo);
   // ══════════════════════════════════════════════════════ end V4/G69 ═══
 
   // ---- V4/G52: playing-only HUD radio chip (§C-SYS1.3) --------------------
@@ -181,6 +199,7 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
     store.on('change', syncRadioChip),
   ];
   meta.append(coins, radioChip, ring);
+  ring.before(xpHelp); // V4/G69: small „?" affordance beside the HUD XP ring (§C-SYS3.2)
   syncRadioChip();
   // ---- end V4/G52 HUD radio chip -------------------------------------------
   top.appendChild(meta);
@@ -469,6 +488,7 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
     for (const key of STATS.KEYS) statEls[key].pill.title = t(`stat.${key}`);
     ring.querySelector('.g5-ring-cap').textContent = t('ui.level');
     ring.setAttribute('aria-label', t('xp.openLabel')); // V4/G69: live-language XP entry label
+    xpHelp.setAttribute('aria-label', t('xp.openLabel')); // V4/G69: live-language „?" label
   }
   const offs = [
     store.on('statsChanged', refresh),
