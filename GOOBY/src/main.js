@@ -272,10 +272,37 @@ async function boot() {
   const timeEngine = createTimeEngine(store);
   timeEngine.start();
 
+  // ---- V4/G56 (§C-SYS3.3, marked block): level-up toast + next-unlock ----
+  // preview „ · Nächstes: {name} (L{n})" via leveling.nextUnlock. Lazy import
+  // of the strings module (§E0.1-11 fallback until G53 spreads it); when the
+  // next unlock's name key resolves nowhere yet, the toast falls back to the
+  // exact v3 copy — never a raw key on screen.
   store.on('levelUp', ({ level }) => {
-    ui.toast('toast.levelUp', { level, coins: XP.LEVEL_UP_COINS_PER_LEVEL * level });
+    const coins = XP.LEVEL_UP_COINS_PER_LEVEL * level;
+    Promise.all([import('./systems/leveling.js'), import('./data/strings/v4-difficulty.js'), import('./data/strings.js')])
+      .then(([{ nextUnlock }, diffStrings, { t, getLang }]) => {
+        const next = nextUnlock(level);
+        const local = getLang() === 'de' ? diffStrings.DE : diffStrings.EN;
+        const tx = (key) => (t(key) !== key ? t(key) : local[key] ?? key);
+        const name = next ? tx(next.nameKey) : tx('unlock.all');
+        const template = tx('toast.levelUpNext');
+        if (name === (next ? next.nameKey : 'unlock.all') || template === 'toast.levelUpNext') {
+          ui.toast('toast.levelUp', { level, coins }); // fallback: v3 copy
+          return;
+        }
+        const text = next
+          ? template
+            .replaceAll('{level}', String(level))
+            .replaceAll('{coins}', String(coins))
+            .replaceAll('{name}', name)
+            .replaceAll('{n}', String(next.level))
+          : `${t('toast.levelUp', { level, coins })} · ${name}`;
+        ui.toast(text); // pre-substituted — ui.toast's t() misses and passes it through
+      })
+      .catch(() => ui.toast('toast.levelUp', { level, coins }));
     audio.play('jingle.levelUp');
   });
+  // ---- end V4/G56 block ----
   if (loaded.recovered) ui.toast('boot.saveCorrupt');
 
   // ---- V4/G55: recap trigger plumbing (PLAN4 §B5.2/§C-SYS2.1, single marked block) ----

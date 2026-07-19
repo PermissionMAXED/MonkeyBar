@@ -14,7 +14,9 @@ import { ENGINE } from '../data/constants.js';
  * @property {(params?: object) => (void|Promise<void>)} [enter]
  * @property {(dt: number) => void} [update] dt in real seconds (clamped)
  * @property {() => void} [exit]
- * @property {() => void} [dispose] must free geometries/materials it created
+ * @property {() => (void|Promise<void>)} [dispose] must free geometries/
+ *   materials it created. V4/G56 (§G6.6): MAY return a Promise (goobyWelt's
+ *   splat release) — switchTo awaits it before building the next scene.
  */
 
 /**
@@ -169,7 +171,11 @@ export function createSceneManager({ canvas, assets, input, audio, store, ui }) 
         if (current) {
           try {
             current.instance.exit?.();
-            current.instance.dispose?.();
+            // V4/G56 (§G6.6): a Promise-returning dispose (async splat
+            // release) is AWAITED so the old scene's GPU resources are gone
+            // before the next scene builds. Sync disposes return undefined —
+            // awaiting that is a no-op (existing scenes unaffected).
+            await current.instance.dispose?.();
           } catch (err) {
             console.error('[sceneManager] error disposing scene:', err);
           }

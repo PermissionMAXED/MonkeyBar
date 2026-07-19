@@ -19,6 +19,11 @@
 //                            travel method right after boot (like ?shoptrip=1;
 //                            combine with ?autopilot=1) — implemented in
 //                            systems/shopTrip.js next to ?shoptrip/?vettrip
+//   ?difficulty=easy|normal|hard|endless   V4/G56 (§G5.5): force the mode for
+//                            ?minigame= launches (dev — bypasses the endless
+//                            lock like ?minigame= bypasses level locks)
+//   ?invertx=1 ?inverty=1    V4/G56 (§G3.3): set the „Steuerung invertieren"
+//                            toggles for this session
 //
 // `?scene=gooby` expects agent G3's `src/character/showcase.js` to provide:
 //
@@ -125,10 +130,30 @@ export async function postBoot({ store, ui, sceneManager, framework }) {
   if (q.get('notch') === '1') setFakeNotch(true);
   // ---- end V3/G33 append ----
 
+  // ---- V4/G56: difficulty + invert params (§G5.5/§G3.3, marked append) ----
+  // ?invertx=1 / ?inverty=1 flip the persisted settings.controls toggles for
+  // the session (container created defensively until G53's save v4 lands).
+  // ?difficulty= rides the ?minigame= launch below (dev:true already
+  // bypasses the endless lock inside framework.launch).
+  const invertX = q.get('invertx');
+  const invertY = q.get('inverty');
+  if (invertX != null || invertY != null) {
+    store.update((state) => {
+      if (state.settings.controls == null || typeof state.settings.controls !== 'object') {
+        state.settings.controls = { invertX: false, invertY: false };
+      }
+      if (invertX != null) state.settings.controls.invertX = invertX === '1';
+      if (invertY != null) state.settings.controls.invertY = invertY === '1';
+    });
+    store.flush();
+  }
+  const difficulty = q.get('difficulty') ?? undefined;
+  // ---- end V4/G56 append ----
+
   // --- routing ---
   const minigame = q.get('minigame');
   if (minigame) {
-    const ok = await framework.launch(minigame, { dev: true });
+    const ok = await framework.launch(minigame, { dev: true, difficulty }); // V4/G56: + ?difficulty=
     if (ok) return true;
     await sceneManager.switchTo('home', { room: q.get('room') ?? undefined });
     return true;

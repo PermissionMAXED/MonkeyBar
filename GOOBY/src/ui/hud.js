@@ -347,6 +347,66 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
   syncAlbumDot();
   // ══════════════════════════════════════════════════════ end V4/G59 ═══
 
+  // ══════════════════════════════════════════════════════════ V4/G56 ═══
+  // XP floaters (PLAN4 §C-SYS3.1): every XP grant emits the runtime
+  // 'xpGranted {amount, source}' event from systems/leveling.js (single-emit
+  // ruling §E0.1-13); the HUD floats „+{n} XP" — 14px (0.875rem) bold, rises
+  // 2.5rem (40px) + fades over 900ms, max 3 visible, further grants COALESCE
+  // into the newest floater's number (its animation restarts). The layer is
+  // a FIXED sibling pinned over the level ring's HUD spot so floaters stay
+  // visible when the home HUD itself is hidden (minigame results, quest
+  // board) — §C-SYS3.1 fires on minigame end too.
+  if (!document.querySelector('style[data-owner="g56-hud-xp"]')) {
+    const g56Style = document.createElement('style');
+    g56Style.dataset.owner = 'g56-hud-xp';
+    g56Style.textContent = `
+.g56-xp-layer{position:absolute;top:calc(max(0.625rem, var(--safe-top)) + 3.1rem);right:max(0.875rem, var(--safe-right));width:0;height:0;pointer-events:none;z-index:620;}
+.g56-xp-floater{position:absolute;right:0;bottom:0;font-size:0.875rem;font-weight:800;color:var(--teal);text-shadow:0 0.0625rem 0 rgba(255,255,255,.85);white-space:nowrap;pointer-events:none;animation:g56xpfloat 900ms ease-out forwards;}
+@keyframes g56xpfloat{0%{opacity:0;transform:translateY(0);}15%{opacity:1;}100%{opacity:0;transform:translateY(-2.5rem);}}`;
+    document.head.appendChild(g56Style);
+  }
+  const xpLayer = document.createElement('div');
+  xpLayer.className = 'g56-xp-layer';
+  ui.el.appendChild(xpLayer);
+  /** §E0.1-11 fallback until G53 spreads strings/v4-difficulty.js. */
+  function xpFloaterText(n) {
+    const global = t('hud.xpFloater', { n });
+    return global !== 'hud.xpFloater' ? global : `+${n} XP`;
+  }
+  /** @type {Array<{el: HTMLElement, amount: number, timer: number}>} */
+  const xpFloaters = [];
+  function retireXpFloater(f) {
+    f.el.remove();
+    const i = xpFloaters.indexOf(f);
+    if (i >= 0) xpFloaters.splice(i, 1);
+  }
+  function onXpGranted(payload) {
+    const amount = Math.floor(Number(payload?.amount) || 0);
+    if (amount <= 0) return; // amount-0 grants emit nothing anyway (§C-SYS3.1)
+    if (xpFloaters.length >= 3) {
+      // Coalesce into the NEWEST floater: bump its number, restart its life
+      // (clone swap restarts the CSS animation without a reflow hack).
+      const f = xpFloaters[xpFloaters.length - 1];
+      f.amount += amount;
+      clearTimeout(f.timer);
+      const fresh = f.el.cloneNode(false);
+      fresh.textContent = xpFloaterText(f.amount);
+      f.el.replaceWith(fresh);
+      f.el = fresh;
+      f.timer = setTimeout(() => retireXpFloater(f), 900);
+      return;
+    }
+    const f = { el: document.createElement('div'), amount, timer: 0 };
+    f.el.className = 'g56-xp-floater';
+    f.el.textContent = xpFloaterText(amount);
+    f.el.style.right = `${xpFloaters.length * 0.625}rem`; // stagger stacked grants
+    xpLayer.appendChild(f.el);
+    xpFloaters.push(f);
+    f.timer = setTimeout(() => retireXpFloater(f), 900);
+  }
+  const offsG56 = [store.on('xpGranted', onXpGranted)];
+  // ══════════════════════════════════════════════════════ end V4/G56 ═══
+
   el.appendChild(btns);
   ui.el.appendChild(el);
 
@@ -419,6 +479,10 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
       for (const off of offs) off?.();
       for (const off of offsG23) off?.(); // V2/G23: badge + sick-chip listeners
       for (const off of offsG52) off?.();
+      // V4/G56: floater listener + layer (timers die with the layer removal)
+      for (const off of offsG56) off?.();
+      for (const f of xpFloaters) clearTimeout(f.timer);
+      xpLayer.remove();
       if (visTimer != null) clearInterval(visTimer);
       el.remove();
     },
