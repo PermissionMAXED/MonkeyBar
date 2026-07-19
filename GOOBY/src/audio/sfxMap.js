@@ -507,3 +507,14 @@ export const UI_INTERACTION_SOUNDS = Object.freeze({
 export function uiSoundFor(interaction) {
   return UI_INTERACTION_SOUNDS[interaction] ?? 'ui.tap';
 }
+
+// --- V4/G67 (PLAN4-GAMES §G4.5): `ambience.windRun` — INTENTIONALLY not
+// mapped yet. shoppingSurf's wind-rush layer feature-probes getSfxDef(
+// 'ambience.windRun') and stays dormant until the id exists. The committed
+// packs (itch-sfx, Kenney impact/interface) contain NO loopable wind sample,
+// and §C-SYS1.9.2 direction forbids a new synth recipe — the sample request
+// is filed in public/assets/GoobyMusic/requests.md. When it lands, map:
+//   'ambience.windRun': sample(['<pack>/<wind-loop-key>'], { volume: 0.5, loop: true }),
+// (loop:true + the ambience.* prefix auto-routes it to the AMBIENCE bus via
+// busFor; the game drives intensity via audio.setLoopGain — §E0.1-16.)
+// --- end V4/G67 ---

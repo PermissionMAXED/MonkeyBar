@@ -17,6 +17,10 @@ import { t } from '../../data/strings.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js';
 import { createParticles } from '../../gfx/particles.js';
+// V4/G67 (PLAN4-GAMES §G4.8 toyRacer row): +6 FOV during drift-boost only,
+// 10/s streaks for the boost duration, NO continuous shake (kart bob
+// exists). Shared helpers in gfx/speedFx.js.
+import { RACER_FX, fovLerp, getStreakTextures, createSpeedLines } from '../../gfx/speedFx.js';
 import { getAchievementsEngine } from '../../systems/achievementsEngine.js';
 import { clampFloatTextToView } from '../framework.js';
 import {
@@ -381,9 +385,24 @@ export default {
 
     // --- camera: chase cam behind the player kart ---
     const camera = ctx.camera;
-    camera.fov = 58;
+    camera.fov = RACER_FX.FOV_BASE; // 58 — V4/G67 §G4.8: +6 during boost only
     camera.updateProjectionMatrix();
     this.camPos = null;
+    // ── V4/G67 (PLAN4-GAMES §G4.8 toyRacer row): boost streaks live in a
+    // camera-LOCAL ring (the chase cam roams the whole track, so world-fixed
+    // spawning can't work here). scene.add(camera) so its children render;
+    // the fresh per-launch minigame scene/camera makes this leak-safe.
+    scene.add(camera);
+    this.speedLines = createSpeedLines(camera, {
+      textures: getStreakTextures(),
+      pool: RACER_FX.STREAK_POOL,
+      radius: RACER_FX.STREAK_RADIUS,
+      ahead: RACER_FX.STREAK_AHEAD,
+      size: RACER_FX.STREAK_SIZE,
+      forwardZ: -1, // camera space: ahead = −z
+      rng: ctx.rng,
+    });
+    // ── end V4/G67 init ─────────────────────────────────────────────────────
 
     // --- input (§C10.1 controls): drag steers · hold drifts · tap = item ---
     this.driftHeld = false;
@@ -652,6 +671,33 @@ export default {
     ctx.camera.position.copy(this.camPos);
     ctx.camera.lookAt(this.camLook);
 
+    // ── V4/G67 §G4.8 (toyRacer row): +6 FOV kick + 10/s streaks while the
+    // drift-boost (or a turbo item) is live — boostT is the logic's own
+    // §C10.1 boost window, so the juice matches the speed-up exactly.
+    const boosting = race.karts[0].boostT > 0;
+    const targetFov = RACER_FX.FOV_BASE + (boosting ? RACER_FX.FOV_KICK : 0);
+    if (Math.abs(ctx.camera.fov - targetFov) > 0.01) {
+      ctx.camera.fov = fovLerp(ctx.camera.fov, targetFov, dt);
+      ctx.camera.updateProjectionMatrix();
+    }
+    this.speedLines.update(dt, {
+      speed: race.karts[0].speed * RACER.WORLD_SCALE, // world m/s
+      rate: boosting ? RACER_FX.BOOST_RATE : 0,
+      originX: 0, //  camera-local ring: centred on the view axis
+      originY: 0,
+    });
+    if (import.meta.env?.DEV) {
+      // CDP telemetry (window.__racer.game.fxDebug) — §G4.8 evidence surface
+      this.fxDebug = {
+        boosting,
+        fov: ctx.camera.fov,
+        streaks: this.speedLines.activeCount(),
+        streakDrawCalls: this.speedLines.drawCalls(),
+        drawCalls: ctx.renderer?.info?.render?.calls ?? 0,
+      };
+    }
+    // ── end V4/G67 update ──────────────────────────────────────────────────
+
     // --- race HUD ---
     const kart = race.karts[0];
     this.lapEl.textContent = t('mg.racer.lapPill', { n: playerLap(race), total: RACER.LAPS });
@@ -688,6 +734,7 @@ export default {
     this.hudEl?.remove();
     this.hudEl = null;
     if (import.meta.env?.DEV && window.__racer?.game === this) delete window.__racer;
+    this.speedLines?.dispose(); // V4/G67 §G4.8 juice teardown
     this.floats?.dispose();
     this.particles?.dispose();
     this.gooby?.dispose();

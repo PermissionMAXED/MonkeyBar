@@ -13,6 +13,19 @@ import { t } from '../../data/strings.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: cameo outfits (§C5.3)
 import { createParticles } from '../../gfx/particles.js';
+// V4/G67 (PLAN4-GAMES §G4.8 runner row): reduced-dose speed juice — FOV 60
+// base + 8 kick over the 6→13 m/s ramp, 16-streak pool, 0.03 top shake,
+// banners at the ramp thirds. Shared helpers in gfx/speedFx.js.
+import {
+  RUNNER_FX,
+  speedFovTarget,
+  fovLerp,
+  streakRate,
+  topSpeedShake,
+  crossedMilestones,
+  getStreakTextures,
+  createSpeedLines,
+} from '../../gfx/speedFx.js';
 import { clampFloatTextToView } from '../framework.js'; // F4 P2-3
 import {
   RUNNER,
@@ -101,6 +114,9 @@ export default {
 
     ctx.camera.position.set(0, 3.6, 7.0);
     ctx.camera.lookAt(0, 0.9, -3.5);
+    // V4/G67 §G4.8: runner's base FOV is 60 (spec row "FOV 60 → +8")
+    ctx.camera.fov = RUNNER_FX.FOV_BASE;
+    ctx.camera.updateProjectionMatrix();
 
     /** All internal state — dropped whole in dispose(). */
     const S = {
@@ -221,6 +237,20 @@ export default {
     S.shieldVis.visible = false;
     scene.add(S.shieldVis);
 
+    // ── V4/G67 (PLAN4-GAMES §G4.8 runner row): reduced-dose juice state ────
+    // 16-streak pool as 2 InstancedMeshes (≤ 2 draw calls); the runner's
+    // world runs ahead = −z (rows spawn at −88), so forwardZ = −1.
+    S.speedLines = createSpeedLines(scene, {
+      textures: getStreakTextures(),
+      pool: RUNNER_FX.STREAK_POOL,
+      radius: RUNNER_FX.STREAK_RADIUS,
+      ahead: RUNNER_FX.STREAK_AHEAD,
+      forwardZ: -1,
+      rng: ctx.rng,
+    });
+    S.fx = { seen: new Set(), prevSpeed: 0 }; // ramp-third banner latch
+    // ── end V4/G67 init ─────────────────────────────────────────────────────
+
     ctx.hud.setScore(0);
     ctx.hud.setTime(0);
 
@@ -232,6 +262,8 @@ export default {
       else if (p.dir === 'up') this.jump();
       else if (p.dir === 'down') this.slide();
     });
+
+    if (import.meta.env?.DEV) window.__runner = { S }; // V4/G67 CDP probe (dev-only)
   },
 
   // ------------------------------------------------------------- actions
@@ -649,16 +681,55 @@ export default {
       }
     }
 
-    // --- camera: lane follow + micro-shake ---
+    // --- camera: lane follow + micro-shake (+ V4/G67 §G4.8 speed juice) ---
     S.shakeT = Math.max(0, S.shakeT - dt * 3.2);
     const shake = S.shakeT > 0 ? S.shakeAmp * S.shakeT : 0;
     if (S.shakeT <= 0) S.shakeAmp = 0;
+    // V4/G67 §G4.8: 0.03 top-speed jitter (fades in 12.4→13 m/s), ADDED to
+    // the crash-shake term — crash shake still dominates at 0.16/0.3.
+    const jitter = shake +
+      topSpeedShake(speed, RUNNER_FX.SHAKE_FROM, RUNNER_FX.SHAKE_TO, RUNNER_FX.SHAKE_AMP);
     S.ctx.camera.position.set(
-      S.laneX * 0.35 + (Math.random() - 0.5) * shake,
-      3.6 + (Math.random() - 0.5) * shake,
+      S.laneX * 0.35 + (Math.random() - 0.5) * jitter,
+      3.6 + (Math.random() - 0.5) * jitter,
       7.0
     );
     S.ctx.camera.lookAt(S.laneX * 0.35, 0.9, -3.5);
+
+    // ── V4/G67 §G4.8 (runner row): FOV 60 + 8·ramp, streaks, ⅓-banners ────
+    const targetFov = speedFovTarget(
+      RUNNER_FX.FOV_BASE, RUNNER_FX.FOV_KICK, speed, RUNNER_FX.BAND[0], RUNNER_FX.BAND[1]
+    );
+    if (Math.abs(S.ctx.camera.fov - targetFov) > 0.01) {
+      S.ctx.camera.fov = fovLerp(S.ctx.camera.fov, targetFov, dt);
+      S.ctx.camera.updateProjectionMatrix();
+    }
+    S.speedLines.update(dt, {
+      speed,
+      rate: streakRate(speed, RUNNER_FX.RATE),
+      originX: S.laneX * 0.35,
+      originY: RUNNER_FX.STREAK_ORIGIN_Y,
+    });
+    if (!S.ending) {
+      for (const th of crossedMilestones(S.fx.prevSpeed, speed, RUNNER_FX.MILESTONES, S.fx.seen)) {
+        S.fx.seen.add(th);
+        S.ctx.audio.play('combo.up');
+        S.ctx.hud.banner(t(th >= RUNNER.MAX_SPEED ? 'mg.speedfx.top' : 'mg.speedfx.up'));
+      }
+      S.fx.prevSpeed = speed;
+    }
+    if (import.meta.env?.DEV) {
+      // CDP telemetry (§G4.8 evidence surface — window.__runner.S.fxDebug)
+      S.fxDebug = {
+        speed,
+        fov: S.ctx.camera.fov,
+        streaks: S.speedLines.activeCount(),
+        streakDrawCalls: S.speedLines.drawCalls(),
+        shake: jitter,
+        drawCalls: S.ctx.renderer?.info?.render?.calls ?? 0,
+      };
+    }
+    // ── end V4/G67 update ──────────────────────────────────────────────────
 
     // --- score ---
     const score = runnerScore(S.meters, S.coinPoints);
@@ -686,6 +757,8 @@ export default {
     const S = this.S;
     if (!S) return;
     S.offSwipe?.();
+    S.speedLines?.dispose(); // V4/G67 §G4.8 juice teardown
+    if (import.meta.env?.DEV) delete window.__runner; // V4/G67
     S.gooby?.dispose();
     S.particles?.dispose();
     S.coinGeo?.dispose();

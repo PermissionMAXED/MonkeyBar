@@ -3694,3 +3694,27 @@
 }
 
 /* =============================== end V4/G68 =============================== */
+
+/* ========= V4/G67 — surf near-miss vignette flash (PLAN4-GAMES §G4.6) =====
+   Full-screen white 8 %-opacity flash for 0.12 s on each nearMiss logic
+   event. The element is created/removed by shoppingSurf.js; the timing is
+   driven from the game update (REAL time), CSS only paints. Pointer-events
+   none so HUD/input never notice it. */
+
+.g67-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 40;
+  opacity: 0;
+  background:
+    radial-gradient(ellipse at center, rgba(255, 255, 255, 0) 55%, rgba(255, 255, 255, 0.9) 100%),
+    rgba(255, 255, 255, 0.35);
+  transition: opacity 60ms ease-out;
+}
+
+.g67-vignette.g67-flash {
+  opacity: 0.08; /* §G4.6: white 8 % */
+}
+
+/* =============================== end V4/G67 =============================== */

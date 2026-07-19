@@ -21,6 +21,22 @@ import { t } from '../../data/strings.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js';
 import { createParticles } from '../../gfx/particles.js';
+// V4/G67 (PLAN4-GAMES §G4): shared speed-feel juice — FOV kick, instanced
+// speed lines, top-speed shake, wind gain, milestones, ghost trail.
+import {
+  SURF_FX,
+  speedFovTarget,
+  fovLerp,
+  streakRate,
+  topSpeedShake,
+  windGain,
+  crossedMilestones,
+  ghostStrength,
+  getStreakTextures,
+  createSpeedLines,
+  createGhostTrail,
+} from '../../gfx/speedFx.js';
+import { getSfxDef } from '../../audio/sfxMap.js'; // V4/G67 §G4.5 wind-loop probe
 import { clampFloatTextToView } from '../framework.js';
 import {
   SURF,
@@ -51,6 +67,11 @@ const WX = (x) => -x;
 const CAM_OFFSET = Object.freeze([0, 3.2, -5.5]);
 const CAM_LOOK_AHEAD = 8;
 const CAM_FOV = 62;
+// V4/G67 (§G4.5): wind-rush loop id — feature-probed via getSfxDef so the
+// layer stays dormant until a REAL loopable wind sample is committed and
+// mapped (no synth recipe per the §C-SYS1.9.2 direction; sample request
+// noted in public/assets/GoobyMusic/requests.md).
+const WIND_SFX_ID = 'ambience.windRun';
 const SKY = 0xffe1ec; //        pastel pink sky (distinct look — §C10.1 rule)
 const LOOP_LEN = 132; //        scenery conveyor loop (m)
 const BUILDINGS = ['building_A', 'building_B', 'building_C', 'building_D', 'building_E', 'building_F'];
@@ -117,6 +138,27 @@ function floatTexture(text, color) {
   g.fillText(text, 96, 34);
   const tex = new THREE.CanvasTexture(canvas);
   floatTexCache.set(key, tex);
+  return tex;
+}
+
+// V4/G67 (§G4.4): 64×64 pavement texture — near-white with seam lines every
+// 16 px so it tints through the existing road/sidewalk material colors. ONE
+// texture drives both planes; update() scrolls `offset.y −= speed·dt/4`
+// (repeat.y 60 over the 240 m planes = 4 m tile → world-true scroll rate).
+function makePavementTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const g = canvas.getContext('2d');
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, 64, 64);
+  g.fillStyle = 'rgba(74,59,54,0.16)';
+  for (let y = 0; y < 64; y += 16) g.fillRect(0, y, 64, 2); // seams every 16 px
+  g.fillStyle = 'rgba(74,59,54,0.06)';
+  g.fillRect(31, 0, 2, 64); // faint lengthwise joint
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1, 60);
   return tex;
 }
 
@@ -203,10 +245,12 @@ export default {
       return r;
     };
 
-    // ── street ground (static planes — motion comes from scenery/markers) ──
+    // ── street ground (V4/G67 §G4.4: planes carry ONE shared scrolling
+    // pavement texture — the ground itself now communicates speed) ─────────
+    S.groundTex = D(makePavementTexture());
     const road = new THREE.Mesh(
       D(new THREE.PlaneGeometry(6.4, 240)),
-      D(new THREE.MeshLambertMaterial({ color: 0xe8cfd6 })) // rosy pavement
+      D(new THREE.MeshLambertMaterial({ color: 0xe8cfd6, map: S.groundTex })) // rosy pavement
     );
     road.rotation.x = -Math.PI / 2;
     road.position.set(0, 0, 60);
@@ -214,7 +258,7 @@ export default {
     for (const sx of [-4.35, 4.35]) {
       const walk = new THREE.Mesh(
         D(new THREE.PlaneGeometry(2.3, 240)),
-        D(new THREE.MeshLambertMaterial({ color: 0xf6e7d7 })) // cream sidewalk
+        D(new THREE.MeshLambertMaterial({ color: 0xf6e7d7, map: S.groundTex })) // cream sidewalk
       );
       walk.rotation.x = -Math.PI / 2;
       walk.position.set(sx, 0.02, 60);
@@ -391,6 +435,43 @@ export default {
     S.gooby.setEmotion('happy');
     S.gooby.play('happyBounce', { loop: true, speed: 1.7 });
     scene.add(S.gooby.group);
+
+    // ── V4/G67 (PLAN4-GAMES §G4): speed-feel juice layer ────────────────────
+    S.fx = {
+      slowMoT: 0, //  §G4.6 near-miss slow-mo (REAL-time countdown)
+      flashT: 0, //   §G4.6 vignette flash (REAL-time)
+      seen: new Set(), // §G4.7 first-crossing milestone latch
+      nextDistM: SURF_FX.DIST_EVERY_M, // §G4.7 arcade distance banners
+      prevSpeed: S.run.speed,
+      windT: 0, //    §G4.5 0.25 s gain-update cadence
+      windGainNow: 0,
+      wind: false,
+    };
+    // §G4.2: 24-streak pool as 2 InstancedMeshes (≤ 2 draw calls total)
+    S.speedLines = createSpeedLines(scene, {
+      textures: getStreakTextures(),
+      pool: SURF_FX.STREAK_POOL,
+      radius: SURF_FX.STREAK_RADIUS,
+      ahead: SURF_FX.STREAK_AHEAD,
+      size: SURF_FX.STREAK_SIZE,
+      life: SURF_FX.STREAK_LIFE,
+      velocityScale: SURF_FX.STREAK_VEL,
+      forwardZ: 1, // render "ahead" = +z (§G3.1-b world)
+      rng: ctx.rng,
+    });
+    // motion-blur-ish ghost trail on Gooby, fades in ≥ 13 m/s
+    S.ghosts = createGhostTrail(scene);
+    // §G4.6 vignette flash element (styles.css .g67-vignette)
+    S.vignette = document.createElement('div');
+    S.vignette.className = 'g67-vignette';
+    (document.getElementById('ui') ?? document.body).appendChild(S.vignette);
+    // §G4.5 wind layer: only when a real loop sample is mapped (see WIND_SFX_ID)
+    if (getSfxDef(WIND_SFX_ID)) {
+      ctx.audio.play(WIND_SFX_ID);
+      ctx.audio.setLoopGain?.(WIND_SFX_ID, 0);
+      S.fx.wind = true;
+    }
+    // ── end V4/G67 init ─────────────────────────────────────────────────────
 
     ctx.hud.setScore(0);
     ctx.hud.setTime(0);
@@ -611,6 +692,12 @@ export default {
         break;
       case 'nearMiss': {
         ctx.audio.play('combo.up');
+        // V4/G67 §G4.6: slow-mo 0.55× for 0.18 s REAL time — a nearMiss
+        // during slow-mo only REFRESHES the timer (never stacks) — plus the
+        // 8 %-white vignette flash for 0.12 s.
+        S.fx.slowMoT = SURF_FX.SLOWMO_SEC;
+        S.fx.flashT = SURF_FX.FLASH_SEC;
+        S.vignette?.classList.add('g67-flash');
         const pos = S.gooby.group.position.clone().add(new THREE.Vector3(0, 1.7, 0.6));
         this.floatText(`+2 ${t('mg.surf.nearMiss')}`, '#FFD166', pos);
         if (ev.streak > 0 && ev.streak % 3 === 0) {
@@ -697,6 +784,19 @@ export default {
     if (!S) return;
     const { ctx, run } = S;
 
+    // ── V4/G67 §G4.6: near-miss slow-mo — scale the dt fed into stepRun AND
+    // all visual updates (logic stays deterministic: dt is an input). The
+    // timers below tick in REAL time so 0.18 s means 0.18 s of wall clock.
+    const realDt = dt;
+    if (S.fx.slowMoT > 0) {
+      S.fx.slowMoT = Math.max(0, S.fx.slowMoT - realDt);
+      dt *= SURF_FX.SLOWMO_SCALE;
+    }
+    if (S.fx.flashT > 0) {
+      S.fx.flashT -= realDt;
+      if (S.fx.flashT <= 0) S.vignette?.classList.remove('g67-flash');
+    }
+
     // ── advance the pure simulation ─────────────────────────────────────────
     if (S.phase === 'run') {
       let input = S.pendingInput;
@@ -745,6 +845,22 @@ export default {
     const py = playerY(run);
     const sliding = run.slideT >= 0;
 
+    // ── V4/G67 §G4.7: milestone banners — "Schneller! 🔥" at the first
+    // crossing of 10/12/14 m/s, "VOLLGAS!!" at 16, plus every 250 m in
+    // arcade mode (the framework banner queue handles collisions).
+    if (S.phase === 'run') {
+      for (const th of crossedMilestones(S.fx.prevSpeed, run.speed, SURF_FX.MILESTONES, S.fx.seen)) {
+        S.fx.seen.add(th);
+        ctx.audio.play('combo.up');
+        ctx.hud.banner(t(th >= SURF.MAX_SPEED ? 'mg.speedfx.top' : 'mg.speedfx.up'));
+      }
+      S.fx.prevSpeed = run.speed;
+      if (S.mode === 'arcade' && run.distanceM >= S.fx.nextDistM) {
+        ctx.hud.banner(t('mg.surf.distance', { m: S.fx.nextDistM }));
+        S.fx.nextDistM += SURF_FX.DIST_EVERY_M;
+      }
+    }
+
     // ── player: position, slide squash, tilt ────────────────────────────────
     const squash = sliding ? SURF.SLIDE_HEIGHT / SURF.STAND_HEIGHT : 1;
     const sq = S.gooby.group.scale;
@@ -770,6 +886,7 @@ export default {
     if (S.shieldVis) S.shieldVis.position.set(WX(px), py + 0.75, 0); // V4/G57 §G3.1-b
 
     // ── scenery conveyor ────────────────────────────────────────────────────
+    S.groundTex.offset.y -= (speed * dt) / SURF_FX.GROUND_SCROLL_DIV; // V4/G67 §G4.4
     for (const obj of S.scenery) {
       obj.position.z -= speed * dt;
       if (obj.position.z < -14) obj.position.z += LOOP_LEN;
@@ -894,21 +1011,61 @@ export default {
       }
     }
 
-    // ── camera: §C8.1 offset + lane follow, micro-shake, turbo FOV kick ────
+    // ── camera: §C8.1 offset + lane follow, micro-shake, §G4 speed juice ───
     S.shakeT = Math.max(0, S.shakeT - dt * 3.2);
     const shake = S.shakeT > 0 ? S.shakeAmp * S.shakeT : 0;
     if (S.shakeT <= 0) S.shakeAmp = 0;
+    // V4/G67 §G4.3: continuous top-speed jitter (0.035, fading in 15→16 m/s)
+    // ADDED to the crash-shake term — crash shake still dominates at 0.16+.
+    const jitter = shake + topSpeedShake(speed, SURF_FX.SHAKE_FROM, SURF_FX.SHAKE_TO, SURF_FX.SHAKE_AMP);
     const camX = WX(px) * 0.35; // V4/G57 §G3.1-b: cam follows the RENDERED x
     ctx.camera.position.set(
-      camX + (Math.random() - 0.5) * shake,
-      CAM_OFFSET[1] + (Math.random() - 0.5) * shake,
+      camX + (Math.random() - 0.5) * jitter,
+      CAM_OFFSET[1] + (Math.random() - 0.5) * jitter,
       CAM_OFFSET[2]
     );
     ctx.camera.lookAt(camX, 1.0, CAM_LOOK_AHEAD);
-    const targetFov = run.pu.turboT > 0 ? CAM_FOV + 8 : CAM_FOV;
+    // V4/G67 §G4.1: speed-scaled FOV kick 62→72 over 8→16 m/s; the turbo
+    // kick is ADDITIVE (+8) on top, hard cap 78; lerp k = 5/s; projection
+    // matrix updated only when |Δfov| > 0.01 (existing pattern).
+    const targetFov = Math.min(
+      SURF_FX.FOV_CAP,
+      speedFovTarget(CAM_FOV, SURF_FX.FOV_KICK, speed, SURF_FX.BAND[0], SURF_FX.BAND[1])
+        + (run.pu.turboT > 0 ? SURF_FX.TURBO_ADD : 0)
+    );
     if (Math.abs(ctx.camera.fov - targetFov) > 0.01) {
-      ctx.camera.fov += (targetFov - ctx.camera.fov) * Math.min(1, dt * 5);
+      ctx.camera.fov = fovLerp(ctx.camera.fov, targetFov, dt, SURF_FX.LERP_K);
       ctx.camera.updateProjectionMatrix();
+    }
+    // V4/G67 §G4.2: speed-line ring — spawn rate ∝ speed (0/s below 10 m/s)
+    const rate = streakRate(speed, SURF_FX.RATE);
+    S.speedLines.update(dt, { speed, rate, originX: camX, originY: SURF_FX.STREAK_ORIGIN_Y });
+    // V4/G67: ghost trail on Gooby (subtle motion blur, fades in ≥ 13 m/s)
+    S.ghosts.update(dt, {
+      x: WX(px), // V4/G57 §G3.1-b render mirror
+      y: py + 0.55,
+      strength: ghostStrength(speed, SURF_FX.GHOST_BAND[0], SURF_FX.GHOST_BAND[1]),
+    });
+    // V4/G67 §G4.5: wind-rush gain (0→0.5 over 10→16 m/s) every 0.25 s
+    S.fx.windT -= realDt;
+    if (S.fx.windT <= 0) {
+      S.fx.windT = SURF_FX.WIND_UPDATE_SEC;
+      S.fx.windGainNow = windGain(speed, SURF_FX.WIND[0], SURF_FX.WIND[1], SURF_FX.WIND[2]);
+      if (S.fx.wind) ctx.audio.setLoopGain?.(WIND_SFX_ID, S.fx.windGainNow);
+    }
+    if (import.meta.env?.DEV) {
+      // CDP telemetry (window.__surf.S.fxDebug) — §G10-1 evidence surface
+      S.fxDebug = {
+        speed,
+        fov: ctx.camera.fov,
+        rate,
+        streaks: S.speedLines.activeCount(),
+        streakDrawCalls: S.speedLines.drawCalls(),
+        windGain: S.fx.windGainNow,
+        slowMoT: S.fx.slowMoT,
+        shake: jitter,
+        drawCalls: ctx.renderer?.info?.render?.calls ?? 0,
+      };
     }
 
     // ── HUD ─────────────────────────────────────────────────────────────────
@@ -929,6 +1086,11 @@ export default {
     const S = this.S;
     if (!S) return;
     S.offSwipe?.();
+    // V4/G67: juice teardown — streak pool, ghosts, vignette, wind loop
+    S.speedLines?.dispose();
+    S.ghosts?.dispose();
+    S.vignette?.remove();
+    if (S.fx?.wind) S.ctx.audio.stop(WIND_SFX_ID);
     S.gooby?.dispose();
     S.particles?.dispose();
     for (const f of S.floaters) f.mat.dispose();

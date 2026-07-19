@@ -30,5 +30,17 @@ Alle 15 Generierungen waren erfolgreich. Der bereitgestellte Key ist jetzt volls
 - Weitere Radio-Tracks (jede Kategorie), Jahreszeiten-Specials, ein „Geburtstags"-Song
 - **Neuer Treblo-API-Key**, wenn diese zusätzlichen Songs ebenfalls per API erstellt werden sollen
 
+## 🌬️ SFX-Request: Wind-Loop (V4/G67, PLAN4-GAMES §G4.5)
+Shopping-Surf hat jetzt eine Wind-Rausch-Audio-Ebene, deren Lautstärke mit dem
+Tempo skaliert (10→16 m/s ⇒ Gain 0→0,5). Der Code ist fertig und wartet nur
+auf ein ECHTES Sample (kein Synth erlaubt) — in den committeten Packs
+(itch-sfx, Kenney impact/interface) gibt es keinen passenden Wind-Loop.
+
+**Gesucht:** 1 nahtlos loopbarer Wind-/Fahrtwind-Loop, 3–8 s, OGG/MP3,
+neutral (kein Sturm, kein Pfeifen). Ablage z. B.
+`public/assets/itch/itch-sfx/wind_loop_001.ogg`; danach genügt ein
+`ambience.windRun`-Eintrag in `src/audio/sfxMap.js` — das Spiel aktiviert
+die Ebene automatisch (Feature-Probe via `getSfxDef`).
+
 ## Konvention
 Einfach in den passenden Unterordner legen — der Musik-Manifest-Scan erkennt alles automatisch. Cover-Arts generiere ich pro Track selbst.

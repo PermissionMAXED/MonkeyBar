@@ -11,6 +11,17 @@ import * as THREE from 'three';
 import { t } from '../../data/strings.js';
 import { tween, easings } from '../../gfx/tween.js';
 import { createParticles } from '../../gfx/particles.js';
+// V4/G67 (PLAN4-GAMES §G4.8 rollout — lightest dose): planar edge streaks
+// falling with the starfield + a subtle +6 FOV kick over the climb ramp.
+// No shake, no banners (the shower drama owns those beats here).
+import {
+  HOPPER_FX,
+  speedFovTarget,
+  fovLerp,
+  streakRate,
+  getStreakTextures,
+  createSpeedLines,
+} from '../../gfx/speedFx.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js';
 import { clampFloatTextToView } from '../framework.js';
@@ -246,6 +257,25 @@ export default {
       scene.add(points);
       this.starLayers.push({ points, speed: speedMul, arr });
     }
+
+    // ── V4/G67 (PLAN4-GAMES §G4.8 rollout — lightest dose): edge streaks in
+    // planar mode (they fall −y with the starfield, along the left/right
+    // screen edges) + a +6 FOV kick over the 11→19 climb band. The set's
+    // margins (nebula +4 wu, star respawn +1, stripes +1) still cover the
+    // kicked frustum at every REACHABLE speed (75 s ramp tops out ≈ 15.5).
+    this.baseFov = camera.fov;
+    this.speedLines = createSpeedLines(scene, {
+      textures: getStreakTextures(),
+      pool: HOPPER_FX.STREAK_POOL,
+      size: HOPPER_FX.STREAK_SIZE,
+      life: HOPPER_FX.STREAK_LIFE,
+      velocityScale: HOPPER_FX.STREAK_VEL,
+      planar: true,
+      bounds: { halfW: this.halfW, top: this.halfH, z: -2 },
+      rng: ctx.rng,
+    });
+    if (import.meta.env?.DEV) window.__hopper = { game: this }; // V4/G67 CDP probe
+    // ── end V4/G67 init ─────────────────────────────────────────────────────
 
     // night lighting: cool moonlit hemi + soft directional
     scene.add(new THREE.HemisphereLight(0x9FB2FF, 0x1A1030, 1.05));
@@ -698,6 +728,31 @@ export default {
       layer.points.geometry.attributes.position.needsUpdate = true;
     }
 
+    // ── V4/G67 §G4.8 (lightest dose): edge streaks + FOV kick — runs on the
+    // end-screen beat too (speed 4 ⇒ rate 0, live streaks drain naturally).
+    this.speedLines.update(dt, {
+      speed: speed * WU_PER_M, // planar motion is in world units
+      rate: streakRate(speed, HOPPER_FX.RATE),
+    });
+    const targetFov = speedFovTarget(
+      this.baseFov, HOPPER_FX.FOV_KICK, speed, HOPPER_FX.BAND[0], HOPPER_FX.BAND[1]
+    );
+    if (Math.abs(ctx.camera.fov - targetFov) > 0.01) {
+      ctx.camera.fov = fovLerp(ctx.camera.fov, targetFov, dt);
+      ctx.camera.updateProjectionMatrix();
+    }
+    if (import.meta.env?.DEV) {
+      // CDP telemetry (window.__hopper.game.fxDebug) — §G4.8 evidence surface
+      this.fxDebug = {
+        speed,
+        fov: ctx.camera.fov,
+        streaks: this.speedLines.activeCount(),
+        streakDrawCalls: this.speedLines.drawCalls(),
+        drawCalls: ctx.renderer?.info?.render?.calls ?? 0,
+      };
+    }
+    // ── end V4/G67 update ──────────────────────────────────────────────────
+
     if (this.phase === 'ending') {
       this.endT += dt;
       if (this.endT >= 1.4 && this.phase !== 'done') {
@@ -839,6 +894,8 @@ export default {
   dispose() {
     this.offSwipe?.();
     this.offTap?.();
+    this.speedLines?.dispose(); // V4/G67 §G4.8 juice teardown
+    if (import.meta.env?.DEV && window.__hopper?.game === this) delete window.__hopper; // V4/G67
     this.floats?.dispose();
     this.particles?.dispose();
     this.gooby?.dispose();
