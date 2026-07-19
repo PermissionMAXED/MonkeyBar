@@ -26,6 +26,10 @@
 //                            toggles for this session
 //   ?recappreview=<biome>    V4/G63 (§C-SYS2.3): standalone recap-vignette
 //                            preview (biome id or 1..8) + __recapPreview probe
+//   ?minigame=goobyWelt&scene=<id>&flycam=1   V4/G66 (§G6.5-1): welt path-
+//                            authoring flycam (P dumps {pos, look}); &scene=
+//                            alone pins the splat scene, &quality=low forces
+//                            the §G6.6 low tier for perf probes
 //
 // `?scene=gooby` expects agent G3's `src/character/showcase.js` to provide:
 //
@@ -151,6 +155,26 @@ export async function postBoot({ store, ui, sceneManager, framework }) {
   }
   const difficulty = q.get('difficulty') ?? undefined;
   // ---- end V4/G56 append ----
+
+  // ---- V4/G66: goobyWelt authoring route (§G6.5-1, marked append) ----
+  // ?minigame=goobyWelt&scene=<windmill|townsquare>[&flycam=1][&quality=low]
+  // forwards the Team-WELT params into the launch: `scene` pins the splat
+  // scene, `flycam=1` swaps the run for the free-fly authoring camera
+  // (WASD/RF + drag look; `P` dumps {pos, look} JSON via window.__weltFlycam),
+  // `quality` overrides the saved §G6.6 toggle for perf probes.
+  if (q.get('minigame') === 'goobyWelt' && (q.get('scene') || q.get('flycam') || q.get('quality'))) {
+    const ok = await framework.launch('goobyWelt', {
+      dev: true,
+      difficulty,
+      scene: q.get('scene') ?? undefined,
+      flycam: q.get('flycam') === '1',
+      quality: q.get('quality') ?? undefined,
+    });
+    if (ok) return true;
+    await sceneManager.switchTo('home');
+    return true;
+  }
+  // ---- end V4/G66 append ----
 
   // --- routing ---
   const minigame = q.get('minigame');
