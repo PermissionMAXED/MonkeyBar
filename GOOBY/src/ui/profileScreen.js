@@ -20,6 +20,10 @@ import { getAchievementsEngine } from '../systems/achievementsEngine.js';
 import { now } from '../core/clock.js';
 import { t, getLang } from '../data/strings.js';
 import { icon } from './icons.js';
+// V4/G59 (§C-SYS9.3-2): „Galerie ({n} Fotos)" + Stickerbuch rows → album
+import { STICKERS } from '../data/stickers.js';
+import { stickerCounts } from '../systems/stickerBook.js';
+import { tG } from '../systems/gallery.logic.js';
 
 const RING_R = 20;
 const RING_C = 2 * Math.PI * RING_R;
@@ -72,6 +76,13 @@ const PROFILE_CSS = `
 .g23-pr-set-bar{flex:1;height:0.5625rem;border-radius:999px;background:rgba(74,59,54,.1);overflow:hidden;}
 .g23-pr-set-fill{display:block;height:100%;border-radius:999px;background:var(--teal);}
 .g23-pr-set-n{flex:none;font-size:0.75rem;font-weight:800;opacity:.6;font-variant-numeric:tabular-nums;}
+/* ── V4/G59 (§C-SYS9.3-2): album rows under the sticker progress card ──── */
+.g59-pr-rows{display:flex;flex-direction:column;gap:0.375rem;}
+.g59-pr-row{display:flex;align-items:center;gap:0.5rem;border:none;border-radius:0.875rem;min-height:max(44px,2.75rem);padding:0.5rem 0.625rem;background:rgba(74,59,54,.05);color:var(--brown);font-family:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;text-align:left;width:100%;}
+.g59-pr-row svg{flex:none;color:var(--pink);}
+.g59-pr-row-k{flex:1;min-width:0;font-size:0.8125rem;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g59-pr-row-v{flex:none;font-size:0.75rem;font-weight:800;opacity:.6;font-variant-numeric:tabular-nums;}
+/* ── end V4/G59 ── */
 `;
 
 /** V3/FIX-C: make long DE compounds line-breakable. Chrome's hyphens:auto
@@ -252,7 +263,45 @@ export function registerProfileScreen({ store, ui, audio, sceneManager }) {
                 </span>`;
             }).join('')}
           </div>
+        </div>
+        ${(() => {
+          // ── V4/G59 (§C-SYS9.3-2): album rows DIRECTLY under the sticker
+          // progress card — sticker book (n/28 over the regular defs, the
+          // secret 29th stays outside the count §C-SYS5.4) + „Galerie
+          // ({n} Fotos)" from the §B7 gallery mirror slice. Click wiring is
+          // re-attached after every innerHTML render below.
+          const regular = STICKERS.filter((s) => s.id !== 'herzGooby');
+          const book = stickerCounts(state, regular);
+          const photoCount = Math.max(0, Math.floor(Number(state.gallery?.count) || 0));
+          const cam = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 7h3l1.6-2.4A1.5 1.5 0 0 1 9.9 4h4.2a1.5 1.5 0 0 1 1.3.6L17 7h3a1.5 1.5 0 0 1 1.5 1.5V19a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 19V8.5A1.5 1.5 0 0 1 4 7z"/><circle cx="12" cy="13.5" r="4" fill="#fff" opacity="0.55"/><circle cx="12" cy="13.5" r="2.1"/></svg>';
+          return `
+        <div class="g23-pr-card">
+          <h2>${tG('profile.albumRows')}</h2>
+          <div class="g59-pr-rows">
+            <button class="g59-pr-row" data-g59="book">
+              ${icon('star', 16)}
+              <span class="g59-pr-row-k">${t('album.tab.book')}</span>
+              <span class="g59-pr-row-v">${book.unlocked}/${regular.length}</span>
+              ${icon('arrowRight', 14)}
+            </button>
+            <button class="g59-pr-row" data-g59="photos">
+              ${cam}
+              <span class="g59-pr-row-k">${tG('profile.galleryRow', { n: photoCount })}</span>
+              ${icon('arrowRight', 14)}
+            </button>
+          </div>
         </div>`;
+        })()}`;
+
+      // V4/G59: album-row deep links (showScreen closes the profile first)
+      body.querySelector('[data-g59="book"]')?.addEventListener('click', () => {
+        audio.play('ui.tap');
+        ui.showScreen('album', { tab: 'book' });
+      });
+      body.querySelector('[data-g59="photos"]')?.addEventListener('click', () => {
+        audio.play('ui.tap');
+        ui.showScreen('album', { tab: 'photos' });
+      });
 
       // ① portrait: live mini render via sceneManager.captureFrame (§C12.1);
       // graceful icon fallback when no scene is active (e.g. headless boot).

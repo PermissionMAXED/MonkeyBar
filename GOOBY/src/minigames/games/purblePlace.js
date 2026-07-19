@@ -1336,3 +1336,4 @@ export default {
     this.floats = null;
   },
 };
+export const controls = Object.freeze({ invertible: false }); // V4/G57 (§G2.1 rule 4, §G3.3): positional/tap/semantic input — inverting is nonsense here

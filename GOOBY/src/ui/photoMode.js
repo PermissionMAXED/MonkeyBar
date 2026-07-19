@@ -17,6 +17,12 @@ import { PHOTO } from '../data/constants.js';
 import { getAchievementsEngine } from '../systems/achievementsEngine.js';
 import { t, getLang } from '../data/strings.js'; // V3/FIX-C: getLang for hyphens:auto lang tagging
 import { icon } from './icons.js';
+// V4/G59 (§C-SYS9.1/9.3/9.4): IndexedDB gallery persistence + extracted export
+import * as photoStore from '../core/photoStore.js';
+import { mirrorSlice, shouldShowFirstPhotoHint, toastG, tG } from '../systems/gallery.logic.js';
+import { shareImage } from './shareImage.js';
+import { getStore } from '../core/store.js';
+import { now } from '../core/clock.js';
 
 // ── pure catalogs (§C12.2 — tested for integrity) ──────────────────────────
 /** The 5 poses: rig clip + loop override (looping clips let the user time the
@@ -151,6 +157,8 @@ body.g23-photo .g23-sick-chip{display:none!important;}
 .g23-ph-shutter{flex:none;width:min(3.5rem,60px);height:min(3.5rem,60px);border-radius:50%;border:0.25rem solid #fff;background:var(--pink);box-shadow:0 0 0 3px rgba(42,26,60,.4);cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform 90ms ease;} /* V3/FIX-C: px cap at ≥115% keeps picker text readable at 320px */
 .g23-ph-shutter:active{transform:scale(.92);}
 .g23-ph-shutter[disabled]{opacity:.5;}
+/* V4/G59 (§C-SYS9.3-4): transient „Im Album ansehen" chip after a capture */
+.g59-ph-albumlink{position:absolute;left:50%;bottom:calc(5.5rem + var(--safe-bottom));transform:translateX(-50%);display:inline-flex;align-items:center;gap:0.375rem;border:none;border-radius:999px;min-height:max(44px,2.75rem);padding:0.5625rem 1rem;font-family:inherit;font-size:0.8125rem;font-weight:800;background:rgba(255,255,255,.92);color:var(--brown);box-shadow:var(--shadow-soft);cursor:pointer;-webkit-tap-highlight-color:transparent;}
 `;
 
 /**
@@ -214,28 +222,88 @@ export function initPhotoMode({ ui, audio, sceneManager }) {
     } catch { /* scene may be gone — fine */ }
   }
 
-  /** Share-or-download pipeline (§C12.2 — zero new pods). */
+  /** Share-or-download pipeline (§C12.2). V4/G59 (§C-SYS9.4): the chain is
+   * EXTRACTED to ui/shareImage.js (same web behavior; native builds gain the
+   * Filesystem→Share path) so the gallery viewer ships the identical path. */
   async function deliver(blob) {
-    const file = new window.File([blob], `gooby-${Date.now()}.png`, { type: 'image/png' });
-    if (navigator.canShare?.({ files: [file] })) {
-      try {
-        await navigator.share({ files: [file] });
-        return true;
-      } catch (err) {
-        if (err?.name === 'AbortError') return true; // user closed the sheet
-        console.warn('[photoMode] share failed, falling back:', err?.message);
-      }
-    }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = file.name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    await shareImage(blob, { ui, filename: `gooby-${Date.now()}.png` });
     return true;
   }
+
+  // ══════════════════════════════════════════════════════════ V4/G59 ═══
+  // Gallery persistence + discoverability (PLAN4 §C-SYS9.1/9.3): every
+  // captured photo is ALSO auto-saved into the §B7 IndexedDB store (the
+  // share/download above stays as-is); the save mirrors the `gallery` slice
+  // synchronously, shows the ONE-TIME first-photo hint and offers the
+  // transient „Im Album ansehen" chip.
+  /** @type {HTMLButtonElement|null} */
+  let albumLink = null;
+  let albumLinkTimer = null;
+
+  function storeSafe() {
+    try {
+      return getStore();
+    } catch {
+      return null; // photo mode before boot finished — persistence only
+    }
+  }
+
+  function hideAlbumLink() {
+    if (albumLinkTimer != null) clearTimeout(albumLinkTimer);
+    albumLinkTimer = null;
+    albumLink?.remove();
+    albumLink = null;
+  }
+
+  /** §C-SYS9.3-4: „Im Album ansehen" link on the post-capture confirm UI. */
+  function showAlbumLink() {
+    if (!layer) return;
+    if (!albumLink) {
+      albumLink = document.createElement('button');
+      albumLink.className = 'g59-ph-albumlink';
+      albumLink.textContent = `📖 ${tG('gallery.viewInAlbum')}`;
+      albumLink.addEventListener('click', () => {
+        audio.play('ui.tap');
+        exit();
+        ui.showScreen('album', { tab: 'photos' });
+      });
+      layer.appendChild(albumLink);
+    }
+    if (albumLinkTimer != null) clearTimeout(albumLinkTimer);
+    albumLinkTimer = setTimeout(hideAlbumLink, 6000);
+  }
+
+  async function persistToGallery(blob) {
+    try {
+      const res = await photoStore.add(blob, {
+        at: now(),
+        w: PHOTO.CANVAS_W,
+        h: PHOTO.CANVAS_H,
+        frame: PHOTO_FRAMES[frameIdx].id,
+      });
+      const store = storeSafe();
+      if (!res.ok) {
+        // §C-SYS9.1 storage pressure: evict-4-and-retry happened inside the
+        // store; a still-failing quota surfaces the gallery.full toast.
+        if (res.reason === 'quota') toastG(ui, 'gallery.full');
+        return;
+      }
+      if (!store) return;
+      const total = await photoStore.count();
+      const firstHint = shouldShowFirstPhotoHint(store.get('gallery'));
+      // §B7: the gallery slice mirrors count/lastAddedAt synchronously
+      store.update((state) => {
+        const g = state.gallery ?? { count: 0, lastAddedAt: 0, hintShown: false };
+        state.gallery = { hintShown: g.hintShown === true || firstHint, ...mirrorSlice(total, res.meta.at) };
+      });
+      store.emit('galleryChanged', { id: res.id }); // HUD badge + live grids
+      if (firstHint) toastG(ui, 'gallery.hint'); // §C-SYS9.3-3 one-time hint
+      showAlbumLink();
+    } catch (err) {
+      console.warn('[photoMode] gallery persist failed:', err?.message);
+    }
+  }
+  // ══════════════════════════════════════════════════════ end V4/G59 ═══
 
   async function shutter(btn, flash) {
     if (busy) return;
@@ -250,6 +318,7 @@ export function initPhotoMode({ ui, audio, sceneManager }) {
       const blob = await composePhoto(sceneBlob, PHOTO_FRAMES[frameIdx].id, t('photo.caption'));
       if (!blob) throw new Error('compose failed');
       await deliver(blob);
+      persistToGallery(blob); // V4/G59 (§C-SYS9.1): auto-save IN ADDITION
       const xp = getAchievementsEngine()?.photoTaken?.() ?? 0;
       ui.toast(xp > 0 ? 'toast.photoSaved' : 'toast.photoSavedNoXp', { xp });
       // expose the latest capture for dev/CDP verification (dev builds only)
@@ -333,6 +402,7 @@ export function initPhotoMode({ ui, audio, sceneManager }) {
 
   function exit() {
     if (!layer) return;
+    hideAlbumLink(); // V4/G59: the chip dies with the layer
     layer.remove();
     layer = null;
     document.body.classList.remove('g23-photo');

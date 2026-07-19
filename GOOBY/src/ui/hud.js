@@ -10,6 +10,8 @@ import { icon } from './icons.js';
 import { xpToNext } from '../systems/leveling.js';
 // V2/G23: claimable-quests badge reads the live engine (§B7 claimableCount)
 import { getAchievementsEngine } from '../systems/achievementsEngine.js';
+// V4/G59: album badge rule + session-seen stamp (§C-SYS9.3-1)
+import { shouldShowAlbumBadge, gallerySeenStamp } from '../systems/gallery.logic.js';
 
 const RING_R = 20;
 const RING_C = 2 * Math.PI * RING_R;
@@ -318,6 +320,32 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
   syncSickChip();
   syncQuestBadge();
   // ══════════════════════════════════════════════════════ end V2/G23 ═══
+
+  // ══════════════════════════════════════════════════════════ V4/G59 ═══
+  // Album badge (PLAN4 §C-SYS9.3-1): a dot on the profile HUD button (the
+  // album's entry path: profile → „Galerie" row) while a new photo was added
+  // and the gallery was not visited yet — gallery.lastAddedAt (persisted)
+  // vs the runtime session-seen stamp (systems/gallery.logic.js; the album's
+  // Fotos tab stamps it on render). Listeners ride offsG23 for disposal.
+  if (!document.querySelector('style[data-owner="g59-hud"]')) {
+    const g59Style = document.createElement('style');
+    g59Style.dataset.owner = 'g59-hud';
+    g59Style.textContent = '.g59-dot{position:absolute;top:-0.1875rem;right:-0.1875rem;width:0.75rem;height:0.75rem;border-radius:50%;background:var(--pink);box-shadow:var(--shadow-soft);display:none;pointer-events:none;}.g59-dot.g59-show{display:block;}';
+    document.head.appendChild(g59Style);
+  }
+  const albumDot = document.createElement('span');
+  albumDot.className = 'g59-dot';
+  btns.querySelector('[data-hud="profile"]')?.appendChild(albumDot);
+  function syncAlbumDot() {
+    const g = store.get('gallery');
+    albumDot.classList.toggle('g59-show', shouldShowAlbumBadge(g?.lastAddedAt, gallerySeenStamp()));
+  }
+  offsG23.push(
+    store.on('galleryChanged', syncAlbumDot), // runtime add signal (photoMode)
+    store.on('change', syncAlbumDot) // coalesced fallback — clears after visit
+  );
+  syncAlbumDot();
+  // ══════════════════════════════════════════════════════ end V4/G59 ═══
 
   el.appendChild(btns);
   ui.el.appendChild(el);

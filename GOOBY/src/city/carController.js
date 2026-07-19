@@ -1,6 +1,7 @@
 // Player car controller (§G G7, §C6.1 #1): physics-lite and forgiving, not
 // sim-like. Auto-throttle (DRIVE.BASE_SPEED → MAX_SPEED ramp), left/right
-// thumb-zone steering (hold left half of the screen = steer left), a DOM
+// thumb-zone steering (hold left half of the screen = steer left ON SCREEN —
+// V4/G57 §G3.1-a/§G2.1 sign contract below), a DOM
 // brake button bottom-center, a gentle lane-assist spring (V3/G39 §C7.2:
 // max 8°/s, fades to 0 at 25° intent, off at ≥ 40 % deflection — replaces
 // the v1 lane SNAP), and soft collisions against buildings/props (slide +
@@ -101,12 +102,16 @@ const CONTROLS_CSS = `
  *   onWallHit?: () => void,
  *   onStuck?: () => void,
  *   speedProfile?: {maxSpeed?: number, rampDelaySec?: number},
+ *   invertSteer?: boolean,
  * }} deps heading: rotation.y radians, forward = (sin h, 0, cos h); east = π/2.
  *   onStuck (F4 P1-1): fired once per sustained throttle-on standstill
  *   (> STUCK_TRIGGER_SEC) so the game can play a rescue/unstick treatment.
  *   speedProfile (V3/G39 §C7.2): auto-throttle override for the ARCADE
  *   open-run (max 15 m/s, ramp after 20 s — cityDrive passes it); trips and
  *   deliveryRush omit it and keep the §C4 9→13 m/s ramp bit-identical.
+ *   invertSteer (V4/G57 for G56's §G3.3 „Steuerung invertieren" flag):
+ *   swaps the PLAYER zone/key semantic only (left zone/ArrowLeft steers
+ *   screen-right) — the setSteer API + autopilots are never inverted.
  * @returns {{
  *   group: import('three').Group, position: import('three').Vector3,
  *   heading: () => number, speed: () => number,
@@ -119,7 +124,7 @@ const CONTROLS_CSS = `
  *   dispose: () => void,
  * }}
  */
-export function createCarController({ scene, assets, uiRoot, spawn, colliders, onWallHit, onStuck, speedProfile }) {
+export function createCarController({ scene, assets, uiRoot, spawn, colliders, onWallHit, onStuck, speedProfile, invertSteer }) {
   // ---------------------------------------------------------------- meshes
   const group = new THREE.Group();
   group.name = 'playerCar';
@@ -177,7 +182,10 @@ export function createCarController({ scene, assets, uiRoot, spawn, colliders, o
 
   const held = { left: false, right: false };
   function syncSteer() {
-    steer = (held.right ? 1 : 0) - (held.left ? 1 : 0);
+    // V4/G57 (§G3.1-a/§G2.1): zones/keys speak "left/right" ON SCREEN —
+    // right zone ⇒ steer +1 ⇒ screen-right turn (see setSteer contract).
+    // invertSteer (§G3.3 accessibility flag, G56) swaps the player semantic.
+    steer = ((held.right ? 1 : 0) - (held.left ? 1 : 0)) * (invertSteer ? -1 : 1);
     zoneL.classList.toggle('g7-held', held.left);
     zoneR.classList.toggle('g7-held', held.right);
   }
@@ -308,7 +316,17 @@ export function createCarController({ scene, assets, uiRoot, spawn, colliders, o
     /** V3/G39 telemetry (§C7.2 evidence): raw vs low-passed steering. */
     steering: () => ({ raw: steer, smoothed: steerSmoothed }),
 
-    /** @param {number} v -1 (left) … 1 (right) — autopilot/tests override */
+    /**
+     * V4/G57 (§G3.1-a) CONTRACT REDEFINITION: `v > 0 = steer screen/driver
+     * RIGHT` (heading DECREASES — see the single negation at the yaw
+     * application site in update()). §G2.1 rule: a swipe/hold RIGHT must
+     * turn the car right ON SCREEN under the chase cam; positive yaw
+     * (heading +) turns a +z-facing car toward +x, which the chase camera
+     * renders as a LEFT turn — so screen-right steering = heading −.
+     * Autopilots/bots command in THIS screen convention (they negate their
+     * heading-error term); invertSteer never applies here.
+     * @param {number} v -1 (screen-left) … 1 (screen-right)
+     */
     setSteer(v) {
       steer = Math.max(-1, Math.min(1, v));
     },
@@ -384,7 +402,10 @@ export function createCarController({ scene, assets, uiRoot, spawn, colliders, o
         steerSmoothed = smoothSteer(steerSmoothed, steer, dt);
         // (slightly damped at speed so max speed stays manageable)
         const damp = 1 - 0.25 * Math.min(1, speed / DRIVE.MAX_SPEED);
-        heading += steerYawRate(steerSmoothed, T.STEER_RATE, damp) * dt;
+        // V4/G57 (§G3.1-a): the SINGLE steer-sign negation — steer +1
+        // (screen-right, setSteer contract) ⇒ heading DECREASES so the
+        // chase cam shows a right turn. carFeel.js pure math unchanged.
+        heading += steerYawRate(-steerSmoothed, T.STEER_RATE, damp) * dt;
         heading = wrapAngle(heading);
         laneAssist(dt);
         group.position.x += Math.sin(heading) * speed * dt;

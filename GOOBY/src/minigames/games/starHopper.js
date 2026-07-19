@@ -868,3 +868,4 @@ export default {
     this.goldMats = [];
   },
 };
+export const controls = Object.freeze({ invertible: true }); // V4/G57 (§G2.1 rule 4, §G3.3): global „Steuerung invertieren“ applies (G56 proxy / carController invertSteer param)

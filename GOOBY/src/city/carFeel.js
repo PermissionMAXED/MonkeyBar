@@ -48,6 +48,10 @@ export function smoothSteer(smoothed, target, dt) {
 /**
  * Commanded yaw rate (rad/s) from the filtered steering — the §C7.2 output
  * rate cap: |result| ≤ 90°/s no matter the steer-rate/damping product.
+ * V4/G57 (PLAN4-GAMES §G3.1-a): this pure map stays sign-preserving
+ * (positive input ⇒ positive yaw). The §G2.1 screen-right steer contract
+ * (setSteer(v>0) = screen-right = heading −) lives in carController's
+ * SINGLE negation at the application site — never here.
  * @param {number} smoothedSteer −1..1 filtered input
  * @param {number} steerRate rad/s at full deflection (DRIVE_TUNING.STEER_RATE)
  * @param {number} damp speed damping factor 0..1

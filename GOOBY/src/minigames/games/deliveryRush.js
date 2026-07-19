@@ -379,7 +379,7 @@ export default {
     const target = pointAtLength(leg.lane, Math.min(leg.laneLength, this.progress + 11));
     const desired = Math.atan2(target.x - p.x, target.z - p.z);
     const err = wrapAngle(desired - this.car.heading());
-    this.car.setSteer(Math.max(-1, Math.min(1, err * 2.4)));
+    this.car.setSteer(Math.max(-1, Math.min(1, -err * 2.4))); // V4/G57 (§G3.1-a): setSteer(v>0)=screen-right ⇒ heading −, so the heading-error command is negated
     this.car.setBrake(Math.abs(err) > 0.85 && this.car.speed() > 7);
   },
 
@@ -564,3 +564,4 @@ export default {
     this.fragileParcel = null;
   },
 };
+export const controls = Object.freeze({ invertible: true }); // V4/G57 (§G2.1 rule 4, §G3.3): global „Steuerung invertieren“ applies (G56 proxy / carController invertSteer param)

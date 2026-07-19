@@ -428,9 +428,15 @@ export default {
     this.updateChip(true);
 
     // --- input: drag = steer (momentum), tap = horn (§C10.1 controls) -------
+    // V4/G57 (PLAN4-GAMES §G3.1-c, §G2.1 rule 1): the chase camera looks
+    // down world +z, so world +x renders on the screen LEFT — analog input
+    // targeting logic (= world) space must mirror at exactly this ONE input
+    // boundary. Drag right (nx +1) → target −x → rendered SCREEN RIGHT. ✅
+    // The logic bot passes targetX in logic space and stays consistent;
+    // waves/buoys/seagull are chirality-symmetric.
     this.offDrag = ctx.input.on('drag', (p) => {
       if (this.autoplay || this.phase !== 'play') return;
-      this.dragX = p.nx * HARBOR.CHANNEL_HALF_W * 1.25; // slight over-reach for full range
+      this.dragX = -p.nx * HARBOR.CHANNEL_HALF_W * 1.25; // §G3.1-c input mirror; over-reach for full range
     });
     this.offDragEnd = ctx.input.on('dragend', () => {
       this.dragX = null; // release: momentum carries the boat (coast)
@@ -804,3 +810,4 @@ export default {
     this.ownedTexs = [];
   },
 };
+export const controls = Object.freeze({ invertible: true }); // V4/G57 (§G2.1 rule 4, §G3.3): global „Steuerung invertieren“ applies (G56 proxy / carController invertSteer param)

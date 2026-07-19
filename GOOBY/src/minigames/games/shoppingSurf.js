@@ -38,6 +38,16 @@ import {
 // Visual mapping: logic hazards live at negative z (ahead of the player);
 // the render world flips that (ahead = +z) so the §C8.1 camera offset
 // [0, 3.2, −5.5] + 8 m look-ahead reads exactly as specified.
+//
+// V4/G57 (PLAN4-GAMES §G3.1-b, §G2.1 rule 1): the camera looks down world
+// +z, which renders world +x on the screen LEFT — so the logic x-axis is
+// mirrored at exactly ONE boundary (logic→render) via WX below, applied at
+// ALL render sites (player px + lean, obstacles, NPC dotted line, coins,
+// powerups, camX, float/particle spawns that carry a logic x). Logic space
+// stays intuitive („left" = −x = screen left) for the bot/validator/tests:
+// swipe left → lane−1 → logic x −1.6 → world +1.6 → SCREEN LEFT. ✅
+/** Logic→render x mirror (§G3.1-b) — the single mapping boundary. */
+const WX = (x) => -x;
 const CAM_OFFSET = Object.freeze([0, 3.2, -5.5]);
 const CAM_LOOK_AHEAD = 8;
 const CAM_FOV = 62;
@@ -325,7 +335,9 @@ export default {
       const model = ctx.assets.getSkinnedModel(key);
       fitHeight(model, 1.1); // ≈ scale 0.4 of the 2.7 m rig (§D2.1)
       ground(model);
-      model.rotation.y = Math.PI / 2; // walks L→R (+x)
+      // V4/G57 (§G3.1-b): 180° flip — the WX render mirror makes the logic
+      // +x crossing walk toward world −x, so the rig faces its walk direction.
+      model.rotation.y = -Math.PI / 2;
       const holder = new THREE.Group();
       holder.add(model);
       const clips = ctx.assets.getAnimations(key);
@@ -608,8 +620,8 @@ export default {
       }
       case 'coin':
         ctx.audio.play('coin.get');
-        S.particles.emit('sparkles', new THREE.Vector3(ev.x, ev.y + 0.2, -ev.z), { count: 3 });
-        if (ev.value > 1) this.floatText('+2', '#FFD166', new THREE.Vector3(ev.x, ev.y + 0.6, -ev.z));
+        S.particles.emit('sparkles', new THREE.Vector3(WX(ev.x), ev.y + 0.2, -ev.z), { count: 3 }); // V4/G57 §G3.1-b
+        if (ev.value > 1) this.floatText('+2', '#FFD166', new THREE.Vector3(WX(ev.x), ev.y + 0.6, -ev.z));
         break;
       case 'powerup':
         ctx.audio.play(ev.kind === 'turbo' ? 'tramp.boost' : 'hopper.star');
@@ -738,8 +750,8 @@ export default {
     const sq = S.gooby.group.scale;
     sq.y += (squash - sq.y) * Math.min(1, dt * 16);
     sq.x = sq.z = 1 + (1 - sq.y) * 0.55;
-    S.gooby.group.position.set(px, py, 0);
-    S.gooby.group.rotation.z = (SURF.LANE_X[run.lane] - px) * -0.22;
+    S.gooby.group.position.set(WX(px), py, 0); // V4/G57 §G3.1-b render mirror
+    S.gooby.group.rotation.z = (WX(SURF.LANE_X[run.lane]) - WX(px)) * -0.22; // lean sign mirrored with the axis
     S.gooby.update(dt);
     S.particles.update(dt);
     if (S.recoverT != null && S.recoverT > 0) {
@@ -755,7 +767,7 @@ export default {
       ctx.scene.remove(S.shieldVis);
       S.shieldVis = null;
     }
-    if (S.shieldVis) S.shieldVis.position.set(px, py + 0.75, 0);
+    if (S.shieldVis) S.shieldVis.position.set(WX(px), py + 0.75, 0); // V4/G57 §G3.1-b
 
     // ── scenery conveyor ────────────────────────────────────────────────────
     for (const obj of S.scenery) {
@@ -787,13 +799,13 @@ export default {
         S.obVis.set(ob.id, vis);
       }
       if (!vis) continue; // knocked debris — logic entity still despawning
-      vis.position.set(ob.x, 0, -ob.z);
+      vis.position.set(WX(ob.x), 0, -ob.z); // V4/G57 §G3.1-b render mirror
       if (ob.kind === 'cart') {
         for (const axle of vis.userData.axles) axle.rotation.x += (speed + 2) * dt * 2.2;
       } else if (ob.kind === 'npc') {
         const slot = vis.userData.slot;
         if (slot.animated) slot.mixer.update(dt);
-        slot.line.position.x = -ob.x; //   dotted line stays street-centered
+        slot.line.position.x = -WX(ob.x); // dotted line stays street-centered (V4/G57: mirrored parent)
         slot.line.visible = ob.z < -2; //  telegraph until the shopper is close
       } else if (ob.kind === 'awning') {
         // stretch canopy + posts over the def's lanes
@@ -820,7 +832,7 @@ export default {
     let ci = 0;
     for (const c of run.coinItems) {
       if (ci >= 140) break;
-      m4.copy(rot).setPosition(c.x, c.y, -c.z);
+      m4.copy(rot).setPosition(WX(c.x), c.y, -c.z); // V4/G57 §G3.1-b
       S.coinMesh.setMatrixAt(ci, m4);
       ci += 1;
     }
@@ -836,7 +848,7 @@ export default {
         vis = this.acquirePowerup(p.kind);
         S.puVis.set(p.id, vis);
       }
-      vis.position.set(p.x, 1.0 + Math.sin(S.coinSpin + p.id) * 0.12, -p.z);
+      vis.position.set(WX(p.x), 1.0 + Math.sin(S.coinSpin + p.id) * 0.12, -p.z); // V4/G57 §G3.1-b
       vis.rotation.y += dt * 2.4;
     }
     for (const [id, vis] of S.puVis) {
@@ -886,7 +898,7 @@ export default {
     S.shakeT = Math.max(0, S.shakeT - dt * 3.2);
     const shake = S.shakeT > 0 ? S.shakeAmp * S.shakeT : 0;
     if (S.shakeT <= 0) S.shakeAmp = 0;
-    const camX = px * 0.35;
+    const camX = WX(px) * 0.35; // V4/G57 §G3.1-b: cam follows the RENDERED x
     ctx.camera.position.set(
       camX + (Math.random() - 0.5) * shake,
       CAM_OFFSET[1] + (Math.random() - 0.5) * shake,
@@ -947,3 +959,4 @@ function buildBuntingGeometry() {
   geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   return geo;
 }
+export const controls = Object.freeze({ invertible: true }); // V4/G57 (§G2.1 rule 4, §G3.3): global „Steuerung invertieren“ applies (G56 proxy / carController invertSteer param)
