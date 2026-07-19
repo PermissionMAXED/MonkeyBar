@@ -9,6 +9,17 @@
 // (G34) and audio.previewBus/masterPeakDb (G32) are feature-detected with
 // "not built yet" fallbacks. Coins move ONLY through systems/economy.js
 // ('devGrant' reason) so profile counters stay honest.
+//
+// V4/G58 (PLAN4 §C-SYS6): dev panel „vollwertig" — the card-3 §B11 ledger
+// expander plus cards 13–18 appended below card 12 (single scroll column,
+// same devUnlocked gate): 13 codes (real redeem path via codesScreen +
+// per-row reset + lock reset), 14 modifier (force/clear/next-now on G54's
+// engine), 15 recap (preview/replay via the wave-2 playback module, queue
+// pending via G55's §B5.2 slice semantics, beat-debug flag for G64),
+// 16 radio/tracks (G51 singleton + manifest stats + quick trim),
+// 17 Sprungliste (+ splat-teleport stub until wave 2), 18 harness cheat
+// sheet (single source: data/harnessParams.js). Every same-wave engine is
+// feature-detected per §E0.1-11 — absent ones render a "not built yet" note.
 
 import { t, getLang } from '../data/strings.js';
 import * as clock from '../core/clock.js';
@@ -34,10 +45,62 @@ import {
 } from './settingsScreen.js';
 // V3/G33 (§E0.1-11): local fallback tables until G34's strings.js spread lands.
 import { EN as DEV_EN, DE as DEV_DE } from '../data/strings/v3-dev.js';
+// ---- V4/G58 (PLAN4 §C-SYS6 cards 13–18 + card-3 ledger expander) -----------
+import {
+  HARNESS_PARAM_GROUPS,
+  JUMP_SCENES,
+  JUMP_SCREENS,
+  JUMP_PANELS,
+} from '../data/harnessParams.js';
+import { loadCodesApi, redeemCode } from './codesScreen.js';
+import { formatMmSs, lockRemainingSec, formatLedgerRow } from './settingsIa.logic.js';
+// §E0.1-11 fallbacks until G53's strings.js spread lands (v4-dev = card copy,
+// v4-codes = the code display names + wrong/already toasts card 13 reuses).
+import { EN as DEV4_EN, DE as DEV4_DE } from '../data/strings/v4-dev.js';
+import { EN as CODES_EN, DE as CODES_DE } from '../data/strings/v4-codes.js';
 
 // G34's sticker catalog — resolved at transform time; empty map while the
 // file doesn't exist (main.js glob pattern — do not convert to static import).
 const stickerCatalogModules = import.meta.glob('../data/stickers.js');
+
+// V4/G58 — same-wave/wave-2 engine probes (§E0.1-11): empty maps while the
+// files don't exist; every card renders a "not built yet" note instead.
+const modifierEngineModules = import.meta.glob('../systems/modifierEngine.js');
+const recapPlaybackModules = import.meta.glob(['./recapOverlay.js', '../systems/recapScene.js', '../scenes/recapScene.js']);
+const radioEngineModules = import.meta.glob(['../audio/radio.js', '../audio/radioPlayer.js', '../systems/radio.js']);
+const musicManifestModules = import.meta.glob('../data/musicManifest.json');
+const splatRegistryModules = import.meta.glob(['../data/splatScenes.js', '../systems/splatScenes.js']);
+
+/** §C-SYS4.2 type → plays fallback (used only when G54's engine exports no
+ *  table of its own; the card stays disabled while the engine is absent). */
+const MODIFIER_PLAYS_FALLBACK = Object.freeze({
+  doppelGold: 2, muenzregen: 3, turbo: 3, riesenGooby: 3, stickerChance: 2, glueckspilz: 3,
+});
+const MODIFIER_TYPE_IDS = Object.freeze(Object.keys(MODIFIER_PLAYS_FALLBACK));
+
+/** V4/G58 — minimal HTML escaper for catalog/param interpolations. */
+const escHtml = (v) => String(v ?? '')
+  .replaceAll('&', '&amp;')
+  .replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;')
+  .replaceAll("'", '&#39;');
+
+// V4/G58 §C-SYS6 card 15 — beat-debug flag (session-only, never persisted).
+// G64's wave-2 recapOverlay reads getRecapBeatDebug() at playback start and
+// may live-follow the runtime 'recapBeatDebugChanged' store event to draw
+// the bar grid + cue markers + ms-offset readout (§A2 ±80 ms evidence tool).
+let recapBeatDebug = false;
+
+/** @returns {boolean} beat-debug overlay requested? */
+export function getRecapBeatDebug() {
+  return recapBeatDebug;
+}
+
+/** @param {boolean} on */
+export function setRecapBeatDebug(on) {
+  recapBeatDebug = on === true;
+}
 
 /** §C4.2 #7 — weather/band pin search: step 15 min, scan ≤ 45 days. */
 const PIN_SEARCH = Object.freeze({ STEP_MS: 15 * 60000, SPAN_MS: 45 * 86400000 });
@@ -51,7 +114,9 @@ const PIN_SEARCH = Object.freeze({ STEP_MS: 15 * 60000, SPAN_MS: 45 * 86400000 }
 function tx(key, vars) {
   const viaT = t(key, vars);
   if (viaT !== key) return viaT;
-  let str = (getLang() === 'de' ? DEV_DE : DEV_EN)[key];
+  // V4/G58: chain the v4-dev + v4-codes tables behind G34's v3-dev table.
+  const de = getLang() === 'de';
+  let str = (de ? DEV_DE : DEV_EN)[key] ?? (de ? DEV4_DE : DEV4_EN)[key] ?? (de ? CODES_DE : CODES_EN)[key];
   if (str == null) return key;
   if (vars) for (const [k, v] of Object.entries(vars)) str = str.replaceAll(`{${k}}`, String(v));
   return str;
@@ -178,6 +243,27 @@ export function mountDevPanel(el, deps) {
   /** @type {'granted'|'denied'|'prompt'|'…'} async OS permission state */
   let osPerm = '…';
 
+  // ---- V4/G58 card state (§C-SYS6 cards 13–18 + card-3 ledger) -------------
+  /** card-3 expander open state (survives re-renders, not remounts) */
+  let ledgerOpen = false;
+  /** @type {Array<object>|null} G53's data/codes.js rows once probed */
+  let codesCatalog = null;
+  /** @type {object|null} G54's modifierEngine module once probed */
+  let modEngine = null;
+  /** @type {object|null} wave-2 recap playback module (G63/G64) once probed */
+  let recapPlayback = null;
+  /** @type {object|null} G51's radio singleton once probed */
+  let radioApi = null;
+  /** @type {{tracks?: Array<object>}|null} G51's committed music manifest */
+  let musicManifest = null;
+  /** @type {Array<{id: string}>|null} plan-B splat-scene registry (wave 2) */
+  let splatScenes = null;
+  /** card-14 force dropdown selections */
+  let modGame = MINIGAME_IDS[0];
+  let modType = MODIFIER_TYPE_IDS[0];
+  /** card-16 quick-trim track selection */
+  let trimTrackId = '';
+
   const stickerLoader = stickerCatalogModules['../data/stickers.js'];
   if (stickerLoader) {
     stickerLoader().then((mod) => {
@@ -190,6 +276,67 @@ export function mountDevPanel(el, deps) {
     osPerm = p;
     render();
   }).catch(() => {});
+
+  // V4/G58 — probe every same-wave engine once per mount (§E0.1-11).
+  loadCodesApi().then(({ catalog }) => {
+    codesCatalog = catalog;
+    render();
+  }).catch(() => {});
+  const modLoader = modifierEngineModules['../systems/modifierEngine.js'];
+  if (modLoader) {
+    modLoader().then((mod) => {
+      const api = mod.default ?? mod;
+      if (typeof api?.tick === 'function' || typeof api?.consume === 'function') {
+        modEngine = api;
+        render();
+      }
+    }).catch(() => {});
+  }
+  for (const load of Object.values(recapPlaybackModules)) {
+    load().then((mod) => {
+      const api = mod.default ?? mod;
+      if (typeof (api?.previewRecap ?? api?.preview ?? api?.play) === 'function' && !recapPlayback) {
+        recapPlayback = api;
+        render();
+      }
+    }).catch(() => {});
+  }
+  (async () => {
+    // Dev/CDP seam shared with G52's radio UI (stripped from prod builds).
+    const stub = import.meta.env.DEV ? globalThis.__goobyRadioStub : null;
+    if (stub && typeof stub.now === 'function') {
+      radioApi = stub;
+    } else {
+      for (const load of Object.values(radioEngineModules)) {
+        try {
+          const mod = await load();
+          const api = mod.default ?? mod.radio ?? mod.radioPlayer ?? mod;
+          if (api && (typeof api.now === 'function' || typeof api.toggle === 'function' || typeof api.start === 'function')) {
+            radioApi = api;
+            break;
+          }
+        } catch { /* engine broken/absent — card shows the missing note */ }
+      }
+    }
+    for (const load of Object.values(musicManifestModules)) {
+      try {
+        const mod = await load();
+        const manifest = mod.default ?? mod;
+        if (Array.isArray(manifest?.tracks)) {
+          musicManifest = manifest;
+          trimTrackId = trimTrackId || manifest.tracks[0]?.id || '';
+        }
+      } catch { /* manifest absent */ }
+    }
+    for (const load of Object.values(splatRegistryModules)) {
+      try {
+        const mod = await load();
+        const rows = mod.SPLAT_SCENES ?? mod.default ?? null;
+        if (Array.isArray(rows) && rows.length > 0) splatScenes = rows;
+      } catch { /* wave-2 registry absent */ }
+    }
+    render();
+  })();
 
   const seg = (name, options, active) =>
     `<span class="seg" role="group" data-seg="${name}">${options
@@ -240,6 +387,11 @@ export function mountDevPanel(el, deps) {
             <button class="btn btn-ghost g33-dev-btn" data-act="coins1000">+1000</button>
             <button class="btn btn-yellow g33-dev-btn" data-act="coinsSet">${tx('dev.set')}</button>
           </div>
+          ${''/* V4/G58 §C-SYS6 card-3 extension: §B11 ledger ring buffer */}
+          <details class="g58-ledger" data-act="ledgerBox" ${ledgerOpen ? 'open' : ''}>
+            <summary class="g33-dev-card-desc">${tx('dev.ledger')}</summary>
+            <pre class="g58-ledger-pre">${escHtml(ledgerText())}</pre>
+          </details>
         </div>
 
         <div class="card g33-dev-card" data-card="stats">
@@ -353,9 +505,106 @@ export function mountDevPanel(el, deps) {
             <button class="btn btn-ghost g33-dev-btn" data-act="dailyDay">${tx('dev.debug.daily')}</button>
           </div>
         </div>
+
+        ${''/* ---- V4/G58: §C-SYS6 cards 13–18 (append below card 12) ---- */}
+        <div class="card g33-dev-card" data-card="codes">
+          <div class="g33-dev-card-title">13 · ${tx('dev.codes')}</div>
+          ${codesCatalog
+            ? codesCatalog.map((c) => codeRow(c)).join('')
+            : `<p class="g33-dev-card-desc">${tx('dev.codes.missing')}</p>`}
+          <div class="g33-dev-line">
+            <button class="btn btn-ghost g33-dev-btn" data-act="codesLockReset" ${codesLockSec() > 0 ? '' : 'disabled'}>
+              ${codesLockSec() > 0 ? `${tx('dev.codes.lockReset')} (${codesLockSec()} s)` : tx('dev.codes.lockNone')}
+            </button>
+          </div>
+        </div>
+
+        <div class="card g33-dev-card" data-card="modifier">
+          <div class="g33-dev-card-title">14 · ${tx('dev.modifier')}</div>
+          <p class="g33-dev-card-desc" data-val="modState">${modReadout()}</p>
+          ${modEngine ? `
+          <div class="g33-dev-line">
+            <select class="g33-dev-select" data-act="modGame" aria-label="${tx('dev.modifier.game')}">
+              ${MINIGAME_IDS.map((id) => `<option value="${id}" ${id === modGame ? 'selected' : ''}>${id}</option>`).join('')}
+            </select>
+            <select class="g33-dev-select" data-act="modType" aria-label="${tx('dev.modifier.type')}">
+              ${MODIFIER_TYPE_IDS.map((id) => `<option value="${id}" ${id === modType ? 'selected' : ''}>${id}</option>`).join('')}
+            </select>
+          </div>
+          <div class="g33-dev-line">
+            <button class="btn btn-teal g33-dev-btn" data-act="modStart">${tx('dev.modifier.start')}</button>
+            <button class="btn btn-ghost g33-dev-btn" data-act="modClear">${tx('dev.modifier.clear')}</button>
+            <button class="btn btn-yellow g33-dev-btn" data-act="modNextNow">${tx('dev.modifier.nextNow')}</button>
+          </div>`
+          : `<p class="g33-dev-card-desc">${tx('dev.modifier.missing')}</p>`}
+        </div>
+
+        <div class="card g33-dev-card" data-card="recap">
+          <div class="g33-dev-card-title">15 · ${tx('dev.recap')}</div>
+          <p class="g33-dev-card-desc" data-val="recapState">${recapReadout()}</p>
+          <div class="g33-dev-line">
+            <button class="btn btn-teal g33-dev-btn" data-act="recapPreview">${tx('dev.recap.preview')}</button>
+            <button class="btn btn-ghost g33-dev-btn" data-act="recapReplay">${tx('dev.recap.replay')}</button>
+          </div>
+          <div class="g33-dev-line">
+            <button class="btn btn-yellow g33-dev-btn" data-act="recapQueue">${tx('dev.recap.queue')}</button>
+          </div>
+          ${recapPlayback ? '' : `<p class="g33-dev-card-desc">${tx('dev.recap.missing')}</p>`}
+          <div class="settings-row" style="border-bottom:none;padding:0;min-height:max(50px, 3.125rem)">
+            <span class="g33-dev-card-title">${tx('dev.recap.beatDebug')}</span>
+            <button class="g14-toggle ${getRecapBeatDebug() ? 'g14-on' : ''}" data-act="recapBeatDebug" role="switch"
+              aria-checked="${getRecapBeatDebug()}" aria-label="${tx('dev.recap.beatDebug')}"><span class="g14-knob"></span></button>
+          </div>
+        </div>
+
+        <div class="card g33-dev-card" data-card="radio">
+          <div class="g33-dev-card-title">16 · ${tx('dev.radio')}</div>
+          <p class="g33-dev-card-desc" data-val="radioNow">${radioReadout()}</p>
+          ${radioApi ? `
+          <div class="g33-dev-line">
+            <button class="btn btn-teal g33-dev-btn" data-act="radioToggle">${tx('dev.radio.play')} / ${tx('dev.radio.pause')}</button>
+            <button class="btn btn-ghost g33-dev-btn" data-act="radioSkip">${tx('dev.radio.skip')}</button>
+          </div>`
+          : `<p class="g33-dev-card-desc">${tx('dev.radio.missing')}</p>`}
+          <p class="g33-dev-card-desc">${manifestStats()}</p>
+          ${trimRows()}
+        </div>
+
+        <div class="card g33-dev-card" data-card="jump">
+          <div class="g33-dev-card-title">17 · ${tx('dev.jump')}</div>
+          <div class="g33-dev-card-desc">${tx('dev.jump.scenes')}</div>
+          <div class="g58-dev-chips">
+            ${JUMP_SCENES.map((id) => jumpChip('jumpScene', id, deps.sceneManager?.has?.(id) === true)).join('')}
+          </div>
+          <div class="g33-dev-card-desc">${tx('dev.jump.screens')}</div>
+          <div class="g58-dev-chips">
+            ${JUMP_SCREENS.map((id) => jumpChip('jumpScreen', id, ui.hasScreen(id))).join('')}
+          </div>
+          <div class="g33-dev-card-desc">${tx('dev.jump.panels')}</div>
+          <div class="g58-dev-chips">
+            ${JUMP_PANELS.map((id) => jumpChip('jumpPanel', id, true)).join('')}
+          </div>
+          <div class="g33-dev-card-desc">${tx('dev.jump.splat')}</div>
+          ${splatScenes
+            ? `<div class="g58-dev-chips">${splatScenes.map((s) => jumpChip('jumpSplat', s.id ?? String(s), deps.sceneManager?.has?.(s.id ?? String(s)) === true)).join('')}</div>`
+            : `<p class="g33-dev-card-desc">${tx('dev.jump.splatMissing')}</p>`}
+        </div>
+
+        <div class="card g33-dev-card" data-card="cheat">
+          <div class="g33-dev-card-title">18 · ${tx('dev.cheat')}</div>
+          ${HARNESS_PARAM_GROUPS.map((g) => `
+          <div class="g33-dev-card-desc g58-cheat-group">${escHtml(getLang() === 'de' ? g.de : g.en)}</div>
+          ${g.rows.map((r) => `
+          <div class="g33-dev-line g58-cheat-row">
+            <code class="g58-cheat-code">${escHtml(r.example)}</code>
+            <span class="g58-cheat-desc">${escHtml(getLang() === 'de' ? r.de : r.en)}</span>
+            <button class="btn btn-ghost g33-dev-btn g58-cheat-copy" data-act="cheatCopy" data-example="${escHtml(r.example)}">${tx('dev.cheat.copy')}</button>
+          </div>`).join('')}`).join('')}
+        </div>
       </div>`;
 
     wire();
+    wireV4();
   }
 
   /** Tiny inline arrow icon (icons.js is shared — keep this file additive). */
@@ -377,6 +626,129 @@ export function mountDevPanel(el, deps) {
     try {
       getAchievementsEngine()?.checkNow();
     } catch { /* engine not initialized (harness edge) */ }
+  }
+
+  // ---- V4/G58 card renderers/handlers (§C-SYS6) -----------------------------
+
+  /** Card-3 expander body: §B11 rows newest first (or the missing note). */
+  function ledgerText() {
+    if (typeof economy.getLedger !== 'function') return tx('dev.ledger.missing');
+    let rows = [];
+    try {
+      rows = economy.getLedger() ?? [];
+    } catch { /* defensive — G54's buffer */ }
+    if (!Array.isArray(rows) || rows.length === 0) return tx('dev.ledger.empty');
+    return [...rows]
+      .sort((a, b) => (Number(b?.at) || 0) - (Number(a?.at) || 0))
+      .map(formatLedgerRow)
+      .join('\n');
+  }
+
+  /** Card 13 seconds left on codes.lockUntil (0 = unlocked). */
+  function codesLockSec() {
+    return lockRemainingSec(store.get('codes')?.lockUntil, clock.now());
+  }
+
+  /** Card 13 one catalog row: status · name · secret + redeem/reset. */
+  function codeRow(c) {
+    const id = String(c?.id ?? '');
+    const secret = String(c?.secret ?? c?.code ?? id);
+    const nameKey = `codes.name.${id}`;
+    const name = tx(nameKey) === nameKey ? (c?.name ?? id) : tx(nameKey);
+    const redeemedAt = store.get('codes')?.redeemed?.[id];
+    return `
+          <div class="g33-dev-line g58-dev-code">
+            <span class="g33-dev-label">${redeemedAt ? '✅' : '—'} ${escHtml(name)} <code class="g58-dev-secret">${escHtml(secret)}</code></span>
+            <button class="btn btn-ghost g33-dev-btn g58-flexnone" data-act="codeRedeem" data-secret="${escHtml(secret)}">${tx('dev.codes.redeem')}</button>
+            <button class="btn btn-ghost g33-dev-btn g58-flexnone" data-act="codeReset" data-id="${escHtml(id)}" ${redeemedAt ? '' : 'disabled'}>${tx('dev.codes.reset')}</button>
+          </div>`;
+  }
+
+  /** §B1 modifiers slice — defensive create inside a store.update draft. */
+  function ensureModifiers(state) {
+    if (state.modifiers == null || typeof state.modifiers !== 'object') {
+      state.modifiers = { nextAt: 0, seed: 0, current: null, lastGameId: '', dayCoins: 0, dayCoinsDay: '' };
+    }
+    return state.modifiers;
+  }
+
+  /** Card 14 readout: `game · type · playsLeft · endsAt` + next-event line. */
+  function modReadout() {
+    const m = store.get('modifiers') ?? {};
+    const next = Number(m.nextAt) || 0;
+    const nextLabel = tx('dev.modifier.nextAt', { t: next > 0 ? formatMmSs(next - clock.now()) : '—' });
+    const cur = m.current;
+    if (cur == null || typeof cur !== 'object') return `${tx('dev.modifier.none')} · ${nextLabel}`;
+    return `${escHtml(cur.gameId)} · ${escHtml(cur.type)} · ${Math.floor(Number(cur.playsLeft) || 0)}× · ${formatMmSs((Number(cur.endsAt) || 0) - clock.now())} · ${nextLabel}`;
+  }
+
+  /** Card 15 readout: pending/last milestone + history availability. */
+  function recapReadout() {
+    const r = store.get('recap') ?? {};
+    const history = Array.isArray(r.history) ? r.history : [];
+    const state = tx('dev.recap.state', {
+      p: Math.floor(Number(r.pendingLevel) || 0),
+      l: Math.floor(Number(r.lastRecapLevel) || 0),
+    });
+    return history.length === 0 ? `${state} · ${tx('dev.recap.noHistory')}` : `${state} · ${history.length}/8`;
+  }
+
+  /** Card 16 readout: `station · trackId · t/dur · effective gain`. */
+  function radioReadout() {
+    if (!radioApi) return tx('dev.radio.idle');
+    try {
+      const now = radioApi.now?.() ?? radioApi.getStats?.()?.radio ?? null;
+      const trackId = now?.trackId ?? now?.track ?? '';
+      if (!now || !trackId) return tx('dev.radio.idle');
+      const pos = Number(now.t ?? now.time ?? now.positionSec) || 0;
+      const dur = Number(now.duration ?? now.durationSec ?? now.dur) || 0;
+      const gain = now.gain ?? now.effectiveGain ?? now.volume;
+      return `${escHtml(now.station ?? '—')} · ${escHtml(trackId)} · ${formatMmSs(pos * 1000)}/${formatMmSs(dur * 1000)} · ${gain != null && Number.isFinite(Number(gain)) ? Number(gain).toFixed(2) : '—'}`;
+    } catch {
+      return tx('dev.radio.idle');
+    }
+  }
+
+  /** Card 16 manifest stats line (tracks/stations/missing covers+beats). */
+  function manifestStats() {
+    const tracks = musicManifest?.tracks;
+    if (!Array.isArray(tracks) || tracks.length === 0) return tx('dev.radio.manifestMissing');
+    const stations = new Set(tracks.map((r) => r?.category).filter(Boolean));
+    const covers = tracks.filter((r) => !r?.cover).length;
+    const beats = tracks.filter((r) => !r?.beats).length;
+    return tx('dev.radio.manifest', { n: tracks.length, s: stations.size, c: covers, b: beats });
+  }
+
+  /** Card 16 per-track quick-trim rows (dev-sized settings mirror). */
+  function trimRows() {
+    const tracks = musicManifest?.tracks;
+    if (!Array.isArray(tracks) || tracks.length === 0) return '';
+    const vol = Math.round(Number(store.get('radio')?.trims?.[trimTrackId]?.vol) || 100);
+    return `
+          <div class="g33-dev-line">
+            <span class="g33-dev-label">${tx('dev.radio.trims')}</span>
+            <select class="g33-dev-select" data-act="trimSel" aria-label="${tx('dev.radio.trims')}">
+              ${tracks.map((r) => `<option value="${escHtml(r.id)}" ${r.id === trimTrackId ? 'selected' : ''}>${escHtml(r.title ?? r.id)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="g33-dev-line">
+            <input type="range" class="g33-vol-slider" min="0" max="150" step="5"
+              value="${vol}" data-act="trimVol" aria-label="${tx('dev.radio.trims')}">
+            <span class="g33-dev-val" data-val="trimVol">${vol}</span>
+          </div>`;
+  }
+
+  /** Card 17 one probe-aware jump chip (disabled = not registered yet). */
+  function jumpChip(act, id, registered) {
+    return `<button class="btn btn-ghost g33-dev-btn g58-chip" data-act="${act}" data-id="${escHtml(id)}"
+      ${registered ? '' : `disabled title="${tx('dev.jump.gone', { id })}"`}>${escHtml(id)}</button>`;
+  }
+
+  /** Milestone prompt shared by card-15 preview/queue (5–40, snapped to 5). */
+  function askMilestone() {
+    const n = askNumber('dev.recap.prompt', 5, 40);
+    if (n == null) return null;
+    return Math.min(40, Math.max(5, Math.round(n / 5) * 5));
   }
 
   // V3/FIX-D (E14 P1-1): unlock-all used to grant the content catalogs and
@@ -829,6 +1201,281 @@ export function mountDevPanel(el, deps) {
     });
   }
 
+  /** V4/G58 — listeners for the §C-SYS6 cards 13–18 + the card-3 expander. */
+  function wireV4() {
+    // card 3 — expander open state survives the full re-renders.
+    el.querySelector('[data-act="ledgerBox"]')?.addEventListener('toggle', (e) => {
+      ledgerOpen = e.target.open === true;
+    });
+
+    // card 13 — codes: the REAL redeem path (codesScreen.redeemCode → G53
+    // engine → §B6 effects; no parallel logic).
+    for (const btn of el.querySelectorAll('[data-act="codeRedeem"]')) {
+      btn.addEventListener('click', async () => {
+        audio.play('ui.tap');
+        const res = await redeemCode({ store, ui }, btn.dataset.secret ?? '');
+        if (!res.ok) {
+          if (res.reason === 'already') ui.toast(tx('codes.already'));
+          else if (res.reason !== 'locked') {
+            audio.play('ui.error');
+            ui.toast(tx('codes.wrong'));
+          }
+        }
+        render();
+      });
+    }
+    for (const btn of el.querySelectorAll('[data-act="codeReset"]')) {
+      btn.addEventListener('click', () => {
+        audio.play('ui.tap');
+        const id = btn.dataset.id ?? '';
+        store.update((state) => {
+          if (state.codes?.redeemed) delete state.codes.redeemed[id];
+        });
+        store.emit?.('codesChanged', { id });
+        store.flush();
+        ui.toast(tx('dev.codes.resetDone'));
+        render();
+      });
+    }
+    el.querySelector('[data-act="codesLockReset"]')?.addEventListener('click', () => {
+      audio.play('ui.tap');
+      store.update((state) => {
+        if (state.codes) state.codes.lockUntil = 0;
+      });
+      store.flush();
+      ui.toast(tx('dev.codes.lockCleared'));
+      render();
+    });
+
+    // card 14 — modifier (only wired while G54's engine is present; the
+    // engine's own consume/expire keep running — no parallel scheduler).
+    el.querySelector('[data-act="modGame"]')?.addEventListener('change', (e) => {
+      modGame = e.target.value;
+    });
+    el.querySelector('[data-act="modType"]')?.addEventListener('change', (e) => {
+      modType = e.target.value;
+      render(); // the game dropdown re-filters to the type's eligibility row
+    });
+    el.querySelector('[data-act="modStart"]')?.addEventListener('click', () => {
+      if (!modEngine) return;
+      audio.play('ui.tap');
+      const nowMs = clock.now();
+      let res = { ok: false, reason: 'unknown' };
+      store.update((state) => {
+        ensureModifiers(state);
+        const force = modEngine.forceEvent ?? modEngine.force;
+        if (typeof force === 'function') {
+          // G54's §B4 signature: forceEvent(state, {gameId, type}, nowMs).
+          const out = force(state, { gameId: modGame, type: modType }, nowMs);
+          res = out != null && typeof out === 'object' ? out : { ok: true };
+          return;
+        }
+        // Engine has no force helper: write the documented §B4 row shape.
+        const table = modEngine.TYPES ?? modEngine.MODIFIER_TYPES ?? null;
+        const plays = Math.max(1, Math.floor(Number(table?.[modType]?.plays)
+          || MODIFIER_PLAYS_FALLBACK[modType] || 2));
+        state.modifiers.current = {
+          gameId: modGame, type: modType, startedAt: nowMs,
+          endsAt: nowMs + 45 * 60000, playsLeft: plays,
+        };
+        res = { ok: true };
+      });
+      if (!res.ok) {
+        audio.play('ui.error');
+        ui.toast(tx('dev.modifier.ineligible')); // §C-SYS4.3 matrix says no
+        return;
+      }
+      store.emit?.('modifierChanged', {
+        current: store.get('modifiers')?.current ?? null,
+        nextAt: Number(store.get('modifiers')?.nextAt) || 0,
+      });
+      store.flush();
+      ui.toast(tx('dev.modifier.started'));
+      render();
+    });
+    el.querySelector('[data-act="modClear"]')?.addEventListener('click', () => {
+      if (!modEngine) return;
+      audio.play('ui.tap');
+      store.update((state) => {
+        ensureModifiers(state);
+        if (typeof modEngine.clearEvent === 'function') modEngine.clearEvent(state);
+        else state.modifiers.current = null;
+      });
+      store.emit?.('modifierChanged', { current: null, nextAt: Number(store.get('modifiers')?.nextAt) || 0 });
+      store.flush();
+      ui.toast(tx('dev.modifier.cleared'));
+      render();
+    });
+    el.querySelector('[data-act="modNextNow"]')?.addEventListener('click', () => {
+      if (!modEngine) return;
+      audio.play('ui.tap');
+      store.update((state) => {
+        ensureModifiers(state).nextAt = clock.now(); // §C-SYS6: nextAt = now
+      });
+      store.emit?.('modifierChanged', {
+        current: store.get('modifiers')?.current ?? null,
+        nextAt: Number(store.get('modifiers')?.nextAt) || 0,
+      });
+      store.flush();
+      ui.toast(tx('dev.modifier.nextSet'));
+      render();
+    });
+
+    // card 15 — recap.
+    el.querySelector('[data-act="recapPreview"]')?.addEventListener('click', () => {
+      audio.play('ui.tap');
+      const level = askMilestone();
+      if (level == null) return;
+      if (!recapPlayback) {
+        ui.toast(tx('dev.recap.missing')); // wave-2 G63/G64 playback absent
+        return;
+      }
+      try {
+        // §C-SYS6 card 15: CURRENT diff, no state writes — preview mode.
+        const preview = recapPlayback.previewRecap ?? recapPlayback.preview ?? recapPlayback.play;
+        preview({ level, store, ui, sceneManager: deps.sceneManager, preview: true });
+      } catch (err) {
+        console.warn('[devPanel] recap preview failed:', err);
+        ui.toast(tx('dev.recap.missing'));
+      }
+    });
+    el.querySelector('[data-act="recapQueue"]')?.addEventListener('click', () => {
+      audio.play('ui.tap');
+      const level = askMilestone();
+      if (level == null) return;
+      // §B5.2 queue semantics (G55's engine slice): keep the LOWEST pending
+      // milestone; only the play-completion path may clear it.
+      store.update((state) => {
+        if (state.recap == null || typeof state.recap !== 'object') {
+          state.recap = { lastRecapLevel: 0, baseline: {}, baselineAt: 0, pendingLevel: 0, history: [] };
+        }
+        const pending = Math.floor(Number(state.recap.pendingLevel) || 0);
+        if (pending === 0 || level < pending) state.recap.pendingLevel = level;
+      });
+      store.emit?.('recapChanged', {
+        pendingLevel: Number(store.get('recap')?.pendingLevel) || 0,
+        lastRecapLevel: Number(store.get('recap')?.lastRecapLevel) || 0,
+      });
+      store.flush();
+      ui.toast(tx('dev.recap.queued', { n: level }));
+      render();
+    });
+    el.querySelector('[data-act="recapReplay"]')?.addEventListener('click', () => {
+      audio.play('ui.tap');
+      const history = store.get('recap')?.history;
+      const last = Array.isArray(history) ? history[history.length - 1] : null;
+      if (!last) {
+        ui.toast(tx('dev.recap.noHistory'));
+        return;
+      }
+      if (!recapPlayback) {
+        ui.toast(tx('dev.recap.missing'));
+        return;
+      }
+      try {
+        const replay = recapPlayback.replayRecap ?? recapPlayback.replay ?? recapPlayback.play;
+        replay({ ...last, store, ui, sceneManager: deps.sceneManager, replay: true });
+      } catch (err) {
+        console.warn('[devPanel] recap replay failed:', err);
+        ui.toast(tx('dev.recap.missing'));
+      }
+    });
+    el.querySelector('[data-act="recapBeatDebug"]')?.addEventListener('click', () => {
+      setRecapBeatDebug(!getRecapBeatDebug());
+      store.emit?.('recapBeatDebugChanged', { on: getRecapBeatDebug() });
+      audio.play(getRecapBeatDebug() ? 'ui.toggleOn' : 'ui.toggleOff');
+      render();
+    });
+
+    // card 16 — radio (drives G51's real singleton; §C-SYS6 "no parallel path").
+    el.querySelector('[data-act="radioToggle"]')?.addEventListener('click', () => {
+      audio.play('ui.tap');
+      try {
+        if (typeof radioApi?.toggle === 'function') radioApi.toggle();
+        else if (radioApi?.now?.()?.trackId) radioApi?.stop?.();
+        else radioApi?.start?.();
+      } catch (err) {
+        console.warn('[devPanel] radio toggle failed:', err);
+      }
+      render();
+    });
+    el.querySelector('[data-act="radioSkip"]')?.addEventListener('click', () => {
+      audio.play('ui.tap');
+      try {
+        radioApi?.skip?.();
+      } catch (err) {
+        console.warn('[devPanel] radio skip failed:', err);
+      }
+      render();
+    });
+    el.querySelector('[data-act="trimSel"]')?.addEventListener('change', (e) => {
+      trimTrackId = e.target.value;
+      render();
+    });
+    el.querySelector('[data-act="trimVol"]')?.addEventListener('input', (e) => {
+      audio.play('ui.slider');
+      const val = el.querySelector('[data-val="trimVol"]');
+      if (val) val.textContent = String(Math.round(Number(e.target.value) || 100));
+    });
+    el.querySelector('[data-act="trimVol"]')?.addEventListener('change', (e) => {
+      const vol = Math.min(150, Math.max(0, Math.round(Number(e.target.value) || 100)));
+      const id = trimTrackId;
+      if (!id) return;
+      if (typeof radioApi?.setTrim === 'function') {
+        // G51 engine present: setTrim(id, patch) persists + retunes live gain.
+        try { radioApi.setTrim(id, { vol }); } catch (err) { console.warn('[devPanel] setTrim failed:', err); }
+      } else {
+        store.update((state) => {
+          if (state.radio == null || typeof state.radio !== 'object') state.radio = {};
+          if (state.radio.trims == null || typeof state.radio.trims !== 'object') state.radio.trims = {};
+          // §B1: only non-default entries stored.
+          if (vol === 100 && state.radio.trims[id]?.on !== false) delete state.radio.trims[id];
+          else state.radio.trims[id] = { vol, on: state.radio.trims[id]?.on !== false };
+        });
+        store.flush(); // persisted trim applies once the engine lands
+      }
+    });
+
+    // card 17 — jump list + splat teleport.
+    for (const btn of el.querySelectorAll('[data-act="jumpScene"], [data-act="jumpSplat"]')) {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.id ?? '';
+        const sm = deps.sceneManager;
+        if (!sm?.has?.(id) || sm.isSwitching?.()) return;
+        audio.play('ui.tap');
+        if (btn.dataset.act === 'jumpSplat') setOverlay(deps, true); // fps/draw readout
+        ui.closeAll();
+        sm.switchTo(id);
+      });
+    }
+    for (const btn of el.querySelectorAll('[data-act="jumpScreen"]')) {
+      btn.addEventListener('click', () => {
+        audio.play('ui.tap');
+        ui.showScreen(btn.dataset.id ?? '');
+      });
+    }
+    for (const btn of el.querySelectorAll('[data-act="jumpPanel"]')) {
+      btn.addEventListener('click', () => {
+        audio.play('ui.tap');
+        ui.openPanel(btn.dataset.id ?? ''); // unknown ids toast via ui.js
+      });
+    }
+
+    // card 18 — cheat-sheet copy buttons.
+    for (const btn of el.querySelectorAll('[data-act="cheatCopy"]')) {
+      btn.addEventListener('click', async () => {
+        audio.play('ui.tap');
+        const example = btn.dataset.example ?? '';
+        try {
+          await navigator.clipboard.writeText(example);
+          ui.toast(tx('dev.cheat.copied', { p: example }));
+        } catch {
+          globalThis.prompt?.(tx('dev.cheat.copy'), example); // clipboard blocked
+        }
+      });
+    }
+  }
+
   // Live value labels while other systems mutate state (tick, economy…).
   mounted.offs.push(
     store.on('coinsChanged', () => {
@@ -840,6 +1487,25 @@ export function mountDevPanel(el, deps) {
       if (val) val.textContent = String(store.get('level') ?? 1);
     })
   );
+
+  // V4/G58 — cards 13–16 follow their §B10 runtime events + a 1 s repaint
+  // for the countdown labels (modifier endsAt / codes lock / radio position).
+  mounted.offs.push(
+    store.on?.('modifierChanged', render) ?? (() => {}),
+    store.on?.('codesChanged', render) ?? (() => {}),
+    store.on?.('recapChanged', render) ?? (() => {}),
+    store.on?.('radioChanged', () => {
+      const val = el.querySelector('[data-val="radioNow"]');
+      if (val) val.textContent = radioReadout();
+    }) ?? (() => {})
+  );
+  const g58Tick = setInterval(() => {
+    const modVal = el.querySelector('[data-val="modState"]');
+    if (modVal) modVal.textContent = modReadout();
+    const radioVal = el.querySelector('[data-val="radioNow"]');
+    if (radioVal) radioVal.textContent = radioReadout();
+  }, 1000);
+  mounted.offs.push(() => clearInterval(g58Tick));
 
   render();
 }

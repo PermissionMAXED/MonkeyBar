@@ -12,6 +12,9 @@ import { xpToNext } from '../systems/leveling.js';
 import { getAchievementsEngine } from '../systems/achievementsEngine.js';
 // V4/G59: album badge rule + session-seen stamp (§C-SYS9.3-1)
 import { shouldShowAlbumBadge, gallerySeenStamp } from '../systems/gallery.logic.js';
+// V4/G58: ×2-coins buff chip countdown math (§C-SYS5.2 'UpdateLiebe')
+import { buffRemainingMs, formatMmSs } from './settingsIa.logic.js';
+import * as g58Clock from '../core/clock.js';
 
 const RING_R = 20;
 const RING_C = 2 * Math.PI * RING_R;
@@ -471,6 +474,29 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
       .catch((err) => console.error('[hud] shopTrip wiring failed:', err));
   }
   // ── end G7 wiring ─────────────────────────────────────────────────────────
+
+  // ---- V4/G58: ×2-coins buff chip (§C-SYS5.2 'UpdateLiebe') ----------------
+  // „×2 💰 mm:ss" beside the coin counter while codes.buffs.doubleCoinsUntil
+  // is in the future: 1 s countdown, disappears at 0, survives reload via the
+  // persisted expiry stamp. Styles in the V4/G58 styles.css block. Cleanup
+  // rides the existing `offs` list (declared above) — no dispose() edit.
+  {
+    const buffChip = document.createElement('div');
+    buffChip.className = 'g58-hud-buff';
+    buffChip.dataset.hud = 'coinBuff';
+    buffChip.innerHTML = '<span aria-hidden="true">×2 💰</span><span class="g58-hud-buff-t"></span>';
+    const buffT = buffChip.querySelector('.g58-hud-buff-t');
+    coins.after(buffChip); // meta row is safe-area aware (§C1.4)
+    const syncBuff = () => {
+      const remaining = buffRemainingMs(store.get('codes'), g58Clock.now());
+      buffChip.classList.toggle('g58-show', remaining > 0);
+      if (remaining > 0) buffT.textContent = formatMmSs(remaining);
+    };
+    const buffTimer = setInterval(syncBuff, 1000);
+    offs.push(store.on('codesChanged', syncBuff), () => clearInterval(buffTimer));
+    syncBuff();
+  }
+  // ---- end V4/G58 buff chip ------------------------------------------------
 
   return {
     el,
