@@ -329,6 +329,35 @@ export default {
     this.topcam = devParam('topcam') === '1';
     this.autopilot = devParam('autopilot') === '1';
 
+    // ── V4/G77 (§C-SYS4.2/§C-SYS4.3 + §E0.1-3): arcade muenzregen hook ─────
+    // The only modifier with an IN-GAME effect for cityDrive is muenzregen:
+    // coin/pickup spawn rate ×1.5. Per §E0.1-3 the scene derives ONE plain
+    // tuning number (coinRate) from ctx.params.modifier and applies it at the
+    // scatter sites below — no logic/state read anywhere else. Trips are
+    // NEVER modified (§C-SYS4.3: "Trips (mode: shopTrip/vetTrip) are NEVER
+    // modified"): the framework skips its modifier wiring for every
+    // params.mode launch AND engine.getActiveFor() nulls trip modes — assert
+    // that contract here and hard-drop the payload on any trip launch so a
+    // future wiring regression can never buff a trip run.
+    {
+      const mod = ctx.params.modifier ?? null;
+      if (this.mode !== 'arcade') {
+        if (mod != null) {
+          console.error('[cityDrive] ASSERT (§C-SYS4.3): trip launch carried ctx.params.modifier — dropped', this.mode);
+          ctx.params.modifier = undefined;
+        }
+        this.coinRate = 1;
+      } else {
+        const rate = Number(mod?.coinRate);
+        this.coinRate = mod?.type === 'muenzregen' && rate > 0 ? rate : 1;
+      }
+      // Active arcade coin count = 26 base × coinRate (the collect-respawn
+      // below keeps the count, so the ×1.5 density holds all round).
+      this.arcadeCoinTarget = Math.round(T.ARCADE_COINS_ACTIVE * this.coinRate);
+      if (import.meta.env?.DEV) window.__drive = { game: this }; // CDP probe (dev-only)
+    }
+    // ── end V4/G77 ──────────────────────────────────────────────────────────
+
     // ── V2/G21: route view (§C9.2) ────────────────────────────────────────
     // The vet trip re-targets the SAME shop-trip machinery: a shallow view
     // over the base layout swaps lane/pickups/destination-parking/spawn
@@ -449,11 +478,11 @@ export default {
     this.coinGeo.rotateX(Math.PI / 2);
     this.coins = isTripMode(this.mode) // V2/G21: vet route carries 10 (§C9.2)
       ? layout.pickups.map((p) => ({ ...p, active: true }))
-      : this.scatterCoins(T.ARCADE_COINS_ACTIVE);
+      : this.scatterCoins(this.arcadeCoinTarget); // V4/G77: 26 × muenzregen coinRate (§C-SYS4.2)
     this.coinMesh = new THREE.InstancedMesh(
       this.coinGeo,
       new THREE.MeshBasicMaterial({ color: '#f7c531' }),
-      isTripMode(this.mode) ? this.coins.length : T.ARCADE_COINS_ACTIVE + 8 // V2/G21
+      isTripMode(this.mode) ? this.coins.length : this.arcadeCoinTarget + 8 // V2/G21; V4/G77: capacity follows the scaled target
     );
     scene.add(this.coinMesh);
 
@@ -973,6 +1002,7 @@ export default {
   // ── end V2/G21 ──────────────────────────────────────────────────────────────
 
   dispose() {
+    if (import.meta.env?.DEV && window.__drive?.game === this) delete window.__drive; // V4/G77
     this.sendDistance(); // V2/G21: quit-from-pause still books the odometer
     this.car?.dispose();
     this.traffic?.dispose();
