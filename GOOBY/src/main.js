@@ -37,6 +37,8 @@ import { initSkinSync } from './character/skins.js';
 import { initWhatsNew } from './ui/whatsNew.js';
 // V3/G34: sticker-book engine — import for the marked block below (PLAN3 §B5/§C5)
 import { initStickerBook } from './systems/stickerBook.js';
+// V4/G55: recap trigger plumbing — imports for the marked block below (PLAN4 §B5.2)
+import { defaultRecapSlice, initialLastRecapLevel, milestoneCrossed, snapshot as recapSnapshot } from './systems/recap.js';
 // V2/G23: progression UI — imports for the marked block below (PLAN2 §C5/C6/C12)
 import { registerQuestBoard } from './ui/questBoard.js';
 import { registerAlbumScreen } from './ui/albumScreen.js';
@@ -275,6 +277,54 @@ async function boot() {
     audio.play('jingle.levelUp');
   });
   if (loaded.recovered) ui.toast('boot.saveCorrupt');
+
+  // ---- V4/G55: recap trigger plumbing (PLAN4 §B5.2/§C-SYS2.1, single marked block) ----
+  // Level-change listener: milestoneCrossed() queues the lowest un-recapped
+  // milestone (5,10,…,40) into recap.pendingLevel (§B5.1 — an L4→L11 jump
+  // queues 5) and emits the runtime 'recapChanged' {pendingLevel,
+  // lastRecapLevel} event (§B10). pendingLevel survives reload (the §E3
+  // pipeline passes the slice through) and is cleared ONLY by the §B5.2
+  // completion write. Saves without a recap slice (pre-G53 migrations[3])
+  // get the retro-safe §B1 #3 init here on their first level-up
+  // (lastRecapLevel floored to the pre-jump milestone + baseline snapshot),
+  // so veterans never see instant-recap spam; G53's migration makes this
+  // init path dead.
+  // Plays-on-next-home-enter hook (wave 2 registers it): the recap NEVER
+  // starts from this listener. G64's recapOverlay subscribes to home-scene
+  // enters (plus 'recapChanged' while home is already active), reads
+  // recap.pendingLevel, builds the cue timeline via systems/recapDirector.js
+  // buildTimeline(), and on finish/skip commits systems/recap.js
+  // completeRecap() in ONE store.update (atomic §B5.2: history + baseline +
+  // lastRecapLevel + pendingLevel=0). It must never fire mid-minigame/trip.
+  {
+    let recapPrevLevel = Math.max(1, Math.floor(Number(store.get('level')) || 1));
+    store.on('xpChanged', ({ level }) => {
+      const prev = recapPrevLevel;
+      recapPrevLevel = level;
+      if (!(level > prev)) return; // level-downs (dev harness) just resync
+      let payload = null;
+      store.update((s) => {
+        const hadSlice = s.recap != null && typeof s.recap === 'object' && !Array.isArray(s.recap);
+        const recap = hadSlice
+          ? { ...defaultRecapSlice(), ...s.recap }
+          : {
+              ...defaultRecapSlice(),
+              lastRecapLevel: initialLastRecapLevel(prev),
+              baseline: recapSnapshot(s, now()),
+              baselineAt: now(),
+            };
+        const pending = Math.max(0, Math.floor(Number(recap.pendingLevel) || 0));
+        const milestone = milestoneCrossed(prev, level, recap.lastRecapLevel);
+        recap.pendingLevel = milestone > 0 && (pending === 0 || milestone < pending) ? milestone : pending;
+        s.recap = recap;
+        if (recap.pendingLevel !== pending || !hadSlice) {
+          payload = { pendingLevel: recap.pendingLevel, lastRecapLevel: recap.lastRecapLevel };
+        }
+      });
+      if (payload) store.emit('recapChanged', payload);
+    });
+  }
+  // ---- end V4/G55 block ----
 
   // First-gesture audio unlock (iOS requirement §D6).
   const unlock = () => {
