@@ -117,7 +117,120 @@ export const SURF = Object.freeze({
     ACTION_LEAD_SEC: 0.35,
     ROW_EPS_SEC: 0.4, //     hazards arriving within this window form one row
   }),
+  // ── V4/G74 §G5.3/§C-SYS4.3 derived-mode defaults (Mittel identity) ──
+  /** Chunk compression: effective chunk advance = CHUNK_LEN_M / density. */
+  DENSITY_MULT: 1,
+  /** Endless ramps density from DENSITY_MULT to this cap (§G5.4: ×1.5). */
+  DENSITY_CAP: 1,
+  /** Endless density reaches the cap by this distance (m). */
+  DENSITY_RAMP_FULL_M: 1500,
+  SPEED_MULT: 1,
+  /** Turbo-modifier score multiplier — applied in runScore (§C-SYS4.2). */
+  SCORE_MULT: 1,
+  /** Muenzregen coin-spawn multiplier (§C-SYS4.2: ×1.5 expected coins). */
+  COIN_RATE: 1,
+  /** riesenGooby render scale (visual only — shoppingSurf.js reads it). */
+  RENDER_SCALE_MULT: 1,
+  /**
+   * When true, chunk enqueueing runs through pickNextSurvivableChunk (the
+   * §C8.7 BFS validator against the mode's SCALED ramp speeds + compressed
+   * seams). Mittel keeps the plain seeded picker — bit-identical streams.
+   */
+  GATED_SPAWNS: false,
+  ENDLESS: false,
+  /**
+   * Certification-bot fumble rate (per 0.5 s decision window) used ONLY by
+   * simulateSurfAutoplay — models human lapses so §G10 bot means stay
+   * monotone easy ≥ mittel ≥ schwer. botInput itself stays deterministic
+   * (travel replays remain bit-equal).
+   */
+  BOT_MISS_CHANCE: 0.012,
 });
+
+/**
+ * V4/G74 §G5.3 runner/steer rows. Schwer speed-cap is the BINDING §E-G74
+ * 16 → 18 m/s (cap mult 1.125), Endlos ramps on to 20 m/s (1.25) with the
+ * density cap ×1.5 (§G5.4 row); Endlos ends like arcade on the 3rd crash.
+ */
+export const SURF_DIFFICULTY = Object.freeze({
+  easy: Object.freeze({
+    speed: 0.85, capMult: 0.85, density: 0.85, extraCrashes: 1, endless: false, botMiss: 0.005,
+  }),
+  normal: Object.freeze({
+    speed: 1, capMult: 1, density: 1, extraCrashes: 0, endless: false, botMiss: 0.012,
+  }),
+  hard: Object.freeze({
+    speed: 1.2, capMult: 1.125, density: 1.15, extraCrashes: 0, endless: false, botMiss: 0.07,
+  }),
+  endless: Object.freeze({
+    speed: 1.2, capMult: 1.25, density: 1.15, densityCap: 1.5, extraCrashes: 0, endless: true, botMiss: 0.07,
+  }),
+});
+
+/**
+ * Derive the frozen per-mode tune (§G5.3). Mittel returns the frozen live
+ * table itself — bit-identical numbers AND rng streams (§G5.2/§E5).
+ * @param {object} [tune] @param {string} [mode] @returns {object}
+ */
+export function applyDifficulty(tune = SURF, mode = 'normal') {
+  const id = Object.hasOwn(SURF_DIFFICULTY, mode) ? mode : 'normal';
+  if (id === 'normal') return tune;
+  const row = SURF_DIFFICULTY[id];
+  const maxSpeed = tune.MAX_SPEED * row.capMult;
+  return Object.freeze({
+    ...tune,
+    BASE_SPEED: tune.BASE_SPEED * row.speed,
+    MAX_SPEED: maxSpeed,
+    ARCADE_MAX_CRASHES: tune.ARCADE_MAX_CRASHES + row.extraCrashes,
+    DENSITY_MULT: row.density,
+    DENSITY_CAP: row.densityCap ?? row.density,
+    SPEED_MULT: row.speed,
+    GATED_SPAWNS: row.density !== 1 || maxSpeed > tune.MAX_SPEED,
+    ENDLESS: row.endless,
+    BOT_MISS_CHANCE: row.botMiss,
+    MODE: id,
+  });
+}
+
+/**
+ * Apply surf's three eligible gameplay modifiers (§C-SYS4.3: muenzregen /
+ * turbo / riesenGooby). Plain-number payload from ctx.params.modifier —
+ * the logic never reads modifier STATE (§E0.1-3).
+ * @param {object} tune derived (or base) tune
+ * @param {{type: string}|null|undefined} modifier
+ * @returns {object}
+ */
+export function applyModifier(tune, modifier) {
+  if (!modifier) return tune;
+  if (modifier.type === 'muenzregen') {
+    return Object.freeze({
+      ...tune,
+      COIN_RATE: Math.max(0, Number(modifier.coinRate) || 1),
+    });
+  }
+  if (modifier.type === 'turbo') {
+    const speedMult = Math.max(0.1, Number(modifier.speedMult) || 1);
+    return Object.freeze({
+      ...tune,
+      BASE_SPEED: tune.BASE_SPEED * speedMult,
+      MAX_SPEED: tune.MAX_SPEED * speedMult,
+      SPEED_MULT: tune.SPEED_MULT * speedMult,
+      SCORE_MULT: Math.max(0, Number(modifier.scoreMult) || 1),
+      // any speed-up beyond the validated envelope re-arms the spawn gate
+      GATED_SPAWNS: tune.GATED_SPAWNS || speedMult > 1,
+    });
+  }
+  if (modifier.type === 'riesenGooby') {
+    const hitbox = Math.max(0.1, Number(modifier.hitboxMult) || 1);
+    return Object.freeze({
+      ...tune,
+      PLAYER_HALF_W: tune.PLAYER_HALF_W * hitbox,
+      PLAYER_HALF_DEPTH: tune.PLAYER_HALF_DEPTH * hitbox,
+      RENDER_SCALE_MULT: Math.max(0.1, Number(modifier.scale) || 1),
+    });
+  }
+  return tune;
+}
 
 /** @param {string} mode @returns {boolean} travel-run launch mode (G38 wires 'travel'; 'surfTravel' accepted as alias) */
 export function isTravelMode(mode) {
@@ -301,6 +414,71 @@ export function expandChunk(def, startM) {
 }
 
 // ---------------------------------------------------------------------------
+// V4/G74 §G5.3/§G5.4 — density-scaled, validator-gated chunk streaming
+// ---------------------------------------------------------------------------
+
+/**
+ * Obstacle-density multiplier at a distance: constant DENSITY_MULT, except
+ * Endlos where it ramps linearly to DENSITY_CAP (§G5.4: ×1.5) by
+ * DENSITY_RAMP_FULL_M. Chunk advance = CHUNK_LEN_M / density.
+ * @param {number} distanceM @param {object} [tune] @returns {number}
+ */
+export function densityMultAt(distanceM, tune = SURF) {
+  if (!tune.ENDLESS || tune.DENSITY_CAP <= tune.DENSITY_MULT) return tune.DENSITY_MULT;
+  const t = Math.min(1, Math.max(0, distanceM / tune.DENSITY_RAMP_FULL_M));
+  return tune.DENSITY_MULT + (tune.DENSITY_CAP - tune.DENSITY_MULT) * t;
+}
+
+/**
+ * Every ramp speed of a tune (BASE → MAX in SPEED_STEP increments) — the
+ * probe set both the §C8.7 test suite and the runtime spawn gate validate
+ * against (the §G5.3 guardrail: "validator runs against the SCALED speeds").
+ * @param {object} [tune] @returns {number[]}
+ */
+export function validatorProbeSpeeds(tune = SURF) {
+  const speeds = [];
+  for (let v = tune.BASE_SPEED; v <= tune.MAX_SPEED + 1e-9; v += tune.SPEED_STEP) speeds.push(v);
+  if (speeds[speeds.length - 1] < tune.MAX_SPEED - 1e-9) speeds.push(tune.MAX_SPEED);
+  return speeds;
+}
+
+/**
+ * Validator-gated chunk pick (GATED_SPAWNS modes): draws the same single
+ * seeded pick as pickNextChunk, then rotates through the eligible pool until
+ * a candidate is §C8.7-survivable at EVERY scaled ramp speed — including the
+ * still-live hazards of the previous chunks (compressed seams are where
+ * naive density scaling breaks the never-impossible guarantee). Returns −1
+ * when nothing fits; the caller inserts a hazard-free breather and retries
+ * further down the street.
+ * @param {() => number} rng
+ * @param {number} startM
+ * @param {number} lastIndex
+ * @param {object[]} recentHazards absolute [{atM, kind, lane?, lanes?}]
+ * @param {object} [tune]
+ * @returns {number} CHUNKS index or −1
+ */
+export function pickNextSurvivableChunk(rng, startM, lastIndex, recentHazards, tune = SURF) {
+  if (startM <= 0) return 0;
+  const eligible = [];
+  for (let i = 0; i < CHUNKS.length; i += 1) {
+    if (i === lastIndex) continue;
+    const def = CHUNKS[i];
+    if (startM < def.minM) continue;
+    if (def.hazards.some((h) => h.kind === 'gap') && startM < tune.GAP_MIN_DISTANCE_M) continue;
+    eligible.push(i);
+  }
+  const first = Math.floor(rng() * eligible.length) % eligible.length;
+  const speeds = validatorProbeSpeeds(tune);
+  for (let k = 0; k < eligible.length; k += 1) {
+    const idx = eligible[(first + k) % eligible.length];
+    const { hazards } = expandChunk(CHUNKS[idx], startM);
+    const seq = recentHazards.concat(hazards);
+    if (speeds.every((v) => isSequenceSurvivable(seq, v, tune))) return idx;
+  }
+  return -1;
+}
+
+// ---------------------------------------------------------------------------
 // §C8.7 survivability validator — BFS/DP over the action lattice
 // ---------------------------------------------------------------------------
 
@@ -370,23 +548,36 @@ export function isSequenceSurvivable(hazards, speed, tune = SURF) {
   const V = tune.VALIDATOR;
   const rows = hazardRows(hazards, speed, tune);
   let reachable = new Array(tune.LANES).fill(true);
+  // V4/G74: action DURATION lockout — starting a NEW jump/slide is blocked
+  // for the previous move's full duration (stepRun's tryAction rule). Free
+  // lanes and lane tweens stay unaffected (both work mid-air/mid-slide).
+  // The v3 lattice only charged the timing lead, which over-approved
+  // compressed Schwer/Endlos seams (a 0.5 s slide followed 0.55 s later by
+  // a must-jump cart in EVERY lane passed the check but was hopeless).
+  let prevAction = new Array(tune.LANES).fill(null);
+  const DUR = Object.freeze({ jump: tune.JUMP_SEC, slide: tune.SLIDE_SEC });
   let prevT = -V.REACT_SEC; // free reaction slack before the first row
   for (const row of rows) {
     const dt = row.t - prevT;
     const next = new Array(tune.LANES).fill(false);
+    const nextAction = new Array(tune.LANES).fill(null);
     for (let to = 0; to < tune.LANES; to += 1) {
       const need = row.lanes[to];
       if (need === 'none') continue;
       for (let from = 0; from < tune.LANES; from += 1) {
         if (!reachable[from]) continue;
-        const cost = V.REACT_SEC + V.LANE_COST_SEC * Math.abs(to - from) + (need ? V.ACTION_LEAD_SEC : 0);
+        const busy = need && prevAction[from] ? DUR[prevAction[from]] : 0;
+        const cost = Math.max(V.REACT_SEC, busy) +
+          V.LANE_COST_SEC * Math.abs(to - from) + (need ? V.ACTION_LEAD_SEC : 0);
         if (dt >= cost) {
           next[to] = true;
+          if (need === 'jump' || need === 'slide') nextAction[to] = need;
           break;
         }
       }
     }
     reachable = next;
+    prevAction = nextAction;
     if (!reachable.some(Boolean)) return false;
     prevT = row.t;
   }
@@ -421,6 +612,21 @@ export function planPowerupKind(rng, lastKind, sinceTurboM, tune = SURF) {
  */
 export function planPowerupGap(rng, tune = SURF) {
   return tune.POWERUP_GAP_MIN_M + rng() * (tune.POWERUP_GAP_MAX_M - tune.POWERUP_GAP_MIN_M);
+}
+
+/**
+ * V4/G74 muenzregen: coins materialized for an n-coin chunk row. Fractional
+ * COIN_RATE payloads use one seeded Bernoulli draw so the ×1.5 payload is
+ * exactly +50 % in expectation. COIN_RATE 1 draws NOTHING — the Mittel rng
+ * stream stays bit-identical.
+ * @param {() => number} rng @param {number} n authored row size
+ * @param {object} [tune] @returns {number}
+ */
+export function coinRowCount(rng, n, tune = SURF) {
+  const expected = Math.max(0, n * (tune.COIN_RATE ?? 1));
+  const whole = Math.floor(expected);
+  const fraction = expected - whole;
+  return whole + (fraction > 0 && rng() < fraction ? 1 : 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -471,6 +677,7 @@ export function createRun({ rng, mode = 'arcade', tune = SURF }) {
     // world streaming
     chunksEndM: 0,
     lastChunk: -1,
+    recentHazards: [], // V4/G74: gate lookback window (GATED_SPAWNS modes)
     pendingHazards: [], // absolute atM, not yet materialized
     pendingCoins: [],
     obstacles: [], //     {id, kind, lane?, lanes?, x, z, def…}
@@ -572,12 +779,31 @@ function spawnStep(run, events) {
   if (run.nextPowerupAtM === 0) run.nextPowerupAtM = planPowerupGap(run.rng, tune);
   // enqueue whole chunks ahead of the horizon
   while (run.chunksEndM < run.distanceM + tune.SPAWN_AHEAD_M + tune.CHUNK_LEN_M) {
-    const idx = pickNextChunk(run.rng, run.chunksEndM, run.lastChunk, tune);
-    const { hazards, coins } = expandChunk(CHUNKS[idx], run.chunksEndM);
+    if (!tune.GATED_SPAWNS) {
+      // Mittel (and payout-only modifier) path — untouched v3 stream
+      const idx = pickNextChunk(run.rng, run.chunksEndM, run.lastChunk, tune);
+      const { hazards, coins } = expandChunk(CHUNKS[idx], run.chunksEndM);
+      run.pendingHazards.push(...hazards);
+      run.pendingCoins.push(...coins);
+      run.lastChunk = idx;
+      run.chunksEndM += tune.CHUNK_LEN_M;
+      continue;
+    }
+    // ── V4/G74: density-compressed seams under the §C8.7 validator gate ──
+    const startM = run.chunksEndM;
+    run.recentHazards = run.recentHazards.filter((h) => h.atM > startM - tune.CHUNK_LEN_M * 2);
+    const idx = pickNextSurvivableChunk(run.rng, startM, run.lastChunk, run.recentHazards, tune);
+    if (idx < 0) {
+      // no def fits behind this seam — insert a hazard-free breather strip
+      run.chunksEndM += tune.CHUNK_LEN_M * 0.35;
+      continue;
+    }
+    const { hazards, coins } = expandChunk(CHUNKS[idx], startM);
     run.pendingHazards.push(...hazards);
     run.pendingCoins.push(...coins);
+    run.recentHazards.push(...hazards);
     run.lastChunk = idx;
-    run.chunksEndM += tune.CHUNK_LEN_M;
+    run.chunksEndM += tune.CHUNK_LEN_M / densityMultAt(startM, tune);
   }
   const horizon = run.distanceM + tune.SPAWN_AHEAD_M;
   // hazards (suppressed in travel-jog + once a travel run is finished)
@@ -615,10 +841,11 @@ function spawnStep(run, events) {
   // coins
   run.pendingCoins = run.pendingCoins.filter((c) => {
     if (c.atM > horizon) return true;
-    for (let i = 0; i < c.n; i += 1) {
-      const zOff = (i - (c.n - 1) / 2) * tune.COIN_STEP_M;
+    const n = coinRowCount(run.rng, c.n, tune); // V4/G74 muenzregen payload
+    for (let i = 0; i < n; i += 1) {
+      const zOff = (i - (n - 1) / 2) * tune.COIN_STEP_M;
       const y = c.arc
-        ? tune.COIN_Y + tune.JUMP_HEIGHT * 0.85 * Math.cos(((zOff / ((c.n * tune.COIN_STEP_M) / 2)) * Math.PI) / 2) ** 2
+        ? tune.COIN_Y + tune.JUMP_HEIGHT * 0.85 * Math.cos(((zOff / ((n * tune.COIN_STEP_M) / 2)) * Math.PI) / 2) ** 2
         : tune.COIN_Y;
       run.coinItems.push({
         id: run.nextId++,
@@ -899,9 +1126,9 @@ export function stepRun(run, dt, input) {
   return events;
 }
 
-/** Current §C8.5 score of a run. @param {object} run @returns {number} */
+/** Current §C8.5 score of a run (× turbo SCORE_MULT — V4/G74 §C-SYS4.2). @param {object} run @returns {number} */
 export function runScore(run) {
-  return surfScore(run.distanceM, run.coins, run.nearMisses);
+  return Math.round(surfScore(run.distanceM, run.coins, run.nearMisses) * (run.tune.SCORE_MULT ?? 1));
 }
 
 /** §B3 meta payload for onEnd (both modes — §C8.5/§C8.6). */
@@ -1003,7 +1230,12 @@ export function botInput(run) {
     for (const l of [myLane, myLane - 1, myLane + 1]) {
       if (l < 0 || l >= tune.LANES) continue;
       const t = threats[l];
-      const safe = !t || t.tta > 1.4 || t.pass === 'jump' || t.pass === 'slide';
+      // V4/G74: an action-pass lane only counts as safe when there is still
+      // time to finish the tween AND start the jump/slide — drifting into a
+      // cart's lane 0.3 s before it arrives was the bot's top crash cause at
+      // Schwer speeds (§G5.3 scaled ramp).
+      const safe = !t || t.tta > 1.4 ||
+        ((t.pass === 'jump' || t.pass === 'slide') && t.tta > tune.LANE_CHANGE_SEC + tune.VALIDATOR.REACT_SEC + tune.VALIDATOR.ACTION_LEAD_SEC + 0.25);
       if (safe && value[l] > value[target] + (l === myLane ? 0 : 1)) target = l;
     }
     if (target !== myLane) input[target < myLane ? 'left' : 'right'] = true;
@@ -1027,4 +1259,53 @@ export function simulateRun({ rng, mode = 'arcade', maxSec = 120, dt = 1 / 30, t
     if (run.ended || (run.mode === 'travel' && run.finished)) break;
   }
   return { run, events, score: runScore(run) };
+}
+
+/**
+ * V4/G74 mode-aware certification sim (§E5 items 5–6): the deterministic
+ * §C8.7 pilot plus seeded human-lapse fumbles (BOT_MISS_CHANCE per 0.5 s
+ * decision window suppresses input for 0.55 s) so bot means degrade with
+ * speed/density — easy ≥ mittel ≥ schwer. The shipped botInput stays
+ * untouched/deterministic.
+ * @param {string} [mode] difficulty id
+ * @param {number} [seed]
+ * @param {number} [maxSec]
+ * @param {{type: string}|null} [modifier] ctx.params.modifier payload
+ * @returns {{score: number, distanceM: number, coins: number, crashes: number, elapsed: number, ended: boolean}}
+ */
+export function simulateSurfAutoplay(mode = 'normal', seed = 1, maxSec = 180, modifier = null) {
+  const tune = applyModifier(applyDifficulty(SURF, mode), modifier);
+  const mk = (s) => {
+    let a = s >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) | 0;
+      let x = Math.imul(a ^ (a >>> 15), 1 | a);
+      x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) | 0;
+      return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  const run = createRun({ rng: mk(seed * 2654435761 + 7), mode: 'arcade', tune });
+  const lapse = mk(seed ^ 0x5f356495);
+  const dt = 1 / 30;
+  let fumbleT = 0;
+  let nextRollT = 0;
+  const steps = Math.ceil(maxSec / dt);
+  for (let i = 0; i < steps; i += 1) {
+    if (run.elapsed >= nextRollT) {
+      nextRollT += 0.5;
+      if (lapse() < tune.BOT_MISS_CHANCE) fumbleT = 0.55;
+    }
+    const input = fumbleT > 0 ? {} : botInput(run);
+    fumbleT -= dt;
+    stepRun(run, dt, input);
+    if (run.ended) break;
+  }
+  return {
+    score: runScore(run),
+    distanceM: run.distanceM,
+    coins: run.coins,
+    crashes: run.crashes,
+    elapsed: run.elapsed,
+    ended: run.ended,
+  };
 }

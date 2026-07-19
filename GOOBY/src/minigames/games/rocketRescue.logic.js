@@ -107,7 +107,71 @@ export const ROCKET = Object.freeze({
   BOT_REFUEL_RANGE_M: 12,
   /** Never abort a final descent for fuel (the abort-descend-abort loop). */
   BOT_REFUEL_SKIP_BELOW_M: 2.5,
+  // ── V4/G74 §G5.3/§G5.4 derived-mode defaults (Mittel identity) ──
+  ENDLESS: false,
+  /** §G5.4 Endlos ramp: fuel-pickup refill thins by −10 % per rescue —
+   *  the tank ALWAYS runs dry eventually (that's the end condition). */
+  ENDLESS_THIN_PER_RESCUE: 0.1,
+  /** Muenzregen pickup-rate marker (§C-SYS4.3; 1 = no modifier). */
+  PICKUP_RATE: 1,
 });
+
+/**
+ * V4/G74 §G5.3 physics/skill rows: Leicht = tolerances ×1.25 (landing-v
+ * bands + platform width), Schwer = ×0.8 (all ≥ 0.55× Mittel — guardrail).
+ * Endlos (§G5.4): Schwer tolerances, no round timer, bunnies re-arm after
+ * every cleared field and the fuel pickups thin out −10 %/rescue until the
+ * tank runs dry (fuel-out ends the run via the existing auto-tow).
+ */
+export const ROCKET_DIFFICULTY = Object.freeze({
+  easy: Object.freeze({ tol: 1.25, endless: false }),
+  normal: Object.freeze({ tol: 1, endless: false }),
+  hard: Object.freeze({ tol: 0.8, endless: false }),
+  endless: Object.freeze({ tol: 0.8, endless: true }),
+});
+
+/**
+ * Derive the frozen per-mode tune (§G5.3). Mittel returns the frozen live
+ * ROCKET table itself — bit-identical numbers AND rng streams (§G5.2/§E5:
+ * PLATFORM_HALF_W never feeds the layout rejection sampling, so every mode
+ * draws the identical seeded layout, only the surfaces get wider/narrower).
+ * @param {object} [tune] @param {string} [mode] @returns {object}
+ */
+export function applyDifficulty(tune = ROCKET, mode = 'normal') {
+  const id = Object.hasOwn(ROCKET_DIFFICULTY, mode) ? mode : 'normal';
+  if (id === 'normal') return tune;
+  const row = ROCKET_DIFFICULTY[id];
+  return Object.freeze({
+    ...tune,
+    LAND_MAX_VY: tune.LAND_MAX_VY * row.tol,
+    SOFT_MAX_VY: tune.SOFT_MAX_VY * row.tol,
+    PLATFORM_HALF_W: tune.PLATFORM_HALF_W * row.tol,
+    ENDLESS: row.endless,
+    MODE: id,
+  });
+}
+
+/**
+ * Apply rocketRescue's eligible gameplay modifier (§C-SYS4.3: muenzregen
+ * only — the game's "coins" are the fuel canisters, so +50 % pickup rate =
+ * more canisters that float back sooner). Plain-number payload from
+ * ctx.params.modifier (§E0.1-3) — logic never reads modifier state.
+ * @param {object} tune @param {{type: string}|null|undefined} modifier
+ * @returns {object}
+ */
+export function applyModifier(tune, modifier) {
+  if (!modifier) return tune;
+  if (modifier.type === 'muenzregen') {
+    const rate = Math.max(0.1, Number(modifier.coinRate) || 1);
+    return Object.freeze({
+      ...tune,
+      FUEL_PICKUP_COUNT: Math.round(tune.FUEL_PICKUP_COUNT * rate),
+      FUEL_RESPAWN_SEC: tune.FUEL_RESPAWN_SEC / rate,
+      PICKUP_RATE: rate,
+    });
+  }
+  return tune;
+}
 
 /**
  * @typedef {Object} RocketLayout
@@ -290,7 +354,9 @@ export function createEngine(rng, tune = ROCKET) {
     if (state.ended) return events;
     dt = Math.min(tune.MAX_DT, Math.max(0, dt));
     state.elapsed += dt;
-    if (state.elapsed >= tune.DURATION_SEC) {
+    // V4/G74 §G5.4: Endlos has no round timer — it ends when the fuel runs
+    // out (the pickups thin −10 %/rescue, so that ALWAYS happens).
+    if (!tune.ENDLESS && state.elapsed >= tune.DURATION_SEC) {
       endRun('time', events);
       return events;
     }
@@ -378,9 +444,15 @@ export function createEngine(rng, tune = ROCKET) {
         if (Math.hypot(f.x - state.x, f.y - state.y) <= tune.FUEL_PICKUP_RADIUS) {
           f.taken = true;
           f.respawnT = tune.FUEL_RESPAWN_SEC;
-          state.fuel = Math.min(tune.FUEL_MAX, state.fuel + tune.FUEL_PICKUP_AMOUNT);
+          // V4/G74 §G5.4 Endlos ramp: refill thins −10 % per rescued bunny
+          // (×1 in every other mode — bit-identical numbers).
+          const thin = tune.ENDLESS
+            ? Math.max(0, 1 - tune.ENDLESS_THIN_PER_RESCUE * state.rescued)
+            : 1;
+          const amount = tune.FUEL_PICKUP_AMOUNT * thin;
+          state.fuel = Math.min(tune.FUEL_MAX, state.fuel + amount);
           state.fuelLowFired = false;
-          events.push({ type: 'fuelPickup', index: i });
+          events.push({ type: 'fuelPickup', index: i, amount });
         }
       }
 
@@ -439,7 +511,17 @@ export function createEngine(rng, tune = ROCKET) {
                 events.push({ type: 'bunnyPickup', platform: s.id });
               } else if (rescueWork) {
                 events.push({ type: 'rescue', count: state.rescued });
-                if (state.rescued >= tune.PLATFORM_COUNT) endRun('complete', events);
+                if (tune.ENDLESS) {
+                  // §G5.4 Endlos: a cleared field re-arms — new stranded
+                  // bunnies appear on every platform, the run keeps going
+                  // until the (thinning) fuel loop starves out.
+                  if (layout.platforms.every((p) => !p.bunny)) {
+                    for (const p of layout.platforms) p.bunny = true;
+                    events.push({ type: 'bunnyRespawn' });
+                  }
+                } else if (state.rescued >= tune.PLATFORM_COUNT) {
+                  endRun('complete', events);
+                }
               }
             }
             break;
@@ -614,6 +696,37 @@ export function simulateRound(seed, tune = ROCKET, dt = 1 / 60) {
   const engine = createEngine(rng, tune);
   const bot = createBot(tune);
   let guard = Math.ceil((tune.DURATION_SEC + 30) / dt);
+  while (!engine.state.ended && guard > 0) {
+    engine.step(bot.control(engine.state, engine.layout), dt);
+    guard -= 1;
+  }
+  const s = engine.state;
+  return {
+    score: roundScore(s.rescued, s.fuel, s.softLandings, tune),
+    rescued: s.rescued,
+    softLandings: s.softLandings,
+    hardLandings: s.hardLandings,
+    fuelLeft: s.fuel,
+    elapsed: s.elapsed,
+    endReason: s.endReason,
+  };
+}
+
+/**
+ * V4/G74 §G5.4 certification sim: one full seeded PD-bot round at `mode`
+ * (deterministic, no DOM). Endlos terminates through its own §G5.4
+ * end-condition (thinning fuel → auto-tow); maxSec is only a safety net.
+ * @param {string} [mode] @param {number} [seed] @param {number} [maxSec]
+ * @returns {{score: number, rescued: number, softLandings: number,
+ *   hardLandings: number, fuelLeft: number, elapsed: number, endReason: string|null}}
+ */
+export function simulateRocketAutoplay(mode = 'normal', seed = 1, maxSec = 1800) {
+  const tune = applyDifficulty(ROCKET, mode);
+  const rng = mulberry32(seed);
+  const engine = createEngine(rng, tune);
+  const bot = createBot(tune);
+  const dt = 1 / 60;
+  let guard = Math.ceil(maxSec / dt);
   while (!engine.state.ended && guard > 0) {
     engine.step(bot.control(engine.state, engine.layout), dt);
     guard -= 1;

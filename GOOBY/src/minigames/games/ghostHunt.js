@@ -26,6 +26,7 @@ import {
   SPOTS,
   DECOY_SPOTS,
   TOKEN_ANCHORS,
+  applyDifficulty, // V4/G74 §G5.3
   createHunt,
   stepHunt,
   tapHunt,
@@ -226,7 +227,13 @@ export default {
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
     const seed = Number.isFinite(ctx.params?.seed) ? ctx.params.seed : Math.floor(ctx.rng() * 2 ** 31);
-    this.hunt = createHunt(seed);
+    // ── V4/G74 (§G5.3): timed-arena difficulty via ctx.params.difficulty.
+    // ghostHunt has NO gameplay modifiers (§C-SYS4.3 payout-only rows —
+    // doppelGold/glueckspilz/stickerChance act at the economy seam), so no
+    // applyModifier here. Mittel returns the frozen HUNT table itself. ──
+    const difficulty = ctx.params?.difficulty ?? 'normal';
+    this.tune = applyDifficulty(HUNT, difficulty);
+    this.hunt = createHunt(seed, this.tune);
     this.phase = 'play'; // 'play' | 'ending' | 'done'
     this.endT = 0;
     this.shownScore = 0;
@@ -494,12 +501,14 @@ export default {
 
     this.buildHuntHud();
     ctx.hud.setScore(0);
-    ctx.hud.setTime(HUNT.DURATION_SEC);
+    // V4/G74 §G5.4: Endlos counts up (no round timer), timed modes count down
+    ctx.hud.setTime(this.tune.ENDLESS ? 0 : this.tune.DURATION_SEC);
 
     if (import.meta.env?.DEV) {
       // §E9 test surface (same pattern as purblePlace's __purble): lets CDP
       // proofs read hunt state / perf numbers without scraping the HUD.
       window.__hunt = { game: this, hunt: this.hunt };
+      globalThis.__g74 = { game: 'ghostHunt', difficulty, tune: this.tune, hunt: this.hunt }; // V4/G74 CDP probe
     }
   },
 
@@ -624,7 +633,7 @@ export default {
     }
     this.playEvents();
     this.syncScore();
-    ctx.hud.setTime(HUNT.DURATION_SEC - state.t);
+    ctx.hud.setTime(this.tune.ENDLESS ? state.t : this.tune.DURATION_SEC - state.t);
 
     if (this.grumpyT > 0) {
       this.grumpyT -= dt;

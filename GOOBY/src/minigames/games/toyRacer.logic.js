@@ -114,7 +114,101 @@ export const RACER = Object.freeze({
   GRID_GAP: 0.85,
   /** Sim substep ceiling (s). */
   MAX_SUBSTEP: 1 / 30,
+  // ── V4/G74 §G5.3/§C-SYS4.3 derived-mode defaults (Mittel identity) ──
+  /** Seeded AI personality midpoint shift (difficulty pressure knob —
+   *  §G5.3 runner/steer "density" maps to AI pressure in a rubber-band
+   *  race: the pack itself IS the obstacle field). */
+  AI_EDGE: 0,
+  SPEED_MULT: 1,
+  /** Turbo-modifier score multiplier — applied in runScore (§C-SYS4.2). */
+  SCORE_MULT: 1,
+  /** Muenzregen item-box respawn multiplier (§C-SYS4.3 pickup rate). */
+  ITEM_RATE: 1,
+  ENDLESS: false,
+  /** §G5.4 Endlos lap chain: finishing ≤ this rank restarts the race. */
+  ENDLESS_CHAIN_MAX_RANK: 2,
+  /** §G5.4 Endlos uncapped ramp: each chained race the AI pack's seeded
+   *  personality midpoint climbs by this much (the pack outgrows the
+   *  rubber band eventually — the chain ALWAYS ends). */
+  ENDLESS_CHAIN_EDGE_STEP: 0.02,
+  /** Certification-bot lapse: mean seconds between short no-drift/no-item
+   *  lapses (0 = perfect bot). Models human fumbles for the §G5.4
+   *  monotone-means gate — exempt from the §G5.3 guardrail band. */
+  BOT_LAPSE_EVERY_SEC: 0,
+  BOT_LAPSE_SEC: 1.6,
 });
+
+/**
+ * V4/G74 §G5.3 runner/steer rows. Speed scales the whole field (higher
+ * cornering slip ∝ v² is the skill pressure); AI spread/edge + rubber
+ * clamps tune how hard the pack races. Endlos chains races back-to-back
+ * (§G5.4) and ends when the player finishes worse than 2nd.
+ */
+export const RACER_DIFFICULTY = Object.freeze({
+  easy: Object.freeze({
+    speed: 0.85, aiSpread: 0.08, aiEdge: -0.02, rubberMin: 0.85, rubberMax: 1.08, botLapse: 0, endless: false,
+  }),
+  normal: Object.freeze({
+    speed: 1, aiSpread: 0.04, aiEdge: 0, rubberMin: 0.88, rubberMax: 1.12, botLapse: 0, endless: false,
+  }),
+  hard: Object.freeze({
+    speed: 1.2, aiSpread: 0.022, aiEdge: 0.015, rubberMin: 0.92, rubberMax: 1.12, botLapse: 18, endless: false,
+  }),
+  endless: Object.freeze({
+    speed: 1.2, aiSpread: 0.022, aiEdge: 0.015, rubberMin: 0.92, rubberMax: 1.12, botLapse: 18, endless: true,
+  }),
+});
+
+/**
+ * Derive the frozen per-mode tune (§G5.3). Mittel returns the frozen live
+ * table itself — bit-identical numbers AND rng streams (§G5.2/§E5).
+ * @param {object} [tune] @param {string} [mode] @returns {object}
+ */
+export function applyDifficulty(tune = RACER, mode = 'normal') {
+  const id = Object.hasOwn(RACER_DIFFICULTY, mode) ? mode : 'normal';
+  if (id === 'normal') return tune;
+  const row = RACER_DIFFICULTY[id];
+  return Object.freeze({
+    ...tune,
+    TARGET_LAP_SEC: tune.TARGET_LAP_SEC / row.speed,
+    AI_SPREAD: row.aiSpread,
+    AI_EDGE: row.aiEdge,
+    RUBBER_MIN: row.rubberMin,
+    RUBBER_MAX: row.rubberMax,
+    SPEED_MULT: row.speed,
+    BOT_LAPSE_EVERY_SEC: row.botLapse ?? tune.BOT_LAPSE_EVERY_SEC,
+    ENDLESS: row.endless,
+    MODE: id,
+  });
+}
+
+/**
+ * Apply toyRacer's eligible gameplay modifiers (§C-SYS4.3: muenzregen /
+ * turbo). Plain-number payload from ctx.params.modifier (§E0.1-3).
+ * @param {object} tune @param {{type: string}|null|undefined} modifier
+ * @returns {object}
+ */
+export function applyModifier(tune, modifier) {
+  if (!modifier) return tune;
+  if (modifier.type === 'muenzregen') {
+    const rate = Math.max(0.1, Number(modifier.coinRate) || 1);
+    return Object.freeze({
+      ...tune,
+      ITEM_RESPAWN_SEC: tune.ITEM_RESPAWN_SEC / rate, // boxes back +50 % sooner
+      ITEM_RATE: rate,
+    });
+  }
+  if (modifier.type === 'turbo') {
+    const speedMult = Math.max(0.1, Number(modifier.speedMult) || 1);
+    return Object.freeze({
+      ...tune,
+      TARGET_LAP_SEC: tune.TARGET_LAP_SEC / speedMult,
+      SPEED_MULT: tune.SPEED_MULT * speedMult,
+      SCORE_MULT: Math.max(0, Number(modifier.scoreMult) || 1),
+    });
+  }
+  return tune;
+}
 
 /**
  * Piece library: geometry semantics per piece type. `model` = the committed
@@ -491,7 +585,9 @@ export function createRace(seed, tune = RACER) {
       offTrack: false,
       shield: false,
       item: null,
-      personality: isPlayer ? 1 : 1 - rng() * tune.AI_SPREAD,
+      // V4/G74 §G5.3: AI_EDGE shifts the seeded personality midpoint (0 on
+      // Mittel — `1 + 0 − x` is bit-identical to `1 − x`).
+      personality: isPlayer ? 1 : 1 + tune.AI_EDGE - rng() * tune.AI_SPREAD,
       // deterministic lane spread (−0.26/0/+0.26 + jitter): keeps the pack
       // visually side-by-side instead of stacking on the center line
       laneBias: isPlayer ? 0 : [-0.26, 0, 0.26][i - 1] + (rng() * 2 - 1) * 0.05,
@@ -515,6 +611,12 @@ export function createRace(seed, tune = RACER) {
     finishRank: 0,
     lastLapBanner: 0,
     events: [],
+    // ── V4/G74 §G5.4 Endlos lap chain state (all 0/idle on other modes) ──
+    raceStartT: 0, //  current race's start time (per-race MAX_RACE_SEC guard)
+    chainRaces: 0, //  completed chained races
+    chainWins: 0, //   1st-place finishes among them
+    chainScore: 0, //  banked §C10.1 score of completed chained races
+    chainEdge: 0, //   accumulated AI personality ramp (§G5.4 uncapped)
   };
 }
 
@@ -713,6 +815,54 @@ function stepKart(race, kart, dt, input) {
 }
 
 /**
+ * V4/G74 §G5.4 Endlos lap chain: bank the finished race and reset the field
+ * to the grid for the next back-to-back race. Each chained race the AI
+ * pack's personality midpoint climbs by ENDLESS_CHAIN_EDGE_STEP (uncapped
+ * ramp — the pack eventually outgrows the rubber band, so the chain ALWAYS
+ * ends). Track/template/items stay; personalities/laneBias keep their
+ * seeded values (+ the ramp), so the chain is fully deterministic.
+ * @param {object} race @param {number} rank the just-finished rank (≤ 2)
+ */
+export function resetRaceForChain(race, rank) {
+  const tune = race.tune;
+  const track = race.track;
+  race.chainScore += raceScore(rank, race.overtakes, race.karts[0].driftMeters, tune);
+  race.chainRaces += 1;
+  if (rank === 1) race.chainWins += 1;
+  race.chainEdge += tune.ENDLESS_CHAIN_EDGE_STEP;
+  for (let i = 0; i < race.karts.length; i += 1) {
+    const kart = race.karts[i];
+    const gridPos = kart.isPlayer ? tune.KARTS - 1 : i - 1;
+    const gridOffset = 1.0 + gridPos * tune.GRID_GAP;
+    kart.s = ((track.lapLen - gridOffset) % track.lapLen + track.lapLen) % track.lapLen;
+    kart.progress = -gridOffset;
+    kart.lateral = gridPos % 2 === 0 ? -0.22 : 0.22;
+    kart.targetLateral = 0;
+    kart.speed = 0;
+    kart.drifting = false;
+    kart.driftCharge = 0;
+    kart.driftMeters = 0;
+    kart.boostT = 0;
+    kart.boostMult = 1;
+    kart.stunT = 0;
+    kart.offTrack = false;
+    kart.shield = false;
+    kart.item = null;
+    kart.passSign = 0;
+    kart.passCooldown = 0;
+    if (!kart.isPlayer) kart.personality += tune.ENDLESS_CHAIN_EDGE_STEP;
+  }
+  race.blocks.length = 0;
+  race.overtakes = 0;
+  race.lastLapBanner = 0;
+  race.raceStartT = race.time;
+  for (const row of track.itemRows) {
+    for (const box of row.boxes) box.respawnT = 0;
+  }
+  race.events.push({ type: 'chainRace', races: race.chainRaces, rank, banked: race.chainScore });
+}
+
+/**
  * Advance the race by dt (internally sub-stepped).
  * @param {object} race
  * @param {number} dt seconds
@@ -756,11 +906,20 @@ export function stepRace(race, dt, input = { steer: null, drifting: false, useIt
       race.events.push({ type: 'lap', lap: lap + 1, final: lap + 1 === tune.LAPS });
     }
 
-    // finish: the player completes LAPS laps (or the safety timer fires)
-    if (player.progress >= tune.LAPS * race.track.lapLen || race.time >= tune.MAX_RACE_SEC) {
-      race.ended = true;
-      race.finishRank = playerRank(race);
-      race.events.push({ type: 'finish', rank: race.finishRank });
+    // finish: the player completes LAPS laps (or the safety timer fires).
+    // raceStartT is 0 outside Endlos — `race.time - 0` keeps the §C10.1
+    // MAX_RACE_SEC check bit-identical on easy/normal/hard.
+    const timedOut = race.time - race.raceStartT >= tune.MAX_RACE_SEC;
+    if (player.progress >= tune.LAPS * race.track.lapLen || timedOut) {
+      const rank = playerRank(race);
+      if (tune.ENDLESS && !timedOut && rank <= tune.ENDLESS_CHAIN_MAX_RANK) {
+        // §G5.4 Endlos: top-2 finish chains straight into the next race
+        resetRaceForChain(race, rank);
+      } else {
+        race.ended = true;
+        race.finishRank = rank;
+        race.events.push({ type: 'finish', rank: race.finishRank });
+      }
     }
   }
 }
@@ -782,11 +941,76 @@ export function botInput(race) {
 /** Final §C10.1 score of an ended (or running) race. @param {object} race @returns {number} */
 export function runScore(race) {
   const rank = race.ended ? race.finishRank : playerRank(race);
-  return raceScore(rank, race.overtakes, race.karts[0].driftMeters, race.tune);
+  const cur = raceScore(rank, race.overtakes, race.karts[0].driftMeters, race.tune);
+  // V4/G74: banked Endlos chain score (0 outside Endlos) + turbo SCORE_MULT
+  // (1 without the modifier → Math.round(int × 1) is bit-identical).
+  return Math.round((race.chainScore + cur) * race.tune.SCORE_MULT);
 }
 
 /** §B3 meta payload (§C10.1: meta races/wins). @param {object} race */
 export function runMeta(race) {
   const rank = race.ended ? race.finishRank : playerRank(race);
-  return { races: 1, wins: rank === 1 ? 1 : 0, overtakes: race.overtakes };
+  return {
+    races: 1 + race.chainRaces, // V4/G74 §G5.4: chained Endlos races count
+    wins: race.chainWins + (rank === 1 ? 1 : 0),
+    overtakes: race.overtakes,
+  };
+}
+
+/**
+ * V4/G74 §G5.4 certification sim: one full seeded bot race (or Endlos
+ * chain) at `mode`, fixed 30 Hz stepping — deterministic, no DOM. The
+ * per-mode BOT_LAPSE_EVERY_SEC knob injects seeded human-ish lapses (bot
+ * briefly stops drifting/using items) so harder modes score lower means
+ * (§G5.4 monotone gate) while staying beatable (target 150 in ≥ 1/5 seeds).
+ * @param {string} [mode] @param {number} [seed] @param {number} [maxSec]
+ * @returns {{score: number, rank: number, races: number, wins: number,
+ *   overtakes: number, driftMeters: number, time: number}}
+ */
+export function simulateRacerAutoplay(mode = 'normal', seed = 1, maxSec = 3600) {
+  const tune = applyDifficulty(RACER, mode);
+  const race = createRace(seed, tune);
+  const lapse = mulberry32((seed ^ 0xc0ffee11) >>> 0);
+  let lapseT = 0; //  > 0 → the bot is mid-lapse (coasting, no drift/item)
+  let nextLapse = tune.BOT_LAPSE_EVERY_SEC > 0
+    ? tune.BOT_LAPSE_EVERY_SEC * (0.5 + lapse())
+    : Infinity;
+  const dt = 1 / 30;
+  let releaseT = 0; // > 0 → mid drift-release (boost fires on the edge)
+  while (!race.ended && race.time < maxSec) {
+    const base = botInput(race);
+    // Cert-bot drift policy (skilled human model, stronger than the §C10.1
+    // in-game show bot): hold drift everywhere for meters, release at high
+    // charge to bank the 1.2 s boost, re-engage right after.
+    const player = race.karts[0];
+    releaseT = Math.max(0, releaseT - dt);
+    if (player.driftCharge >= 0.95 && releaseT <= 0) releaseT = 2 * dt;
+    let input = { steer: base.steer, drifting: releaseT <= 0, useItem: base.useItem };
+    if (tune.BOT_LAPSE_EVERY_SEC > 0) {
+      nextLapse -= dt;
+      if (nextLapse <= 0 && lapseT <= 0) {
+        lapseT = tune.BOT_LAPSE_SEC * (0.6 + lapse() * 0.8);
+        nextLapse = tune.BOT_LAPSE_EVERY_SEC * (0.5 + lapse());
+      }
+      if (lapseT > 0) {
+        lapseT -= dt;
+        input = { steer: input.steer, drifting: false, useItem: false };
+      }
+    }
+    stepRace(race, dt, input);
+  }
+  if (!race.ended) {
+    race.ended = true;
+    race.finishRank = playerRank(race);
+  }
+  const meta = runMeta(race);
+  return {
+    score: runScore(race),
+    rank: race.finishRank,
+    races: meta.races,
+    wins: meta.wins,
+    overtakes: race.overtakes,
+    driftMeters: race.karts[0].driftMeters,
+    time: race.time,
+  };
 }

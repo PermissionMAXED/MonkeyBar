@@ -25,6 +25,8 @@ import { getAchievementsEngine } from '../../systems/achievementsEngine.js';
 import { clampFloatTextToView } from '../framework.js';
 import {
   RACER,
+  applyDifficulty, // V4/G74 §G5.3
+  applyModifier, //   V4/G74 §C-SYS4.3
   createRace,
   stepRace,
   pointAt,
@@ -177,7 +179,13 @@ export default {
     this.autoplay =
       import.meta.env?.DEV && new URLSearchParams(location.search).get('autoplay') === '1';
     const seed = Number.isFinite(ctx.params?.seed) ? ctx.params.seed : Math.floor(ctx.rng() * 2 ** 31);
-    this.race = createRace(seed);
+    // ── V4/G74 (§G5.3 + §C-SYS4.3/§E0.1-3): derive the tune from
+    // ctx.params.difficulty + the plain-number modifier payload (muenzregen/
+    // turbo rows for toyRacer). Mittel without modifier returns the frozen
+    // RACER table itself — bit-identical numbers and rng streams. ──
+    const difficulty = ctx.params?.difficulty ?? 'normal';
+    this.tune = applyModifier(applyDifficulty(RACER, difficulty), ctx.params?.modifier);
+    this.race = createRace(seed, this.tune);
     this.phase = 'play'; // 'play' | 'ending' | 'done'
     this.endT = 0;
     this.score = 0;
@@ -439,6 +447,7 @@ export default {
       // §E9 test surface (same pattern as purblePlace's __purble): lets CDP
       // proofs read race state / perf numbers without scraping the HUD.
       window.__racer = { game: this, race: this.race };
+      globalThis.__g74 = { game: 'toyRacer', difficulty, tune: this.tune, race: this.race }; // V4/G74 CDP probe
     }
   },
 
@@ -507,6 +516,15 @@ export default {
       } else if (e.type === 'lap') {
         audio.play('racer.lap');
         hud.banner(e.final ? t('mg.racer.finalLap') : t('mg.racer.lap', { n: e.lap }));
+      } else if (e.type === 'chainRace') {
+        // V4/G74 §G5.4 Endlos lap chain: the finished race banks its score
+        // and the grid resets — settle the banked total, restart trickles.
+        audio.play('ui.win');
+        hud.banner(e.rank === 1 ? t('mg.racer.finish1') : t('mg.racer.finishPlace', { p: e.rank }));
+        this.particles.emit('confetti', this.kartGroups[0].position.clone().add(new THREE.Vector3(0, 1.2, 0)), { count: 12 });
+        const banked = Math.round(e.banked * this.tune.SCORE_MULT);
+        if (banked > this.score) this.addScore(banked - this.score);
+        this.paidDrift = 0;
       } else if (e.type === 'finish') {
         audio.play('ui.win');
         hud.banner(e.rank === 1 ? t('mg.racer.finish1') : t('mg.racer.finishPlace', { p: e.rank }));

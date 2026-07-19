@@ -40,6 +40,8 @@ import { clampFloatTextToView } from '../framework.js';
 import {
   SURF,
   isTravelMode,
+  applyDifficulty, // V4/G74 §G5.3
+  applyModifier, //   V4/G74 §C-SYS4.3
   createRun,
   stepRun,
   playerX,
@@ -215,11 +217,22 @@ export default {
     mode = isTravelMode(mode) ? mode : 'arcade';
     if (mode !== 'arcade' && !isTravelMode(ctx.params.mode)) ctx.params.mode = mode;
 
+    // ── V4/G74 (§G5.3/§G5.7-2 + §C-SYS4.3/§E0.1-3): derive the arcade tune
+    // from ctx.params.difficulty + the plain-number modifier payload. Trips
+    // (travel mode) stay single-difficulty/unmodified per §G5.1 — the base
+    // SURF table is used untouched there. ──
+    const difficulty = mode === 'arcade' ? (ctx.params.difficulty ?? 'normal') : 'normal';
+    const tune = mode === 'arcade'
+      ? applyModifier(applyDifficulty(SURF, difficulty), ctx.params.modifier)
+      : SURF;
+    // ── end V4/G74 ──
+
     /** All internal state — dropped whole in dispose(). */
     const S = {
       ctx,
       mode,
-      run: createRun({ rng: ctx.rng, mode }),
+      tune,
+      run: createRun({ rng: ctx.rng, mode, tune }),
       pendingInput: {},
       phase: 'run', // 'run' | 'wipeout' | 'fanfare'
       phaseT: 0,
@@ -487,6 +500,9 @@ export default {
     });
 
     if (import.meta.env?.DEV) window.__surf = { S }; // CDP probe (dev-only)
+    if (import.meta.env?.DEV) {
+      globalThis.__g74 = { game: 'shoppingSurf', difficulty, tune, S }; // V4/G74 CDP probe
+    }
   },
 
   // -------------------------------------------------------------- pooling
@@ -863,10 +879,13 @@ export default {
     }
 
     // ── player: position, slide squash, tilt ────────────────────────────────
-    const squash = sliding ? SURF.SLIDE_HEIGHT / SURF.STAND_HEIGHT : 1;
+    // V4/G74 §C-SYS4.3: riesenGooby's render scale multiplies the existing
+    // squash math (R = 1 in every other mode — bit-identical numbers).
+    const R = S.tune.RENDER_SCALE_MULT;
+    const squash = (sliding ? SURF.SLIDE_HEIGHT / SURF.STAND_HEIGHT : 1) * R;
     const sq = S.gooby.group.scale;
     sq.y += (squash - sq.y) * Math.min(1, dt * 16);
-    sq.x = sq.z = 1 + (1 - sq.y) * 0.55;
+    sq.x = sq.z = R * (1 + (1 - sq.y / R) * 0.55);
     S.gooby.group.position.set(WX(px), py, 0); // V4/G57 §G3.1-b render mirror
     S.gooby.group.rotation.z = (WX(SURF.LANE_X[run.lane]) - WX(px)) * -0.22; // lean sign mirrored with the axis
     S.gooby.update(dt);

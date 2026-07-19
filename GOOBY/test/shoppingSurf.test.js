@@ -11,6 +11,14 @@ import assert from 'node:assert/strict';
 
 import {
   SURF,
+  SURF_DIFFICULTY,
+  applyDifficulty,
+  applyModifier,
+  densityMultAt,
+  validatorProbeSpeeds,
+  pickNextSurvivableChunk,
+  coinRowCount,
+  simulateSurfAutoplay,
   CHUNKS,
   isTravelMode,
   speedRampAt,
@@ -623,4 +631,189 @@ test('§C8.7 bot arcade scores land in the §C8.5 typical band trajectory', () =
     const perSec = score / Math.max(1, run.elapsed);
     assert.ok(perSec > 6 && perSec < 25, `seed ${seed}: ${perSec.toFixed(1)} score/s`);
   }
+});
+
+// ===========================================================================
+// V4/G74 §G5 difficulty + endless + modifiers + seeded-bot certification
+// ===========================================================================
+
+test('V4/G74 surf: Mittel identity, Schwer cap 18, Endlos ramp-to-20 + density cap 1.5', () => {
+  assert.strictEqual(applyDifficulty(SURF, 'normal'), SURF, 'Mittel is identity');
+  assert.strictEqual(applyDifficulty(SURF, 'nonsense'), SURF, 'unknown ids fall back');
+  // §G5.3 runner/steer row pins (the single source the derivation reads)
+  assert.deepEqual(
+    [SURF_DIFFICULTY.easy.speed, SURF_DIFFICULTY.easy.density, SURF_DIFFICULTY.easy.extraCrashes],
+    [0.85, 0.85, 1]
+  );
+  assert.deepEqual(
+    [SURF_DIFFICULTY.hard.speed, SURF_DIFFICULTY.hard.density, SURF_DIFFICULTY.endless.densityCap],
+    [1.2, 1.15, 1.5]
+  );
+  const easy = applyDifficulty(SURF, 'easy');
+  const hard = applyDifficulty(SURF, 'hard');
+  const endless = applyDifficulty(SURF, 'endless');
+  assert.equal(easy.BASE_SPEED, SURF.BASE_SPEED * 0.85);
+  assert.equal(easy.MAX_SPEED, SURF.MAX_SPEED * 0.85);
+  assert.equal(easy.DENSITY_MULT, 0.85);
+  assert.equal(easy.ARCADE_MAX_CRASHES, SURF.ARCADE_MAX_CRASHES + 1, 'Leicht +1 crash allowance');
+  assert.equal(hard.BASE_SPEED, SURF.BASE_SPEED * 1.2);
+  assert.equal(hard.MAX_SPEED, 18, '§E-G74 binding: Schwer speed-cap 16 → 18');
+  assert.equal(hard.DENSITY_MULT, 1.15);
+  assert.equal(hard.ARCADE_MAX_CRASHES, SURF.ARCADE_MAX_CRASHES, 'Schwer crash allowance unchanged');
+  assert.equal(hard.GATED_SPAWNS, true);
+  assert.equal(endless.MAX_SPEED, 20, '§G5.4: Endlos ramp continues to 20 m/s');
+  assert.equal(endless.ENDLESS, true);
+  assert.equal(endless.DENSITY_CAP, 1.5, '§G5.4: Endlos density cap ×1.5');
+  assert.equal(endless.ARCADE_MAX_CRASHES, 3, 'Endlos ends on the 3rd crash (as arcade)');
+  // §G5.3 guardrails: validator margins (reaction window model) untouched,
+  // player hitbox never shrinks below Mittel
+  for (const t of [easy, hard, endless]) {
+    assert.equal(t.VALIDATOR.ACTION_LEAD_SEC, SURF.VALIDATOR.ACTION_LEAD_SEC);
+    assert.ok(t.VALIDATOR.ACTION_LEAD_SEC >= 0.35, 'reaction window ≥ 0.35 s');
+    assert.ok(t.PLAYER_HALF_W >= SURF.PLAYER_HALF_W * 0.55, 'hitbox ≥ 55 % of Mittel');
+  }
+  // endless density ramp: 1.15 at the gate → 1.5 by DENSITY_RAMP_FULL_M
+  assert.equal(densityMultAt(0, endless), 1.15);
+  assert.equal(densityMultAt(endless.DENSITY_RAMP_FULL_M, endless), 1.5);
+  assert.equal(densityMultAt(1e9, endless), 1.5, 'clamped at the cap');
+  assert.equal(densityMultAt(500, hard), 1.15, 'non-endless density stays flat');
+  // speed ramp actually reaches the new caps
+  assert.equal(speedRampAt(1e6, hard), 18);
+  assert.equal(speedRampAt(1e6, endless), 20);
+});
+
+test('V4/G74 surf: normal rng/coin streams stay bit-identical (createRun + coinRowCount)', () => {
+  // coinRowCount must not draw from the rng at COIN_RATE 1
+  let draws = 0;
+  const countingRng = () => {
+    draws += 1;
+    return 0.5;
+  };
+  assert.equal(coinRowCount(countingRng, 5, SURF), 5);
+  assert.equal(draws, 0, 'Mittel coin materialization draws nothing');
+  // and two identically-seeded normal runs stay bit-equal (stream untouched)
+  const a = simulateRun({ rng: rng(99), mode: 'arcade', maxSec: 30 });
+  const b = simulateRun({ rng: rng(99), mode: 'arcade', maxSec: 30 });
+  assert.deepEqual(
+    { d: a.run.distanceM, c: a.run.coins, s: a.score },
+    { d: b.run.distanceM, c: b.run.coins, s: b.score }
+  );
+});
+
+test('V4/G74 surf §C8.7: 200 seeded GATED chunk sequences survivable at Schwer AND Endlos scaled speeds', () => {
+  for (const mode of ['hard', 'endless']) {
+    const tune = applyDifficulty(SURF, mode);
+    const speeds = validatorProbeSpeeds(tune);
+    assert.ok(Math.abs(speeds[speeds.length - 1] - tune.MAX_SPEED) < 1e-9, 'probe set reaches the scaled cap');
+    for (let seed = 0; seed < 200; seed += 1) {
+      const r = rng(seed * 2654435761 + 1);
+      let startM = 0;
+      let last = -1;
+      let recent = [];
+      const hazards = [];
+      while (startM < 1500) { // 1.5 km of street per seed (endless crosses the density ramp)
+        recent = recent.filter((h) => h.atM > startM - tune.CHUNK_LEN_M * 2);
+        const idx = pickNextSurvivableChunk(r, startM, last, recent, tune);
+        if (idx < 0) {
+          startM += tune.CHUNK_LEN_M * 0.35; // breather strip (spawnStep's rule)
+          continue;
+        }
+        const ex = expandChunk(CHUNKS[idx], startM);
+        hazards.push(...ex.hazards);
+        recent.push(...ex.hazards);
+        last = idx;
+        startM += tune.CHUNK_LEN_M / densityMultAt(startM, tune);
+      }
+      // the WHOLE compressed street must stay never-impossible at every
+      // scaled ramp speed (stronger than the windowed runtime gate)
+      for (const v of speeds) {
+        assert.equal(
+          isSequenceSurvivable(hazards, v, tune),
+          true,
+          `${mode} seed ${seed} unsurvivable at ${v} m/s`
+        );
+      }
+    }
+  }
+});
+
+test('V4/G74 surf: gated spawnStep streams denser chunks and stays survivable end-to-end', () => {
+  const tune = applyDifficulty(SURF, 'endless');
+  const run = createRun({ rng: rng(7), mode: 'arcade', tune });
+  const seen = [];
+  for (let i = 0; i < 60 * 30; i += 1) {
+    const evs = stepRun(run, 1 / 30, botInput(run));
+    for (const e of evs) if (e.type === 'spawn') seen.push(e.ob.kind);
+    if (run.ended) break;
+  }
+  assert.ok(seen.length > 0, 'hazards spawned through the gated path');
+  assert.ok(run.chunksEndM > run.distanceM, 'stream kept ahead of the player');
+});
+
+test('V4/G74 surf: muenzregen +50 % expected coins, turbo speed/score, riesenGooby scale/hitbox', () => {
+  const hard = applyDifficulty(SURF, 'hard');
+  const rain = applyModifier(hard, { type: 'muenzregen', coinRate: 1.5 });
+  assert.equal(rain.COIN_RATE, 1.5);
+  assert.equal(coinRowCount(() => 0.49, 5, rain), 8, '5 × 1.5 = 7.5 → Bernoulli up');
+  assert.equal(coinRowCount(() => 0.51, 5, rain), 7, '5 × 1.5 = 7.5 → Bernoulli down');
+  assert.equal((8 + 7) / 2, 5 * 1.5, 'exactly +50 % in expectation');
+
+  const turbo = applyModifier(hard, { type: 'turbo', speedMult: 1.25, scoreMult: 1.5 });
+  assert.equal(turbo.BASE_SPEED, hard.BASE_SPEED * 1.25);
+  assert.equal(turbo.MAX_SPEED, hard.MAX_SPEED * 1.25);
+  assert.equal(turbo.SCORE_MULT, 1.5);
+  assert.equal(turbo.GATED_SPAWNS, true);
+  const run = createRun({ rng: rng(1), mode: 'arcade', tune: turbo });
+  run.distanceM = 100;
+  run.coins = 10;
+  assert.equal(runScore(run), Math.round(surfScore(100, 10, 0) * 1.5), 'turbo score ×1.5');
+
+  const giant = applyModifier(hard, { type: 'riesenGooby', scale: 1.6, hitboxMult: 1.3 });
+  assert.equal(giant.RENDER_SCALE_MULT, 1.6);
+  assert.equal(giant.PLAYER_HALF_W, hard.PLAYER_HALF_W * 1.3);
+  assert.equal(giant.PLAYER_HALF_DEPTH, hard.PLAYER_HALF_DEPTH * 1.3);
+  assert.strictEqual(applyModifier(hard, null), hard, 'no modifier = no-op');
+  assert.strictEqual(applyModifier(hard, { type: 'doppelGold' }), hard, 'payout-only types = no-op');
+});
+
+test('V4/G74 surf: endless ends on the 3rd crash like arcade', () => {
+  const tune = applyDifficulty(SURF, 'endless');
+  const run = createRun({ rng: rng(2), mode: 'arcade', tune });
+  run.chunksEndM = 1e9;
+  run.nextPowerupAtM = 1e9;
+  for (let i = 0; i < 3; i += 1) {
+    run.obstacles.push({
+      id: 900 + i,
+      kind: 'crate',
+      def: tune.OBSTACLES.crate,
+      lane: 1,
+      x: 0,
+      z: -0.1,
+      halfW: tune.OBSTACLES.crate.halfW,
+      telegraphed: true,
+      hit: false,
+      minClear: Infinity,
+      passed: false,
+    });
+    run.invulnT = 0;
+    stepRun(run, 1 / 30, {});
+    run.invulnT = 0;
+    run.stumbleT = 0;
+  }
+  assert.equal(run.crashes, 3);
+  assert.equal(run.ended, true, '3rd crash ends the endless run');
+});
+
+test('V4/G74 surf: Schwer target 900 reachable 1-of-5 and bot means monotone easy ≥ mittel ≥ schwer', () => {
+  const hard5 = Array.from({ length: 5 }, (_, i) => simulateSurfAutoplay('hard', i + 1, 240).score);
+  assert.ok(hard5.some((s) => s >= 900), `Schwer target 900 missed: ${hard5}`);
+  const mean = (mode) => {
+    const scores = Array.from({ length: 10 }, (_, i) => simulateSurfAutoplay(mode, i + 1, 240).score);
+    return scores.reduce((a, b) => a + b, 0) / scores.length;
+  };
+  const e = mean('easy');
+  const n = mean('normal');
+  const h = mean('hard');
+  assert.ok(e >= n, `easy ${e.toFixed(0)} < normal ${n.toFixed(0)}`);
+  assert.ok(n >= h, `normal ${n.toFixed(0)} < hard ${h.toFixed(0)}`);
 });

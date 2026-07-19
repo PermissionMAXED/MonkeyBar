@@ -12,6 +12,10 @@ import { fileURLToPath } from 'node:url';
 
 import {
   RACER,
+  RACER_DIFFICULTY,
+  applyDifficulty as applyRacerDifficulty,
+  applyModifier as applyRacerModifier,
+  simulateRacerAutoplay,
   TEMPLATES,
   PIECE_LIB,
   buildTrack,
@@ -29,6 +33,9 @@ import {
 } from '../src/minigames/games/toyRacer.logic.js';
 import {
   HUNT,
+  HUNT_DIFFICULTY,
+  applyDifficulty as applyHuntDifficulty,
+  simulateHuntAutoplay,
   SPOTS,
   DECOY_SPOTS,
   visibleDurAt,
@@ -602,4 +609,228 @@ test('ghostHunt: the round ends exactly once at 90 s', () => {
   // taps after the end are inert
   const res = tapHunt(state, { kind: 'ghost', id: 1 });
   assert.equal(res.kind, 'ended');
+});
+
+// ===========================================================================
+// V4/G74 §G5 difficulty + endless + modifiers + seeded-bot certification
+// (same seed protocol as test/difficultyCertification.test.js: hard gate
+// seeds 11/22/33/44/55, monotone-means sample (i+1)·7919 × 10)
+// ===========================================================================
+
+const CERT_HARD_SEEDS = [11, 22, 33, 44, 55];
+const CERT_MEAN_SEEDS = Array.from({ length: 10 }, (_, i) => (i + 1) * 7919);
+const meanOf = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
+
+test('V4/G74 racer: Mittel identity, §G5.3 runner rows, guardrail band', () => {
+  assert.strictEqual(applyRacerDifficulty(RACER, 'normal'), RACER, 'Mittel is identity');
+  assert.strictEqual(applyRacerDifficulty(RACER, 'nonsense'), RACER, 'unknown ids fall back');
+  const easy = applyRacerDifficulty(RACER, 'easy');
+  const hard = applyRacerDifficulty(RACER, 'hard');
+  const endless = applyRacerDifficulty(RACER, 'endless');
+  // Leicht: whole field 15 % slower (longer target lap), soft AI pack
+  assert.equal(easy.TARGET_LAP_SEC, RACER.TARGET_LAP_SEC / 0.85);
+  assert.equal(easy.SPEED_MULT, 0.85);
+  assert.equal(easy.AI_SPREAD, RACER_DIFFICULTY.easy.aiSpread);
+  assert.equal(easy.AI_EDGE, RACER_DIFFICULTY.easy.aiEdge);
+  assert.equal(easy.RUBBER_MAX, 1.08, 'Leicht rubber band pushes less');
+  assert.equal(easy.ENDLESS, false);
+  // Schwer: field 20 % faster (cornering slip ∝ v²), tight aggressive pack
+  assert.equal(hard.TARGET_LAP_SEC, RACER.TARGET_LAP_SEC / 1.2);
+  assert.equal(hard.SPEED_MULT, 1.2);
+  assert.equal(hard.RUBBER_MIN, 0.92, 'Schwer AI never dawdles');
+  assert.ok(hard.AI_EDGE > 0, 'Schwer pack personality midpoint shifts up');
+  assert.equal(hard.ENDLESS, false);
+  assert.equal(endless.ENDLESS, true);
+  assert.equal(endless.SPEED_MULT, hard.SPEED_MULT, 'Endlos = Schwer field');
+  // §G5.3 guardrail band [0.549, 2.051] on the non-bot numeric knobs
+  // (same fp-tolerant bounds as difficultyEndless.test.js pins suite-wide)
+  for (const [t, label] of [[easy, 'easy'], [hard, 'hard'], [endless, 'endless']]) {
+    for (const key of ['TARGET_LAP_SEC', 'AI_SPREAD', 'RUBBER_MIN', 'RUBBER_MAX', 'SPEED_MULT']) {
+      const ratio = t[key] / RACER[key];
+      assert.ok(ratio >= 0.549 && ratio <= 2.051, `${label}.${key} ratio ${ratio}`);
+    }
+  }
+});
+
+test('V4/G74 racer: AI_EDGE shifts the seeded personality midpoint (0 = bit-identical)', () => {
+  // AI_EDGE 0 + default spread → identical karts to the plain §C10.1 race
+  const base = createRace(9);
+  const same = createRace(9, { ...RACER, AI_EDGE: 0 });
+  for (let i = 1; i < base.karts.length; i += 1) {
+    assert.equal(same.karts[i].personality, base.karts[i].personality);
+  }
+  // spread 0 isolates the midpoint: personality == 1 + AI_EDGE exactly
+  const edged = createRace(9, { ...RACER, AI_EDGE: 0.5, AI_SPREAD: 0 });
+  for (let i = 1; i < edged.karts.length; i += 1) {
+    assert.equal(edged.karts[i].personality, 1.5);
+  }
+});
+
+test('V4/G74 racer: muenzregen respawns boxes sooner, turbo speeds + multiplies score', () => {
+  const rain = applyRacerModifier(RACER, { type: 'muenzregen', coinRate: 1.5 });
+  assert.equal(rain.ITEM_RESPAWN_SEC, RACER.ITEM_RESPAWN_SEC / 1.5, 'boxes back +50 % sooner');
+  assert.equal(rain.ITEM_RATE, 1.5);
+  const hard = applyRacerDifficulty(RACER, 'hard');
+  const turbo = applyRacerModifier(hard, { type: 'turbo', speedMult: 1.25, scoreMult: 1.5 });
+  assert.equal(turbo.TARGET_LAP_SEC, hard.TARGET_LAP_SEC / 1.25);
+  assert.equal(turbo.SPEED_MULT, hard.SPEED_MULT * 1.25);
+  assert.equal(turbo.SCORE_MULT, 1.5);
+  assert.strictEqual(applyRacerModifier(hard, null), hard, 'no modifier = no-op');
+  assert.strictEqual(applyRacerModifier(hard, { type: 'doppelGold' }), hard, 'payout-only = no-op');
+  // SCORE_MULT lands at the single runScore seam (§C-SYS4.2)
+  const race = createRace(3, turbo);
+  race.ended = true;
+  race.finishRank = 1;
+  race.overtakes = 3;
+  race.karts[0].driftMeters = 100;
+  assert.equal(runScore(race), Math.round(raceScore(1, 3, 100, turbo) * 1.5));
+});
+
+test('V4/G74 racer §G5.4: Endlos chains top-2 finishes, banks score, ramps the pack', () => {
+  const tune = applyRacerDifficulty(RACER, 'endless');
+  const race = createRace(5, tune);
+  const persBefore = race.karts.map((k) => k.personality);
+  // hand the player a winning position: over the line, AI pack behind
+  race.karts[0].progress = tune.LAPS * race.track.lapLen + 1;
+  race.karts[0].driftMeters = 50;
+  race.overtakes = 2;
+  for (let i = 1; i < race.karts.length; i += 1) race.karts[i].progress = 1;
+  stepRace(race, 1 / 60, {});
+  assert.equal(race.ended, false, 'rank 1 chains instead of ending');
+  assert.equal(race.chainRaces, 1);
+  assert.equal(race.chainWins, 1);
+  assert.equal(race.chainScore, raceScore(1, 2, 50, tune), 'finished race banked');
+  assert.ok(race.events.some((e) => e.type === 'chainRace'), 'chainRace event fired');
+  assert.equal(race.overtakes, 0, 'per-race counters reset');
+  assert.ok(race.karts[0].progress < 0, 'karts back on the grid');
+  assert.equal(race.raceStartT, race.time, 'per-race MAX_RACE_SEC clock rebased');
+  for (let i = 1; i < race.karts.length; i += 1) {
+    assert.ok(
+      Math.abs(race.karts[i].personality - (persBefore[i] + tune.ENDLESS_CHAIN_EDGE_STEP)) < 1e-12,
+      '§G5.4 uncapped ramp: pack personality climbs each chained race'
+    );
+  }
+  // next race finishes worse than 2nd → the chain ends, banked score pays
+  race.karts[0].progress = tune.LAPS * race.track.lapLen + 1;
+  for (let i = 1; i < race.karts.length; i += 1) {
+    race.karts[i].progress = race.karts[0].progress + 10;
+  }
+  stepRace(race, 1 / 60, {});
+  assert.equal(race.ended, true, 'rank 4 > ENDLESS_CHAIN_MAX_RANK ends the run');
+  assert.equal(race.finishRank, 4);
+  const meta = racerMeta(race);
+  assert.equal(meta.races, 2, 'chained races count in meta');
+  assert.equal(meta.wins, 1);
+  assert.ok(runScore(race) >= race.chainScore, 'banked chain score included');
+  // a plain Schwer race NEVER chains (rank 1 finish just ends)
+  const hardRace = createRace(5, applyRacerDifficulty(RACER, 'hard'));
+  hardRace.karts[0].progress = hardRace.tune.LAPS * hardRace.track.lapLen + 1;
+  for (let i = 1; i < hardRace.karts.length; i += 1) hardRace.karts[i].progress = 1;
+  stepRace(hardRace, 1 / 60, {});
+  assert.equal(hardRace.ended, true);
+  assert.equal(hardRace.finishRank, 1);
+});
+
+test('V4/G74 racer §G5.4: Schwer target 150 ≥ 1/5 seeds, means monotone, Endlos terminates', () => {
+  const hard5 = CERT_HARD_SEEDS.map((s) => simulateRacerAutoplay('hard', s).score);
+  assert.ok(hard5.some((s) => s >= 150), `Schwer target 150 missed: ${hard5}`);
+  const m = {};
+  for (const mode of ['easy', 'normal', 'hard']) {
+    m[mode] = meanOf(CERT_MEAN_SEEDS.map((s) => simulateRacerAutoplay(mode, s).score));
+  }
+  assert.ok(m.easy >= m.normal, `easy ${m.easy} < normal ${m.normal}`);
+  assert.ok(m.normal >= m.hard, `normal ${m.normal} < hard ${m.hard}`);
+  // determinism + Endlos self-termination (the §G5.4 uncapped pack ramp)
+  assert.equal(simulateRacerAutoplay('hard', 11).score, hard5[0]);
+  const endless = simulateRacerAutoplay('endless', 1);
+  assert.ok(endless.races >= 2, `Endlos chained ${endless.races} races`);
+  assert.ok(Number.isFinite(endless.score) && endless.score >= 0);
+});
+
+test('V4/G74 hunt: Mittel identity, §G5.3 timed-arena rows, 0.35 s reaction guardrail', () => {
+  assert.strictEqual(applyHuntDifficulty(HUNT, 'normal'), HUNT, 'Mittel is identity');
+  assert.strictEqual(applyHuntDifficulty(HUNT, 'nonsense'), HUNT, 'unknown ids fall back');
+  const easy = applyHuntDifficulty(HUNT, 'easy');
+  const hard = applyHuntDifficulty(HUNT, 'hard');
+  const endless = applyHuntDifficulty(HUNT, 'endless');
+  // §G5.3 timed-arena row pins (the single source the derivation reads)
+  assert.deepEqual(
+    [HUNT_DIFFICULTY.easy.interval, HUNT_DIFFICULTY.easy.windows, HUNT_DIFFICULTY.easy.duration],
+    [1.2, 1.25, 1.2]
+  );
+  assert.deepEqual(
+    [HUNT_DIFFICULTY.hard.interval, HUNT_DIFFICULTY.hard.windows, HUNT_DIFFICULTY.hard.duration],
+    [0.85, 0.8, 1]
+  );
+  // Leicht: slower cadence ×1.2, wider windows ×1.25, +20 % round time
+  assert.equal(easy.DURATION_SEC, HUNT.DURATION_SEC * 1.2);
+  assert.equal(easy.SPAWN_START_SEC, HUNT.SPAWN_START_SEC * 1.2);
+  assert.equal(easy.SPAWN_END_SEC, HUNT.SPAWN_END_SEC * 1.2);
+  assert.equal(easy.VISIBLE_START_SEC, HUNT.VISIBLE_START_SEC * 1.25);
+  assert.equal(easy.VISIBLE_END_SEC, HUNT.VISIBLE_END_SEC * 1.25);
+  assert.equal(easy.ENDLESS, false);
+  // Schwer: tighter cadence ×0.85, windows ×0.8, duration unchanged
+  assert.equal(hard.DURATION_SEC, HUNT.DURATION_SEC);
+  assert.equal(hard.SPAWN_START_SEC, HUNT.SPAWN_START_SEC * 0.85);
+  assert.equal(hard.VISIBLE_START_SEC, HUNT.VISIBLE_START_SEC * 0.8);
+  assert.ok(Math.abs(hard.VISIBLE_END_SEC - 0.72) < 1e-12);
+  assert.equal(hard.BOO_MIN_VISIBLE_SEC, HUNT.BOO_MIN_VISIBLE_SEC * 0.8);
+  // §G5.3 guardrails: min reaction window ≥ 0.35 s, window ratio ≥ 0.55
+  for (const t of [easy, hard, endless]) {
+    assert.ok(t.VISIBLE_END_SEC >= 0.35, 'reaction window ≥ 0.35 s');
+    assert.ok(t.VISIBLE_END_SEC / HUNT.VISIBLE_END_SEC >= 0.55, 'window ≥ 55 % of Mittel');
+  }
+  assert.equal(endless.ENDLESS, true);
+  assert.equal(endless.ENDLESS_ESCAPE_LIMIT, 3, '§G5.4: 3 escaped Boo-waves end Endlos');
+  // §C-SYS4.3: ghostHunt is payout-only — the logic ships NO gameplay
+  // modifier hook (framework applies coin-side effects outside the sim)
+  const src = readFileSync(
+    fileURLToPath(new URL('../src/minigames/games/ghostHunt.logic.js', import.meta.url)),
+    'utf8'
+  );
+  assert.ok(!/export function applyModifier/.test(src), 'payout-only: no applyModifier');
+});
+
+test('V4/G74 hunt §G5.4: Endlos skips the 90 s timer and keeps scheduling Boo-waves', () => {
+  // no round-timer end: a survivable Endlos hunt sails past DURATION_SEC
+  const roomy = { ...applyHuntDifficulty(HUNT, 'endless'), ENDLESS_ESCAPE_LIMIT: 99 };
+  const state = createHunt(11, roomy);
+  while (state.t < 130) {
+    stepHunt(state, 1 / 30);
+    state.events.length = 0;
+  }
+  assert.equal(state.ended, false, 'no 90 s end in Endlos');
+  assert.ok(state.booTimes.length > booWaveTimes(HUNT).length, 'Boo schedule keeps extending');
+  assert.equal(state.booTimes[3], 100, '4th wave lands +25 s after the §C10.1 list');
+  assert.ok(state.escapedWaves >= 4, 'untapped waves escape');
+  // the REAL limit: 3 escaped waves end the run (untapped bot-less round)
+  const real = createHunt(11, applyHuntDifficulty(HUNT, 'endless'));
+  let guard = 30 * 200;
+  while (!real.ended && guard > 0) {
+    stepHunt(real, 1 / 30);
+    real.events.length = 0;
+    guard -= 1;
+  }
+  assert.equal(real.ended, true);
+  assert.equal(real.escapedWaves, 3, 'ends exactly at the 3rd escape');
+  // Schwer still ends on its timer
+  const hardState = createHunt(11, applyHuntDifficulty(HUNT, 'hard'));
+  hardState.t = applyHuntDifficulty(HUNT, 'hard').DURATION_SEC + 1;
+  stepHunt(hardState, 1 / 30);
+  assert.equal(hardState.ended, true);
+});
+
+test('V4/G74 hunt §G5.4: Schwer target 90 ≥ 1/5 seeds, means monotone, Endlos terminates', () => {
+  const hard5 = CERT_HARD_SEEDS.map((s) => simulateHuntAutoplay('hard', s).score);
+  assert.ok(hard5.some((s) => s >= 90), `Schwer target 90 missed: ${hard5}`);
+  const m = {};
+  for (const mode of ['easy', 'normal', 'hard']) {
+    m[mode] = meanOf(CERT_MEAN_SEEDS.map((s) => simulateHuntAutoplay(mode, s).score));
+  }
+  assert.ok(m.easy >= m.normal, `easy ${m.easy} < normal ${m.normal}`);
+  assert.ok(m.normal >= m.hard, `normal ${m.normal} < hard ${m.hard}`);
+  assert.equal(simulateHuntAutoplay('hard', 11).score, hard5[0], 'deterministic');
+  const endless = simulateHuntAutoplay('endless', 1);
+  assert.equal(endless.escapedWaves, 3, 'Endlos ends through the escape counter');
+  assert.ok(Number.isFinite(endless.score) && endless.score >= 0);
 });

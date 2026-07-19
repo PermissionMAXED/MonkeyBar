@@ -9,6 +9,10 @@ import assert from 'node:assert/strict';
 
 import {
   ROCKET,
+  ROCKET_DIFFICULTY,
+  applyDifficulty as applyRocketDifficulty,
+  applyModifier as applyRocketModifier,
+  simulateRocketAutoplay,
   createLayout,
   classifyLanding,
   roundScore,
@@ -20,6 +24,12 @@ import {
 } from '../src/minigames/games/rocketRescue.logic.js';
 import {
   HARBOR,
+  HARBOR_DIFFICULTY,
+  applyDifficulty as applyHarborDifficulty,
+  applyModifier as applyHarborModifier,
+  rowReachability,
+  hopperScore,
+  simulateHarborAutoplay,
   laneOf,
   speedOf,
   hits,
@@ -549,4 +559,282 @@ test('rocketRescue: bot control shape (thrust boolean + tilt −1/0/1)', () => {
     assert.ok([-1, 0, 1].includes(c.tiltDir));
     eng.step(c, 1 / 60);
   }
+});
+
+// ===========================================================================
+// V4/G74 §G5 difficulty + endless + modifiers + seeded-bot certification
+// (same seed protocol as test/difficultyCertification.test.js: hard gate
+// seeds 11/22/33/44/55, monotone-means sample (i+1)·7919 × 10)
+// ===========================================================================
+
+const CERT_HARD_SEEDS = [11, 22, 33, 44, 55];
+const CERT_MEAN_SEEDS = Array.from({ length: 10 }, (_, i) => (i + 1) * 7919);
+const meanOf = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
+
+test('V4/G74 rocket: Mittel identity, §G5.3 physics/skill tolerance rows', () => {
+  assert.strictEqual(applyRocketDifficulty(ROCKET, 'normal'), ROCKET, 'Mittel is identity');
+  assert.strictEqual(applyRocketDifficulty(ROCKET, 'nonsense'), ROCKET, 'unknown ids fall back');
+  const easy = applyRocketDifficulty(ROCKET, 'easy');
+  const hard = applyRocketDifficulty(ROCKET, 'hard');
+  const endless = applyRocketDifficulty(ROCKET, 'endless');
+  assert.equal(ROCKET_DIFFICULTY.easy.tol, 1.25);
+  assert.equal(ROCKET_DIFFICULTY.hard.tol, 0.8);
+  for (const [t, tol] of [[easy, 1.25], [hard, 0.8], [endless, 0.8]]) {
+    assert.equal(t.LAND_MAX_VY, ROCKET.LAND_MAX_VY * tol);
+    assert.equal(t.SOFT_MAX_VY, ROCKET.SOFT_MAX_VY * tol);
+    assert.equal(t.PLATFORM_HALF_W, ROCKET.PLATFORM_HALF_W * tol);
+    // §G5.3 guardrail: the landing "hitbox" never below 55 % of Mittel
+    assert.ok(t.PLATFORM_HALF_W >= ROCKET.PLATFORM_HALF_W * 0.55);
+    assert.ok(t.LAND_MAX_VY >= ROCKET.LAND_MAX_VY * 0.55);
+  }
+  assert.equal(endless.ENDLESS, true);
+  assert.equal(hard.ENDLESS, false);
+  // §G5.2 stream identity: PLATFORM_HALF_W never feeds the seeded layout
+  // sampling — every mode draws the SAME platforms, only widths change
+  const a = createLayout(mulberry32(77), ROCKET);
+  const b = createLayout(mulberry32(77), hard);
+  for (let i = 0; i < a.platforms.length; i += 1) {
+    assert.equal(b.platforms[i].x, a.platforms[i].x);
+    assert.equal(b.platforms[i].y, a.platforms[i].y);
+    assert.equal(b.platforms[i].halfW, a.platforms[i].halfW * 0.8);
+  }
+  assert.deepEqual(
+    b.fuelPickups.map((f) => [f.x, f.y]),
+    a.fuelPickups.map((f) => [f.x, f.y])
+  );
+});
+
+test('V4/G74 rocket: muenzregen = +50 % canisters that float back sooner', () => {
+  const hard = applyRocketDifficulty(ROCKET, 'hard');
+  const rain = applyRocketModifier(hard, { type: 'muenzregen', coinRate: 1.5 });
+  assert.equal(rain.FUEL_PICKUP_COUNT, Math.round(hard.FUEL_PICKUP_COUNT * 1.5));
+  assert.equal(rain.FUEL_RESPAWN_SEC, hard.FUEL_RESPAWN_SEC / 1.5);
+  assert.equal(rain.PICKUP_RATE, 1.5);
+  const layout = createLayout(mulberry32(5), rain);
+  assert.equal(layout.fuelPickups.length, rain.FUEL_PICKUP_COUNT, 'layout spawns them');
+  // §C-SYS4.3: rocketRescue is muenzregen-only — anything else is a no-op
+  assert.strictEqual(applyRocketModifier(hard, null), hard);
+  assert.strictEqual(applyRocketModifier(hard, { type: 'turbo', speedMult: 1.25 }), hard);
+  assert.strictEqual(applyRocketModifier(hard, { type: 'doppelGold' }), hard);
+});
+
+test('V4/G74 rocket §G5.4: Endlos skips the timer, thins refills, re-arms bunnies', () => {
+  const tune = applyRocketDifficulty(ROCKET, 'endless');
+  // no round-timer end in Endlos (Schwer still ends on time)
+  const eng = createRocketEngine(mulberry32(3), tune);
+  eng.state.elapsed = ROCKET.DURATION_SEC + 5;
+  eng.step({ thrust: false, tiltDir: 0 }, 1 / 60);
+  assert.equal(eng.state.ended, false, 'Endlos has no round timer');
+  const hardEng = createRocketEngine(mulberry32(3), applyRocketDifficulty(ROCKET, 'hard'));
+  hardEng.state.elapsed = ROCKET.DURATION_SEC + 5;
+  hardEng.step({ thrust: false, tiltDir: 0 }, 1 / 60);
+  assert.equal(hardEng.state.ended, true);
+  assert.equal(hardEng.state.endReason, 'time');
+  // §G5.4 ramp: canister refill thins −10 % per rescued bunny
+  const f = eng.layout.fuelPickups[0];
+  eng.state.landedOn = null;
+  eng.state.rescued = 3;
+  eng.state.fuel = 10;
+  eng.state.x = f.x;
+  eng.state.y = f.y + 0.001;
+  eng.state.vy = 0.4; // drifting up — no landing this frame
+  const evs = eng.step({ thrust: false, tiltDir: 0 }, 1 / 60);
+  const pick = evs.find((e) => e.type === 'fuelPickup');
+  assert.ok(pick, 'canister grabbed');
+  assert.ok(Math.abs(pick.amount - ROCKET.FUEL_PICKUP_AMOUNT * 0.7) < 1e-9, '30 × (1 − 0.1·3) = 21');
+  assert.ok(Math.abs(eng.state.fuel - (10 + 21)) < 1e-9);
+  // …and at 10+ rescues the refill bottoms out at 0 — the tank ALWAYS
+  // starves → auto-tow ends the run (the §G5.4 end condition)
+  const dry = createRocketEngine(mulberry32(4), tune);
+  const g = dry.layout.fuelPickups[0];
+  dry.state.landedOn = null;
+  dry.state.rescued = 10;
+  dry.state.fuel = 10;
+  dry.state.x = g.x;
+  dry.state.y = g.y + 0.001;
+  dry.state.vy = 0.4;
+  const evs2 = dry.step({ thrust: false, tiltDir: 0 }, 1 / 60);
+  assert.equal(evs2.find((e) => e.type === 'fuelPickup')?.amount, 0);
+  // a cleared field re-arms: pad rescue with every platform empty
+  const re = createRocketEngine(mulberry32(5), tune);
+  for (const p of re.layout.platforms) p.bunny = false;
+  re.state.carrying = true;
+  re.state.landedOn = null;
+  re.state.lastLandedOn = 0;
+  re.state.x = re.layout.pad.x;
+  re.state.y = re.layout.pad.y + 0.004;
+  re.state.vy = -0.3;
+  const evs3 = re.step({ thrust: false, tiltDir: 0 }, 1 / 60);
+  assert.ok(evs3.some((e) => e.type === 'rescue'), 'pad delivery counts');
+  assert.ok(evs3.some((e) => e.type === 'bunnyRespawn'), '§G5.4: field re-arms');
+  assert.ok(re.layout.platforms.every((p) => p.bunny), 'all 5 bunnies back');
+  assert.equal(re.state.ended, false, 'the run keeps going');
+});
+
+test('V4/G74 rocket §G5.4: Schwer target 115 ≥ 1/5 seeds, means monotone, Endlos fuel-out', () => {
+  const hard5 = CERT_HARD_SEEDS.map((s) => simulateRocketAutoplay('hard', s).score);
+  assert.ok(hard5.some((s) => s >= 115), `Schwer target 115 missed: ${hard5}`);
+  const m = {};
+  for (const mode of ['easy', 'normal', 'hard']) {
+    m[mode] = meanOf(CERT_MEAN_SEEDS.map((s) => simulateRocketAutoplay(mode, s).score));
+  }
+  assert.ok(m.easy >= m.normal, `easy ${m.easy} < normal ${m.normal}`);
+  assert.ok(m.normal >= m.hard, `normal ${m.normal} < hard ${m.hard}`);
+  assert.equal(simulateRocketAutoplay('hard', 11).score, hard5[0], 'deterministic');
+  const endless = simulateRocketAutoplay('endless', 1);
+  assert.equal(endless.endReason, 'fuel', 'Endlos ends when the tank starves');
+  assert.equal(endless.fuelLeft, 0);
+  assert.ok(endless.rescued > ROCKET.PLATFORM_COUNT, 'bunny re-arm kept the run alive');
+  assert.ok(Number.isFinite(endless.score) && endless.score >= 0);
+});
+
+test('V4/G74 harbor: Mittel identity, §G5.3 runner rows inside the guardrail band', () => {
+  assert.strictEqual(applyHarborDifficulty(HARBOR, 'normal'), HARBOR, 'Mittel is identity');
+  assert.strictEqual(applyHarborDifficulty(HARBOR, 'nonsense'), HARBOR, 'unknown ids fall back');
+  const easy = applyHarborDifficulty(HARBOR, 'easy');
+  const hard = applyHarborDifficulty(HARBOR, 'hard');
+  const endless = applyHarborDifficulty(HARBOR, 'endless');
+  // §G5.3 runner/steer row pins (the single source the derivation reads)
+  assert.deepEqual(
+    [HARBOR_DIFFICULTY.easy.speed, HARBOR_DIFFICULTY.easy.density, HARBOR_DIFFICULTY.easy.duration],
+    [0.85, 0.85, 1.2]
+  );
+  assert.deepEqual(
+    [HARBOR_DIFFICULTY.hard.speed, HARBOR_DIFFICULTY.hard.density, HARBOR_DIFFICULTY.hard.duration],
+    [1.2, 1.15, 1]
+  );
+  // Leicht: speed ×0.85, density ×0.85, +20 % round time (score chances
+  // scale with channel METERS — same distance as a Mittel round)
+  assert.equal(easy.BASE_SPEED, HARBOR.BASE_SPEED * 0.85);
+  assert.equal(easy.BUOY_CHANCE, HARBOR.BUOY_CHANCE * 0.85);
+  assert.equal(easy.DURATION_SEC, HARBOR.DURATION_SEC * 1.2);
+  assert.equal(easy.PIER_EVERY_M.min, HARBOR.PIER_EVERY_M.min / 0.85, 'piers thin out');
+  // Schwer: speed ×1.2, density ×1.15, duration unchanged
+  assert.equal(hard.BASE_SPEED, HARBOR.BASE_SPEED * 1.2);
+  assert.equal(hard.BUOY_CHANCE, HARBOR.BUOY_CHANCE * 1.15);
+  assert.equal(hard.DURATION_SEC, HARBOR.DURATION_SEC);
+  assert.equal(hard.PIER_EVERY_M.max, HARBOR.PIER_EVERY_M.max / 1.15, 'piers come sooner');
+  assert.equal(hard.ENDLESS, false);
+  assert.equal(endless.ENDLESS, true);
+  assert.equal(endless.ENDLESS_BUMP_LIMIT, 3, '§G5.4: 3 bumps end Endlos');
+  // §G5.3 guardrails: hitbox forgiveness + reaction model NEVER shrink
+  for (const t of [easy, hard, endless]) {
+    assert.equal(t.HITBOX_SCALE, HARBOR.HITBOX_SCALE);
+    assert.equal(t.VALIDATOR_REACT_SEC, 0.35);
+    assert.equal(t.ROW_GAP_M.min, HARBOR.ROW_GAP_M.min);
+  }
+});
+
+test('V4/G74 harbor §G5.3: row-reachability validator ≥ 1 for every derived mode (+turbo)', () => {
+  for (const mode of ['easy', 'normal', 'hard', 'endless']) {
+    const t = applyHarborDifficulty(HARBOR, mode);
+    assert.ok(rowReachability(t) >= 1, `${mode}: reachability ${rowReachability(t).toFixed(3)}`);
+    const turbo = applyHarborModifier(t, { type: 'turbo', speedMult: 1.25, scoreMult: 1.5 });
+    assert.ok(rowReachability(turbo) >= 1, `${mode}+turbo: ${rowReachability(turbo).toFixed(3)}`);
+  }
+  // the Endlos ramp is validator-capped: speed never exceeds ENDLESS_MAX_SPEED
+  const endless = applyHarborDifficulty(HARBOR, 'endless');
+  const cruise = { boostT: 0, slowT: 0 };
+  assert.equal(speedOf({ ...cruise, z: 0 }, endless), endless.BASE_SPEED);
+  assert.ok(speedOf({ ...cruise, z: 300 }, endless) > endless.BASE_SPEED, 'ramp climbs');
+  assert.equal(speedOf({ ...cruise, z: 1e6 }, endless), endless.ENDLESS_MAX_SPEED, 'capped');
+  assert.equal(speedOf({ ...cruise, z: 1e6 }, applyHarborDifficulty(HARBOR, 'hard')),
+    HARBOR.BASE_SPEED * 1.2, 'no ramp outside Endlos');
+});
+
+test('V4/G74 harbor: muenzregen +50 % pickup rows, turbo speed/score, riesenGooby radii', () => {
+  const hard = applyHarborDifficulty(HARBOR, 'hard');
+  const rain = applyHarborModifier(hard, { type: 'muenzregen', coinRate: 1.5 });
+  assert.equal(rain.PICKUP_RATE, 1.5);
+  assert.equal(rain.BUOY_CHANCE, hard.BUOY_CHANCE, 'muenzregen adds NO hazards');
+  // engine-level: extra seeded pickup-only rows interleave the base table
+  const countItems = (tune, seed) => {
+    const eng = createHarborEngine(mulberry32(seed), { ...tune, LOOKAHEAD_M: 2000 });
+    let pickups = 0;
+    for (const it of eng.items) if (it.type !== 'buoy') pickups += 1;
+    return pickups;
+  };
+  const base = countItems(hard, 7);
+  const rained = countItems(rain, 7);
+  const ratio = rained / base;
+  assert.ok(ratio > 1.2 && ratio < 1.9, `≈ +50 % pickups over 2 km (got ×${ratio.toFixed(2)})`);
+  // rate 1 short-circuits: the base rng stream stays bit-identical
+  const eq = applyHarborModifier(hard, { type: 'muenzregen', coinRate: 1 });
+  const a = createHarborEngine(mulberry32(9), hard);
+  const b = createHarborEngine(mulberry32(9), eq);
+  assert.deepEqual(b.items, a.items);
+  const turbo = applyHarborModifier(hard, { type: 'turbo', speedMult: 1.25, scoreMult: 1.5 });
+  assert.equal(turbo.BASE_SPEED, hard.BASE_SPEED * 1.25);
+  assert.equal(turbo.SCORE_MULT, 1.5);
+  assert.equal(hopperScore({ score: 101 }, turbo), Math.round(101 * 1.5));
+  assert.equal(hopperScore({ score: 101 }, hard), 101, '×1 stays bit-identical');
+  const giant = applyHarborModifier(hard, { type: 'riesenGooby', scale: 1.6, hitboxMult: 1.3 });
+  assert.equal(giant.CRATE_RADIUS, hard.CRATE_RADIUS * 1.3);
+  assert.equal(giant.RING_RADIUS, hard.RING_RADIUS * 1.3);
+  assert.equal(giant.RENDER_SCALE_MULT, 1.6);
+  assert.equal(giant.BUOY_RADIUS, hard.BUOY_RADIUS, 'bump hitbox NEVER grows');
+  assert.strictEqual(applyHarborModifier(hard, null), hard, 'no modifier = no-op');
+  assert.strictEqual(applyHarborModifier(hard, { type: 'doppelGold' }), hard, 'payout-only = no-op');
+});
+
+test('V4/G74 harbor §G5.4: Endlos skips the timer and ends on the 3rd bump', () => {
+  const endless = applyHarborDifficulty(HARBOR, 'endless');
+  // no timer end in Endlos (Schwer keeps its 120 s round)
+  const quiet = {
+    ...endless, CRATE_CHANCE: 0, RING_CHANCE: 0, BUOY_CHANCE: 0,
+    PIER_EVERY_M: Object.freeze({ min: 1e9, max: 1e9 }),
+  };
+  const eng = createHarborEngine(mulberry32(1), quiet);
+  eng.state.elapsed = HARBOR.DURATION_SEC + 5;
+  eng.step({ targetX: null }, 1 / 60);
+  assert.equal(eng.state.ended, false, 'Endlos has no round timer');
+  const hardEng = createHarborEngine(mulberry32(1), applyHarborDifficulty(HARBOR, 'hard'));
+  hardEng.state.elapsed = HARBOR.DURATION_SEC + 5;
+  const hardEvs = hardEng.step({ targetX: null }, 1 / 60);
+  assert.equal(hardEng.state.ended, true);
+  assert.ok(hardEvs.some((e) => e.type === 'ended'));
+  // 3 bumps end the Endlos run (buoys planted straight on the bow)
+  for (let i = 1; i <= 3; i += 1) {
+    eng.state.iframesT = 0;
+    eng.items.push({ type: 'buoy', x: eng.state.x, z: eng.state.z + 0.4, gone: false });
+    const evs = eng.step({ targetX: null }, 1 / 60);
+    assert.equal(eng.state.bumps, i, `bump ${i} lands`);
+    if (i < 3) {
+      assert.equal(eng.state.ended, false);
+    } else {
+      assert.equal(eng.state.ended, true, '3rd bump ends the Endlos run');
+      assert.ok(evs.some((e) => e.type === 'ended' && e.reason === 'bumps'));
+    }
+  }
+  // …but 3 bumps do NOT end a Schwer round (§G5.3: crash allowance unchanged)
+  const hardEng2 = createHarborEngine(mulberry32(2), { ...applyHarborDifficulty(HARBOR, 'hard'), CRATE_CHANCE: 0, RING_CHANCE: 0, BUOY_CHANCE: 0, PIER_EVERY_M: Object.freeze({ min: 1e9, max: 1e9 }) });
+  for (let i = 1; i <= 3; i += 1) {
+    hardEng2.state.iframesT = 0;
+    hardEng2.items.push({ type: 'buoy', x: hardEng2.state.x, z: hardEng2.state.z + 0.4, gone: false });
+    hardEng2.step({ targetX: null }, 1 / 60);
+  }
+  assert.equal(hardEng2.state.bumps, 3);
+  assert.equal(hardEng2.state.ended, false);
+});
+
+test('V4/G74 harbor §G5.4: Schwer target 110 ≥ 1/5 seeds, means monotone, Endlos 3 bumps', () => {
+  const hard5 = CERT_HARD_SEEDS.map((s) => simulateHarborAutoplay('hard', s).score);
+  assert.ok(hard5.some((s) => s >= 110), `Schwer target 110 missed: ${hard5}`);
+  const m = {};
+  for (const mode of ['easy', 'normal', 'hard']) {
+    m[mode] = meanOf(CERT_MEAN_SEEDS.map((s) => simulateHarborAutoplay(mode, s).score));
+  }
+  assert.ok(m.easy >= m.normal, `easy ${m.easy} < normal ${m.normal}`);
+  assert.ok(m.normal >= m.hard, `normal ${m.normal} < hard ${m.hard}`);
+  assert.equal(simulateHarborAutoplay('hard', 11).score, hard5[0], 'deterministic');
+  const endless = simulateHarborAutoplay('endless', 1);
+  assert.equal(endless.bumps, 3, 'Endlos terminates through the bump counter');
+  assert.ok(Number.isFinite(endless.score) && endless.score >= 0);
+  // the sim's modifier seam: muenzregen visibly raises the pickup haul
+  const plain = simulateHarborAutoplay('hard', 7);
+  const rained = simulateHarborAutoplay('hard', 7, 900, { type: 'muenzregen', coinRate: 1.5 });
+  assert.ok(
+    rained.crates + rained.rings > plain.crates + plain.rings,
+    `muenzregen haul ${rained.crates + rained.rings} > plain ${plain.crates + plain.rings}`
+  );
 });

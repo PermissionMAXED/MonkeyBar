@@ -16,7 +16,15 @@ import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js';
 import { getAchievementsEngine } from '../../systems/achievementsEngine.js';
 import { clampFloatTextToView } from '../framework.js';
-import { HARBOR, createEngine, createBot, speedOf } from './harborHopper.logic.js';
+import {
+  HARBOR,
+  applyDifficulty, // V4/G74 §G5.3
+  applyModifier, //   V4/G74 §C-SYS4.3
+  createEngine,
+  createBot,
+  speedOf,
+  hopperScore,
+} from './harborHopper.logic.js';
 
 /** Sky/mist tint (teal harbor morning — §C10.1 distinct-look rule). */
 const SKY = 0xBDE8E2;
@@ -186,8 +194,17 @@ export default {
     // features like gull steals / horn cones without waiting for RNG)
     if (import.meta.env?.DEV) window.__g42harbor = this;
 
-    this.engine = createEngine(ctx.rng);
-    this.bot = this.autoplay ? createBot() : null;
+    // ── V4/G74 (§G5.3 + §C-SYS4.3/§E0.1-3): derive the tune from
+    // ctx.params.difficulty + the plain-number modifier payload (muenzregen/
+    // turbo/riesenGooby rows for harborHopper). Mittel without modifier
+    // returns the frozen HARBOR table itself — bit-identical. ──
+    const difficulty = ctx.params?.difficulty ?? 'normal';
+    this.tune = applyModifier(applyDifficulty(HARBOR, difficulty), ctx.params?.modifier);
+    this.engine = createEngine(ctx.rng, this.tune);
+    this.bot = this.autoplay ? createBot(this.tune) : null;
+    if (import.meta.env?.DEV) {
+      globalThis.__g74 = { game: 'harborHopper', difficulty, tune: this.tune, engine: this.engine }; // V4/G74 CDP probe
+    }
     this.phase = 'play'; // 'play' | 'ending' | 'done'
     this.endT = 0;
     this.shownScore = 0;
@@ -298,7 +315,9 @@ export default {
     this.boat.add(hull);
     this.gooby = createGooby({ particles: this.particles });
     applyEquippedOutfits(this.gooby);
-    this.gooby.group.scale.setScalar(0.5);
+    // V4/G74 §C-SYS4.3 riesenGooby: render scale multiplies the base 0.5
+    // (RENDER_SCALE_MULT = 1 in every other mode — bit-identical).
+    this.gooby.group.scale.setScalar(0.5 * this.tune.RENDER_SCALE_MULT);
     this.gooby.group.position.set(0, 0.55, -0.35);
     this.gooby.group.rotation.y = Math.PI; // face down-channel with the bow
     this.gooby.play('sitDrive');
@@ -447,7 +466,8 @@ export default {
     });
 
     ctx.hud.setScore(0);
-    ctx.hud.setTime(HARBOR.DURATION_SEC);
+    // V4/G74 §G5.4: Endlos counts up (no round timer), timed modes count down
+    ctx.hud.setTime(this.tune.ENDLESS ? 0 : this.tune.DURATION_SEC);
     ctx.hud.banner(t('mg.harbor.hint'));
   },
 
@@ -603,7 +623,8 @@ export default {
         } catch (err) {
           console.warn('[harborHopper] counter tracking failed:', err);
         }
-        ctx.onEnd({ score: state.score, meta: { cratesShipped: state.crates } });
+        // V4/G74 §C-SYS4.2: turbo's ×1.5 lands at the single payout seam
+        ctx.onEnd({ score: hopperScore(state, this.tune), meta: { cratesShipped: state.crates } });
       }
       return;
     }
@@ -623,10 +644,12 @@ export default {
       rem -= sdt;
     }
 
-    ctx.hud.setTime(HARBOR.DURATION_SEC - state.elapsed);
-    if (state.score !== this.shownScore) {
-      ctx.onScore(state.score - this.shownScore);
-      this.shownScore = state.score;
+    ctx.hud.setTime(this.tune.ENDLESS ? state.elapsed : this.tune.DURATION_SEC - state.elapsed);
+    // V4/G74: HUD mirrors the tune-scaled score (×1 without turbo)
+    const shown = hopperScore(state, this.tune);
+    if (shown !== this.shownScore) {
+      ctx.onScore(shown - this.shownScore);
+      this.shownScore = shown;
     }
     this.updateChip();
     // deck cargo mirrors the crates aboard (top crate is the gull's target)
@@ -635,7 +658,7 @@ export default {
     }
 
     // ---- boat pose: lateral position + momentum lean + bob ----
-    const speed = speedOf(state);
+    const speed = speedOf(state, this.tune); // V4/G74: Endlos ramp included
     this.boat.position.x = state.x;
     this.boat.position.y = Math.sin(elapsed * 2.1) * 0.05 + (state.boostT > 0 ? 0.06 : 0);
     this.boat.rotation.z = THREE.MathUtils.clamp(-state.vx * 0.14, -0.3, 0.3);

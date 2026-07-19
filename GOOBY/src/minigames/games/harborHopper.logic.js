@@ -90,7 +90,139 @@ export const HARBOR = Object.freeze({
   /** Bot shoos the seagull: hop a lane once idle this long (< GULL_IDLE_SEC
    *  + GULL_WARN_SEC, so the warning honk fires but the steal does not). */
   BOT_GULL_DODGE_AT_SEC: 4.6,
+  // ── V4/G74 §G5.3/§G5.4/§C-SYS4.3 derived-mode defaults (Mittel identity) ──
+  ENDLESS: false,
+  /** §G5.4 Endlos end-condition: 3 bumps (buoy/pier hits). */
+  ENDLESS_BUMP_LIMIT: 3,
+  /** §G5.4 Endlos ramp: base speed climbs per meter, capped so the §C8.7-
+   *  style row-reachability guarantee below survives (rowReachability ≥ 1
+   *  even mid-boost — test-pinned). */
+  ENDLESS_ACCEL_PER_M: 0.004,
+  ENDLESS_MAX_SPEED: 9.6,
+  /** Row-reachability validator params (runner-family guardrail §G5.3):
+   *  a buoy dodge must fit between consecutive rows at WORST-case speed —
+   *  react + steer across the forgiving hitbox + margin. */
+  VALIDATOR_REACT_SEC: 0.35,
+  VALIDATOR_DODGE_MARGIN_M: 0.35,
+  /** Modifier passthroughs (§C-SYS4.3; all 1 = no modifier). */
+  PICKUP_RATE: 1,
+  SCORE_MULT: 1,
+  PICKUP_RADIUS_MULT: 1,
+  RENDER_SCALE_MULT: 1,
+  /** Certification-bot human model (§G5.4 gates; exempt from §G5.3
+   *  guardrails): focus cooldown after each pickup (pickup-rate cap) +
+   *  mean seconds between short no-steer lapses. These are the MITTEL
+   *  human-rate values — simulateHarborAutoplay only; the §C10.1 in-game
+   *  ?autoplay=1 bot and the legacy simulateRound ignore both. */
+  BOT_FOCUS_SEC: 1.9,
+  BOT_LAPSE_EVERY_SEC: 14,
 });
+
+/**
+ * V4/G74 §G5.3 runner/steer rows: Leicht = speed ×0.85 + obstacle density
+ * ×0.85 · Schwer = speed ×1.2 + density ×1.15 (crash allowance unchanged —
+ * the timed round has no crash-out). Density scales the BUOY row chance and
+ * the pier cadence only (pickups stay — the §C10.1 score chances remain).
+ * Endlos (§G5.4): Schwer channel, no round timer, speed ramps on to
+ * ENDLESS_MAX_SPEED and 3 bumps end the run.
+ */
+export const HARBOR_DIFFICULTY = Object.freeze({
+  // Leicht gets +20 % round time: the §C10.1 score chances scale with
+  // channel METERS, so the slower easy boat covers the same distance a
+  // Mittel round does (otherwise "easier" would mathematically pay less).
+  easy: Object.freeze({ speed: 0.85, density: 0.85, duration: 1.2, botFocus: 1.5, botLapse: 34, endless: false }),
+  normal: Object.freeze({ speed: 1, density: 1, duration: 1, botFocus: 1.9, botLapse: 14, endless: false }),
+  hard: Object.freeze({ speed: 1.2, density: 1.15, duration: 1, botFocus: 1.9, botLapse: 12.5, endless: false }),
+  endless: Object.freeze({ speed: 1.2, density: 1.15, duration: 1, botFocus: 1.9, botLapse: 12.5, endless: true }),
+});
+
+/**
+ * Derive the frozen per-mode tune (§G5.3). Mittel returns the frozen live
+ * HARBOR table itself — bit-identical numbers AND rng streams (§G5.2/§E5).
+ * @param {object} [tune] @param {string} [mode] @returns {object}
+ */
+export function applyDifficulty(tune = HARBOR, mode = 'normal') {
+  const id = Object.hasOwn(HARBOR_DIFFICULTY, mode) ? mode : 'normal';
+  if (id === 'normal') return tune;
+  const row = HARBOR_DIFFICULTY[id];
+  return Object.freeze({
+    ...tune,
+    BASE_SPEED: tune.BASE_SPEED * row.speed,
+    DURATION_SEC: tune.DURATION_SEC * row.duration,
+    BUOY_CHANCE: tune.BUOY_CHANCE * row.density,
+    PIER_EVERY_M: Object.freeze({
+      min: tune.PIER_EVERY_M.min / row.density,
+      max: tune.PIER_EVERY_M.max / row.density,
+    }),
+    BOT_FOCUS_SEC: row.botFocus,
+    BOT_LAPSE_EVERY_SEC: row.botLapse,
+    ENDLESS: row.endless,
+    MODE: id,
+  });
+}
+
+/**
+ * Apply harborHopper's eligible gameplay modifiers (§C-SYS4.3: muenzregen /
+ * turbo / riesenGooby). Plain-number payload from ctx.params.modifier
+ * (§E0.1-3) — the logic never reads modifier STATE.
+ * @param {object} tune @param {{type: string}|null|undefined} modifier
+ * @returns {object}
+ */
+export function applyModifier(tune, modifier) {
+  if (!modifier) return tune;
+  if (modifier.type === 'muenzregen') {
+    // +50 % pickup rows: extra seeded crate/ring rows interleave the base
+    // table (the base rng stream stays untouched — see generateAhead).
+    return Object.freeze({
+      ...tune,
+      PICKUP_RATE: Math.max(0.1, Number(modifier.coinRate) || 1),
+    });
+  }
+  if (modifier.type === 'turbo') {
+    const speedMult = Math.max(0.1, Number(modifier.speedMult) || 1);
+    return Object.freeze({
+      ...tune,
+      BASE_SPEED: tune.BASE_SPEED * speedMult,
+      SCORE_MULT: Math.max(0, Number(modifier.scoreMult) || 1),
+    });
+  }
+  if (modifier.type === 'riesenGooby') {
+    const hitboxMult = Math.max(0.1, Number(modifier.hitboxMult) || 1);
+    return Object.freeze({
+      ...tune,
+      CRATE_RADIUS: tune.CRATE_RADIUS * hitboxMult,
+      RING_RADIUS: tune.RING_RADIUS * hitboxMult,
+      PICKUP_RADIUS_MULT: hitboxMult,
+      RENDER_SCALE_MULT: Math.max(0.1, Number(modifier.scale) || 1),
+    });
+  }
+  return tune;
+}
+
+/**
+ * V4/G74 runner-family §G5.3 guardrail — the harbor's row-reachability
+ * validator: between two consecutive spawn rows at WORST-case speed
+ * (ramp cap × surf boost) the boat must fit a react + full buoy dodge.
+ * ≥ 1 = always avoidable (test-pinned for every derived mode incl. turbo).
+ * @param {object} [tune] @returns {number} safety ratio
+ */
+export function rowReachability(tune = HARBOR) {
+  const maxBase = tune.ENDLESS ? Math.max(tune.BASE_SPEED, tune.ENDLESS_MAX_SPEED) : tune.BASE_SPEED;
+  const worstSpeed = maxBase * tune.BOOST_FACTOR;
+  const rowSec = tune.ROW_GAP_M.min / worstSpeed;
+  const dodgeM = (tune.BUOY_RADIUS + tune.BOAT_RADIUS) * tune.HITBOX_SCALE + tune.VALIDATOR_DODGE_MARGIN_M;
+  const needSec = tune.VALIDATOR_REACT_SEC + dodgeM / tune.MAX_LATERAL_SPEED;
+  return rowSec / needSec;
+}
+
+/**
+ * Final displayed/awarded score (§C-SYS4.2 turbo ×1.5 at the single seam;
+ * ×1 everywhere else — bit-identical ints).
+ * @param {{score: number}} state @param {object} [tune] @returns {number}
+ */
+export function hopperScore(state, tune = HARBOR) {
+  return Math.round(state.score * tune.SCORE_MULT);
+}
 
 /**
  * Idle-detection lane of a lateral position (0 · 1 · 2 across the channel).
@@ -111,6 +243,11 @@ export function laneOf(x, tune = HARBOR) {
  */
 export function speedOf(state, tune = HARBOR) {
   let v = tune.BASE_SPEED;
+  // V4/G74 §G5.4 Endlos ramp: base speed climbs with distance, capped so
+  // rowReachability stays ≥ 1 (never-impossible dodges, §G5.3 guardrail).
+  if (tune.ENDLESS) {
+    v = Math.min(tune.ENDLESS_MAX_SPEED, v + (state.z ?? 0) * tune.ENDLESS_ACCEL_PER_M);
+  }
   if (state.boostT > 0) v *= tune.BOOST_FACTOR;
   if (state.slowT > 0) v *= tune.SLOW_FACTOR;
   return v;
@@ -247,7 +384,19 @@ export function createEngine(rng, tune = HARBOR) {
       } else if (roll < tune.CRATE_CHANCE + tune.RING_CHANCE + tune.BUOY_CHANCE) {
         items.push({ type: 'buoy', x, z: genZ, gone: false });
       } // else: empty water
-      genZ += tune.ROW_GAP_M.min + rng() * (tune.ROW_GAP_M.max - tune.ROW_GAP_M.min);
+      const gap = tune.ROW_GAP_M.min + rng() * (tune.ROW_GAP_M.max - tune.ROW_GAP_M.min);
+      genZ += gap;
+      // V4/G74 §C-SYS4.3 muenzregen: extra PICKUP-only rows interleave the
+      // base table at the row midpoints. Chance = (rate−1)·(crate+ring), so
+      // expected pickups/row = (crate+ring)·rate — EXACTLY +50 % at 1.5. The
+      // branch draws rng only when the modifier is active — base streams
+      // stay bit-identical.
+      if (tune.PICKUP_RATE > 1 &&
+        rng() < (tune.PICKUP_RATE - 1) * (tune.CRATE_CHANCE + tune.RING_CHANCE)) {
+        const px = (rng() * 2 - 1) * (tune.CHANNEL_HALF_W - 0.55);
+        const isCrate = rng() < tune.CRATE_CHANCE / (tune.CRATE_CHANCE + tune.RING_CHANCE);
+        items.push({ type: isCrate ? 'crate' : 'ring', x: px, z: genZ - gap / 2, gone: false });
+      }
       if (genZ >= nextPierZ) {
         const side = piers.length % 2 === 0 ? (rng() < 0.5 ? -1 : 1) : -piers[piers.length - 1].side;
         piers.push({ side, z: nextPierZ, hit: false });
@@ -265,6 +414,11 @@ export function createEngine(rng, tune = HARBOR) {
     state.boostT = 0; // a bump kills the surf
     state.boostChain = 0;
     events.push({ type: 'bump', what });
+    // V4/G74 §G5.4 Endlos end-condition: 3 bumps (buoy/pier hits)
+    if (tune.ENDLESS && state.bumps >= tune.ENDLESS_BUMP_LIMIT) {
+      state.ended = true;
+      events.push({ type: 'ended', reason: 'bumps' });
+    }
   }
 
   /**
@@ -278,7 +432,8 @@ export function createEngine(rng, tune = HARBOR) {
     if (state.ended) return events;
     dt = Math.min(tune.MAX_DT, Math.max(0, dt));
     state.elapsed += dt;
-    if (state.elapsed >= tune.DURATION_SEC) {
+    // V4/G74 §G5.4: Endlos has no round timer — 3 bumps end it (see bump()).
+    if (!tune.ENDLESS && state.elapsed >= tune.DURATION_SEC) {
       state.ended = true;
       events.push({ type: 'ended' });
       return events;
@@ -451,6 +606,10 @@ export function createEngine(rng, tune = HARBOR) {
  */
 export function createBot(tune = HARBOR) {
   let dodgeToLane = null; // latched anti-gull hop (flip-flopping never lands)
+  // V4/G74: the reach filter is TIME-based — lateral authority is fixed
+  // (MAX_LATERAL_SPEED) while row time shrinks with the mode's speed, so a
+  // faster channel means fewer chaseable pickups (×1 on Mittel: identical).
+  const reachPerM = tune.BOT_REACH_X_PER_M * (HARBOR.BASE_SPEED / tune.BASE_SPEED);
   return {
     control(state, items, piers, waves) {
       let targetX = null;
@@ -472,7 +631,7 @@ export function createBot(tune = HARBOR) {
           if (item.gone || item.type === 'buoy') continue;
           const dz = item.z - state.z;
           if (dz < 1 || dz > tune.BOT_SCAN_M) continue;
-          const reach = Math.abs(item.x - state.x) / Math.max(1, dz * tune.BOT_REACH_X_PER_M);
+          const reach = Math.abs(item.x - state.x) / Math.max(1, dz * reachPerM);
           if (reach > 1.15) continue; // not reachable in time — skip
           const value = (item.type === 'crate' ? tune.BOT_CRATE_VALUE : tune.BOT_RING_VALUE) - dz * 0.12 - reach;
           if (value > bestScore) {
@@ -565,6 +724,67 @@ export function simulateRound(seed, tune = HARBOR, dt = 1 / 60) {
     boosts,
     distanceM: Math.floor(s.z),
     hornsUsed: tune.HORN_CHARGES - s.hornCharges,
+  };
+}
+
+/**
+ * V4/G74 §G5.4 certification sim: one full seeded bot round at `mode`
+ * (deterministic, no DOM). A seeded lapse track (short no-steer windows,
+ * human attention model) drives both the §G5.4 monotone-means gate AND the
+ * Endlos termination — a lapsing skipper WILL take 3 bumps eventually.
+ * @param {string} [mode] @param {number} [seed] @param {number} [maxSec]
+ * @param {object|null} [modifier] optional §C-SYS4.3 payload (tests)
+ * @returns {{score: number, crates: number, rings: number, bumps: number,
+ *   steals: number, boosts: number, distanceM: number, elapsed: number}}
+ */
+export function simulateHarborAutoplay(mode = 'normal', seed = 1, maxSec = 900, modifier = null) {
+  const tune = applyModifier(applyDifficulty(HARBOR, mode), modifier);
+  const rng = mulberry32(seed);
+  const engine = createEngine(rng, tune);
+  const bot = createBot(tune);
+  const lapse = mulberry32((seed ^ 0x9d2c5681) >>> 0);
+  // human-attention model: per-mode lapse cadence (tighter under pressure)
+  // drives fumbles/bumps — §G5.4 monotone gate + Endlos termination.
+  const lapseEvery = tune.BOT_LAPSE_EVERY_SEC > 0 ? tune.BOT_LAPSE_EVERY_SEC : Infinity;
+  let nextLapse = lapseEvery * (0.5 + lapse());
+  let lapseT = 0;
+  let boosts = 0;
+  let focusT = 0; // §G5.3 human model: post-pickup focus cooldown
+  const dt = 1 / 60;
+  let guard = Math.ceil(maxSec / dt);
+  while (!engine.state.ended && guard > 0) {
+    // during the focus cooldown the skipper ignores NEW pickups (buoys stay
+    // visible — dodging is reflex, chasing is attention)
+    const seen = focusT > 0 ? engine.items.filter((it) => it.type === 'buoy') : engine.items;
+    const c = bot.control(engine.state, seen, engine.piers, engine.waves);
+    nextLapse -= dt;
+    if (nextLapse <= 0 && lapseT <= 0) {
+      lapseT = 0.7 + lapse() * 0.9;
+      nextLapse = lapseEvery * (0.5 + lapse());
+    }
+    if (lapseT > 0) {
+      lapseT -= dt;
+      c.targetX = null; //   hands off the tiller — drift
+      c.horn = false;
+    }
+    const events = engine.step(c, dt);
+    for (const ev of events) {
+      if (ev.type === 'boost') boosts += 1;
+      if (ev.type === 'crate' || ev.type === 'ring') focusT = tune.BOT_FOCUS_SEC;
+    }
+    if (focusT > 0) focusT -= dt;
+    guard -= 1;
+  }
+  const s = engine.state;
+  return {
+    score: hopperScore(s, tune),
+    crates: s.crates,
+    rings: s.rings,
+    bumps: s.bumps,
+    steals: s.steals,
+    boosts,
+    distanceM: Math.floor(s.z),
+    elapsed: s.elapsed,
   };
 }
 

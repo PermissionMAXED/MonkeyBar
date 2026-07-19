@@ -74,7 +74,61 @@ export const HUNT = Object.freeze({
   /** Rise/sink animation shares of the visibility window (visual timing). */
   RISE_FRAC: 0.16,
   SINK_FRAC: 0.16,
+  // ── V4/G74 §G5.3/§G5.4 derived-mode defaults (Mittel identity) ──
+  ENDLESS: false,
+  /** §G5.4 Endlos end-condition: 3 escaped Boo-waves (< 4 catches). */
+  ENDLESS_ESCAPE_LIMIT: 3,
 });
+
+/**
+ * V4/G74 §G5.3 timed-arena rows: Leicht = spawn interval ×1.2, visibility
+ * (the reaction window) ×1.25, duration +20 %; Schwer = interval ×0.85,
+ * windows ×0.8 (0.72 s floor ≥ the 0.35 s guardrail), duration unchanged.
+ * Endlos (§G5.4): Schwer arena without the round timer — Boo-waves keep
+ * coming every 25 s and 3 ESCAPED waves (< 4 catches) end the run. The
+ * bot-engage columns model the human hit-rate per pressure level
+ * (§G5.4 monotone-means / beatability gates — exempt from guardrails).
+ */
+export const HUNT_DIFFICULTY = Object.freeze({
+  easy: Object.freeze({
+    interval: 1.2, windows: 1.25, duration: 1.2, botEngage: 0.44, botWaveEngage: 0.66, endless: false,
+  }),
+  normal: Object.freeze({
+    interval: 1, windows: 1, duration: 1, botEngage: 0.4, botWaveEngage: 0.62, endless: false,
+  }),
+  hard: Object.freeze({
+    interval: 0.85, windows: 0.8, duration: 1, botEngage: 0.36, botWaveEngage: 0.58, endless: false,
+  }),
+  endless: Object.freeze({
+    interval: 0.85, windows: 0.8, duration: 1, botEngage: 0.36, botWaveEngage: 0.58, endless: true,
+  }),
+});
+
+/**
+ * Derive the frozen per-mode tune (§G5.3). Mittel returns the frozen live
+ * HUNT table itself — bit-identical numbers AND rng streams (§G5.2/§E5).
+ * ghostHunt has NO gameplay modifiers (§C-SYS4.3: payout-only eligibility),
+ * so there is no applyModifier here.
+ * @param {object} [tune] @param {string} [mode] @returns {object}
+ */
+export function applyDifficulty(tune = HUNT, mode = 'normal') {
+  const id = Object.hasOwn(HUNT_DIFFICULTY, mode) ? mode : 'normal';
+  if (id === 'normal') return tune;
+  const row = HUNT_DIFFICULTY[id];
+  return Object.freeze({
+    ...tune,
+    DURATION_SEC: tune.DURATION_SEC * row.duration,
+    SPAWN_START_SEC: tune.SPAWN_START_SEC * row.interval,
+    SPAWN_END_SEC: tune.SPAWN_END_SEC * row.interval,
+    VISIBLE_START_SEC: tune.VISIBLE_START_SEC * row.windows,
+    VISIBLE_END_SEC: tune.VISIBLE_END_SEC * row.windows,
+    BOO_MIN_VISIBLE_SEC: tune.BOO_MIN_VISIBLE_SEC * row.windows,
+    BOT_ENGAGE: row.botEngage,
+    BOT_WAVE_ENGAGE: row.botWaveEngage,
+    ENDLESS: row.endless,
+    MODE: id,
+  });
+}
 
 /**
  * Ghost spawn anchors (world coordinates shared with the visual module —
@@ -186,6 +240,7 @@ export function createHunt(seed, tune = HUNT) {
     missed: 0,
     decoysTapped: 0,
     booBonuses: 0,
+    escapedWaves: 0, // V4/G74 §G5.4: Endlos ends at ENDLESS_ESCAPE_LIMIT
     events: [],
     ended: false,
   };
@@ -230,7 +285,13 @@ function resolveWaveGhost(state, ghost, wasCaught) {
       state.booBonuses += 1;
       state.events.push({ type: 'booBonus', caught: wave.caught, bonus: state.tune.BOO_BONUS });
     } else {
-      state.events.push({ type: 'booEnd', caught: wave.caught });
+      // V4/G74 §G5.4: an ESCAPED wave (< 4 catches) — 3 of them end Endlos
+      state.escapedWaves += 1;
+      state.events.push({ type: 'booEnd', caught: wave.caught, escaped: state.escapedWaves });
+      if (state.tune.ENDLESS && state.escapedWaves >= state.tune.ENDLESS_ESCAPE_LIMIT) {
+        state.ended = true;
+        state.events.push({ type: 'end', reason: 'escapes' });
+      }
     }
     state.booActive = null;
   }
@@ -246,7 +307,9 @@ export function stepHunt(state, dt) {
   state.t += dt;
   const t = state.t;
 
-  if (t >= tune.DURATION_SEC) {
+  // V4/G74 §G5.4: Endlos has no round timer — it ends through the
+  // escaped-Boo-wave counter in resolveWaveGhost instead.
+  if (!tune.ENDLESS && t >= tune.DURATION_SEC) {
     state.ended = true;
     state.events.push({ type: 'end' });
     return;
@@ -291,6 +354,13 @@ export function stepHunt(state, dt) {
       state.tokens.push({ window: w, kind: win.kind, startT: t });
       state.events.push({ type: 'tokenSpawn', kind: win.kind, window: w });
     }
+  }
+
+  // V4/G74 §G5.4 Endlos: the Boo-wave schedule keeps extending forever
+  // (every 25 s past the precomputed §C10.1 list).
+  if (tune.ENDLESS && state.booIdx >= state.booTimes.length) {
+    const last = state.booTimes[state.booTimes.length - 1] ?? 0;
+    state.booTimes.push(last + tune.BOO_EVERY_SEC);
   }
 
   // §C10.1 boo-wave: every 25 s — 5 ghosts at once (oldest regulars yield)
@@ -432,6 +502,36 @@ export function botStep(state) {
 /** Round score (floored at 0 by construction). @param {object} state @returns {number} */
 export function huntScore(state) {
   return Math.max(0, Math.round(state.score));
+}
+
+/**
+ * V4/G74 §G5.4 certification sim: one full seeded bot round at `mode`,
+ * fixed 30 Hz stepping — deterministic, no DOM. The per-mode BOT_ENGAGE
+ * rates make the bot a human-rate proxy (§G5.4: Schwer target 90 in ≥ 1/5
+ * seeds; Leicht mean ≥ Schwer mean). Endlos terminates through the
+ * 3-escaped-Boo-waves condition (maxSec is only a safety net).
+ * @param {string} [mode] @param {number} [seed] @param {number} [maxSec]
+ * @returns {{score: number, caught: number, missed: number, escapedWaves: number,
+ *   booBonuses: number, time: number}}
+ */
+export function simulateHuntAutoplay(mode = 'normal', seed = 1, maxSec = 900) {
+  const tune = applyDifficulty(HUNT, mode);
+  const state = createHunt(seed, tune);
+  const dt = 1 / 30;
+  while (!state.ended && state.t < maxSec) {
+    stepHunt(state, dt);
+    if (state.ended) break;
+    for (const tap of botStep(state)) tapHunt(state, tap);
+    state.events.length = 0; // headless: drop the render event queue
+  }
+  return {
+    score: huntScore(state),
+    caught: state.caught,
+    missed: state.missed,
+    escapedWaves: state.escapedWaves,
+    booBonuses: state.booBonuses,
+    time: state.t,
+  };
 }
 
 /** §B3 meta payload (§C10.1: meta ghostsCaught). @param {object} state */

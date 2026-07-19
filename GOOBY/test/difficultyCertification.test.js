@@ -64,7 +64,7 @@ const ADAPTERS = Object.freeze({
   toyRacer: ['simulateRacerAutoplay', 'ms'],
   ghostHunt: ['simulateHuntAutoplay', 'ms'],
   rocketRescue: ['simulateRocketAutoplay', 'ms'],
-  harborHopper: null, // G74 pending — applyDifficulty not merged yet
+  harborHopper: ['simulateHarborAutoplay', 'ms'],
 });
 
 // ---------------------------------------------------------------------------

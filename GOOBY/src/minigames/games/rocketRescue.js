@@ -17,6 +17,8 @@ import { getAchievementsEngine } from '../../systems/achievementsEngine.js';
 import { clampFloatTextToView } from '../framework.js';
 import {
   ROCKET,
+  applyDifficulty, // V4/G74 §G5.3
+  applyModifier, //   V4/G74 §C-SYS4.3
   createEngine,
   createBot,
   roundScore,
@@ -158,8 +160,17 @@ export default {
     // features like fuel-out tow / gull steals without waiting for RNG)
     if (import.meta.env?.DEV) window.__g42rocket = this;
 
-    this.engine = createEngine(ctx.rng);
-    this.bot = this.autoplay ? createBot() : null;
+    // ── V4/G74 (§G5.3 + §C-SYS4.3/§E0.1-3): derive the tune from
+    // ctx.params.difficulty + the plain-number modifier payload (muenzregen
+    // row for rocketRescue — the fuel canisters are its "coins"). Mittel
+    // without modifier returns the frozen ROCKET table itself. ──
+    const difficulty = ctx.params?.difficulty ?? 'normal';
+    this.tune = applyModifier(applyDifficulty(ROCKET, difficulty), ctx.params?.modifier);
+    this.engine = createEngine(ctx.rng, this.tune);
+    this.bot = this.autoplay ? createBot(this.tune) : null;
+    if (import.meta.env?.DEV) {
+      globalThis.__g74 = { game: 'rocketRescue', difficulty, tune: this.tune, engine: this.engine }; // V4/G74 CDP probe
+    }
     this.phase = 'play'; // 'play' | 'ending' | 'done'
     this.endT = 0;
     this.shownScore = 0;
@@ -463,7 +474,8 @@ export default {
     el.addEventListener('pointercancel', this.onPointerUp);
 
     ctx.hud.setScore(0);
-    ctx.hud.setTime(ROCKET.DURATION_SEC);
+    // V4/G74 §G5.4: Endlos counts up (no round timer), timed modes count down
+    ctx.hud.setTime(this.tune.ENDLESS ? 0 : this.tune.DURATION_SEC);
     ctx.hud.banner(t('mg.rocket.hint'));
   },
 
@@ -555,11 +567,20 @@ export default {
       this.safeBunnies.push(safe);
       this.gooby.play('happyBounce');
       this.gooby.setEmotion('ecstatic');
+    } else if (ev.type === 'bunnyRespawn') {
+      // V4/G74 §G5.4 Endlos: a cleared field re-arms — new stranded bunnies
+      ctx.hud.banner(t('mg.rocket.hint'));
+      for (const view of this.platformViews) {
+        view.bunny.visible = true;
+        view.help.visible = true;
+        view.indicator.visible = true;
+      }
     } else if (ev.type === 'fuelPickup') {
       ctx.audio.play('rocket.fuel');
       const view = this.canViews[ev.index];
       if (view) this.particles.emit('sparkles', view.grp.position.clone(), { count: 6 });
-      this.floats.spawn(`+${ROCKET.FUEL_PICKUP_AMOUNT}⛽`, craftPos.clone(), '#63E0FF');
+      // V4/G74: the logic reports the (Endlos-thinned) refill amount
+      this.floats.spawn(`+${Math.round(ev.amount ?? ROCKET.FUEL_PICKUP_AMOUNT)}⛽`, craftPos.clone(), '#63E0FF');
     } else if (ev.type === 'fuelLow') {
       ctx.audio.play('rocket.fuelLow');
       ctx.hud.banner(t('mg.rocket.fuelLow'));
@@ -583,7 +604,7 @@ export default {
     this.endReason = reason;
     this.setThrustAudio(false);
     const s = this.engine.state;
-    const final = roundScore(s.rescued, s.fuel, s.softLandings);
+    const final = roundScore(s.rescued, s.fuel, s.softLandings, this.tune);
     // fuel share lands now: flash the remaining delta onto the HUD
     if (final > this.shownScore) {
       this.ctx.onScore(final - this.shownScore);
@@ -647,7 +668,7 @@ export default {
       rem -= sdt;
     }
 
-    ctx.hud.setTime(ROCKET.DURATION_SEC - state.elapsed);
+    ctx.hud.setTime(this.tune.ENDLESS ? state.elapsed : this.tune.DURATION_SEC - state.elapsed);
 
     // monotonic HUD score (rescues + soft bonuses; fuel share at the end)
     const shown = this.displayScore();
@@ -751,7 +772,10 @@ export default {
       this.fillEl.style.width = `${pct}%`;
       this.fillEl.style.background = pct > 50 ? '#7ED957' : pct > 20 ? '#FFD166' : '#FF6B6B';
     }
-    const bunTxt = `🐰 ${state.rescued}/${ROCKET.PLATFORM_COUNT}`;
+    // V4/G74 §G5.4 Endlos: rescues keep counting past the field size
+    const bunTxt = this.tune.ENDLESS
+      ? `🐰 ${state.rescued}`
+      : `🐰 ${state.rescued}/${ROCKET.PLATFORM_COUNT}`;
     if (this.bunEl.textContent !== bunTxt) this.bunEl.textContent = bunTxt;
   },
 
