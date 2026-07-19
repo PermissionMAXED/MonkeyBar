@@ -33,6 +33,13 @@ import { createRoomNav } from '../ui/roomNav.js';
 import { bandAt } from '../systems/dayNight.js';
 import { weatherAt } from '../systems/weather.js';
 import { mountGardenRain, mountGardenClouds, updateWeatherFx } from '../gfx/weatherFx.js';
+import {
+  disableGyro,
+  isGyroEnabled,
+  setGyroSceneActive,
+  syncGyroSetting,
+  updateGyroParallax,
+} from '../systems/gyroParallax.js';
 
 export { HOME_ASSET_KEYS } from './roomManager.js';
 
@@ -256,6 +263,42 @@ export function createHomeScene(ctx) {
   /** @type {Array<() => void>} store/input unsubscribers */
   const subs = [];
 
+  // --- V4/G60: home-only gyro/pointer camera parallax (§B8/§C-SYS8) --------
+  // roomManager does not rewrite the settled camera every frame, so remove
+  // exactly the offset applied on the previous frame before it updates/pans.
+  // Adding the new offset AFTER rm.update preserves its fixed look-at rotation:
+  // this is a pure translation, never a nausea-inducing camera rotation.
+  let appliedParallaxX = 0;
+  let appliedParallaxY = 0;
+
+  function removeAppliedParallax() {
+    if (appliedParallaxX === 0 && appliedParallaxY === 0) return;
+    camera.position.x -= appliedParallaxX;
+    camera.position.y -= appliedParallaxY;
+    appliedParallaxX = 0;
+    appliedParallaxY = 0;
+  }
+
+  function parallaxSuppressed() {
+    if (ui.activeScreenId?.()) return true;
+    if (ui.el?.querySelector?.('.panel-backdrop,.g23-ph-layer,.g5-wash,.g5-ghost')) return true;
+    // Care walk-tos use jump/happyBounce in interactions.js; room pans also
+    // force zero so camera motions never stack.
+    return !!rm?.isPanning?.()
+      || !!gooby?.isPlaying?.('jump')
+      || !!gooby?.isPlaying?.('happyBounce');
+  }
+
+  function applyParallax(dt) {
+    if (!isGyroEnabled()) return; // strict OFF: no DOM query / per-frame engine work
+    const offset = updateGyroParallax(dt, parallaxSuppressed());
+    camera.position.x += offset.x;
+    camera.position.y += offset.y;
+    appliedParallaxX = offset.x;
+    appliedParallaxY = offset.y;
+  }
+  // --- end V4/G60 -----------------------------------------------------------
+
   // dev draw-call readout (§E10 budget check: home ≤ 120 calls)
   /** @type {HTMLElement|null} */
   let debugEl = null;
@@ -302,6 +345,18 @@ export function createHomeScene(ctx) {
 
     async enter(params = {}) {
       ctx.audio?.music?.('home'); // G14: lo-fi home loop (§D6; starts post-gesture)
+      // V4/G60: strict feature-detect for the same-wave save slice. This
+      // restore path never prompts; G58 calls enableGyro() in the toggle tap.
+      setGyroSceneActive(true);
+      let gyroSetting = store.get('settings.gyro') === true;
+      syncGyroSetting(gyroSetting);
+      subs.push(store.on('change', () => {
+        const next = store.get('settings.gyro') === true;
+        if (next === gyroSetting) return;
+        gyroSetting = next;
+        if (next) syncGyroSetting(true);
+        else disableGyro();
+      }));
       // --- build the rooms (models are preloaded by the scene manager) ---
       rm = createRoomManager({ scene, camera, assets, store });
 
@@ -439,7 +494,9 @@ export function createHomeScene(ctx) {
     },
 
     update(dt) {
+      removeAppliedParallax(); // V4/G60: recover roomManager's base camera
       rm?.update(dt);
+      applyParallax(dt); // V4/G60: home camera only; minigame cameras untouched
       lights.update(dt);
       particles.update(dt);
       updateWeatherFx(dt); // V2/G26 (§C11.2): rain/clouds/window streaks
@@ -488,6 +545,8 @@ export function createHomeScene(ctx) {
 
     exit() {
       ctx.audio?.music?.(null); // G14: stop the home loop when leaving home
+      removeAppliedParallax(); // V4/G60: never leak a translated camera
+      setGyroSceneActive(false); // detaches listeners throughout minigames
       // V2/G26: ambient loops are home-scoped — stop them when leaving
       ctx.audio?.stop?.('ambience.rain');
       ctx.audio?.stop?.('ambience.birdsong');
