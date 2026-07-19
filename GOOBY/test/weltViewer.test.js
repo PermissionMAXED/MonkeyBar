@@ -3,8 +3,9 @@
 //   • weltScenes.js registry: 2 shipped scenes, defs valid, committed PLY +
 //     license files present, attribution rows mirror data/credits.js verbatim
 //     (CC BY 4.0 obligation), iOS 1M splat ceiling respected
-//   • §G6.3 orientation quaternions: windmill identity, townsquare = π about
-//     X (the SOG→PLY Y-down correction) + the rotated proof-pose pins
+//   • §G6.3 orientation quaternions: BOTH scenes = π about X (the SOG→PLY
+//     Y-down correction; ground-level probes falsified the throwaway's
+//     „windmill already Y-up" claim) + the rotated proof-pose pins
 //   • §G6.5 path-metadata FORMAT contract (shape validator both directions —
 //     G66's goobyWelt.test.js layers the numeric rules on top)
 //   • splatViewer.logic.js: the VERBATIM §G6.6 DropInViewer/addSplatScene
