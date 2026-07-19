@@ -31,6 +31,9 @@ export const GYRO_PARALLAX = Object.freeze({
 const POINTER_EDGE_DEG =
   GYRO_PARALLAX.DEADZONE_DEG
   + GYRO_PARALLAX.POINTER_MAX_M / GYRO_PARALLAX.SENSITIVITY_M_PER_DEG;
+// Fixed storage covers a 600 Hz display for five seconds without allocating
+// in the frame loop (real target devices are ≤120 Hz).
+const FPS_RING_CAPACITY = 3000;
 
 const ZERO_NEUTRAL = Object.freeze({ beta: 0, gamma: 0 });
 
@@ -158,9 +161,20 @@ export function smoothOffset(
   return current;
 }
 
-/** @returns {{elapsed:number, frames:number, fps:number, suspended:boolean}} */
+/**
+ * @returns {{elapsed:number, frames:number, fps:number, suspended:boolean,
+ *   samples:Float64Array, cursor:number, size:number}}
+ */
 export function createFpsGuard() {
-  return { elapsed: 0, frames: 0, fps: Infinity, suspended: false };
+  return {
+    elapsed: 0,
+    frames: 0,
+    fps: Infinity,
+    suspended: false,
+    samples: new Float64Array(FPS_RING_CAPACITY),
+    cursor: 0,
+    size: 0,
+  };
 }
 
 /**
@@ -171,18 +185,34 @@ export function createFpsGuard() {
 export function updateFpsGuard(guard, dtSec) {
   const dt = Math.max(0, finite(dtSec));
   if (dt <= 0) return guard;
-  guard.elapsed += dt;
-  guard.frames += 1;
-  if (guard.elapsed + 1e-9 < GYRO_PARALLAX.FPS_WINDOW_SEC) return guard;
 
+  // Append this frame duration, evicting the oldest only at the fixed ring
+  // capacity. Then trim complete frames that fall beyond the rolling 5 s.
+  if (guard.size >= guard.samples.length) {
+    guard.elapsed -= guard.samples[guard.cursor];
+    guard.size -= 1;
+  }
+  guard.samples[guard.cursor] = dt;
+  guard.cursor = (guard.cursor + 1) % guard.samples.length;
+  guard.size += 1;
+  guard.elapsed += dt;
+  while (guard.size > 1) {
+    const oldestIndex =
+      (guard.cursor - guard.size + guard.samples.length) % guard.samples.length;
+    const oldest = guard.samples[oldestIndex];
+    if (guard.elapsed - oldest < GYRO_PARALLAX.FPS_WINDOW_SEC) break;
+    guard.elapsed -= oldest;
+    guard.size -= 1;
+  }
+  guard.frames = guard.size;
+
+  if (guard.elapsed + 1e-9 < GYRO_PARALLAX.FPS_WINDOW_SEC) return guard;
   guard.fps = guard.frames / guard.elapsed;
   if (guard.suspended) {
     if (guard.fps >= GYRO_PARALLAX.FPS_RESUME_AT - 1e-9) guard.suspended = false;
   } else if (guard.fps < GYRO_PARALLAX.FPS_SUSPEND_BELOW - 1e-9) {
     guard.suspended = true;
   }
-  guard.elapsed = 0;
-  guard.frames = 0;
   return guard;
 }
 
@@ -254,6 +284,8 @@ function resetMotion() {
   runtime.offset.y = 0;
   runtime.guard.elapsed = 0;
   runtime.guard.frames = 0;
+  runtime.guard.cursor = 0;
+  runtime.guard.size = 0;
   runtime.guard.fps = Infinity;
   runtime.guard.suspended = false;
 }

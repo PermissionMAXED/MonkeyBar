@@ -188,6 +188,16 @@ test('FPS guard hysteresis stays suspended at 30 and resumes at ≥35 fps', () =
   assert.equal(guard.suspended, false);
 });
 
+test('FPS guard uses a rolling window instead of disjoint 5 s buckets', () => {
+  const guard = createFpsGuard();
+  runFrames(guard, 20);
+  assert.equal(guard.suspended, true);
+  // Last rolling 5 s becomes 1 s at 20 fps + 4 s at 40 fps = 36 fps.
+  runFrames(guard, 40, 4);
+  assert.equal(guard.suspended, false);
+  assert.ok(guard.fps >= 35);
+});
+
 test('desktop/no-sensor enable selects pointer fallback', async () => {
   const target = fakeEventTarget();
   setGyroSceneActive(true);
