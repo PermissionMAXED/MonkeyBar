@@ -26,7 +26,10 @@ import { CLIPS, V2_IDLE_CLIP_IDS } from '../src/character/goobyAnims.js';
 import { IDLE_VARIETY, pickIdleVariant, idleVarietyDelaySec } from '../src/character/emotions.js';
 // V2/FIX-B (E15): live-module imports for the music-toggle seam
 // V3/G32: + the §B2.2 slider math + §B2.3 cache constants
-import audio, { volumeGain, sanitizeVolumes, DEFAULT_VOLUMES, SAMPLE_CACHE_BUDGET } from '../src/audio/audio.js';
+import audio, {
+  volumeGain, sanitizeVolumes, DEFAULT_VOLUMES, SAMPLE_CACHE_BUDGET,
+  PRELOAD_BATCH_MAX, // V3/FIX-B (E5 P2)
+} from '../src/audio/audio.js';
 import { createStore } from '../src/core/store.js';
 import { defaultState } from '../src/core/save.js';
 // V3/G32 (§B2.4): the medley director's pure schedule math + tables
@@ -575,5 +578,106 @@ test('§B2.4: phraseBars — deterministic per seed, rests fixed, no repeat with
     }
     // phrases actually differ from each other (the reshuffle does something)
     assert.notDeepEqual(phraseBars(ctxId, 1), phraseBars(ctxId, 0), `${ctxId} reshuffles`);
+  }
+});
+
+// ===================== V3/FIX-B (E5 P1/P2): stall recovery + cache hygiene ===
+// E5 P1: after a main-thread stall ≥ ~1.5 s the medley grid fell behind and
+// scheduleBar() retro-scheduled the missed bars; Chrome clamps past-time param
+// events to the same instant, so the stacked fade curves threw an uncaught
+// NotSupportedError cascade and the stuck bar re-created nodes every tick.
+// The fix fast-forwards nextBarAt past ctx.currentTime (missed bars are
+// SKIPPED, counted in getStats().medley.barsSkipped) and derives the phrase
+// from the bar counter so the reshuffle table survives seam-crossing skips.
+
+/** Advance the fake clock in sub-lookahead steps (≤ ~0.5 s of clock per 200 ms
+ * scheduler tick) so bars schedule on the normal look-ahead path — bigger
+ * jumps would legitimately look like stalls to the recovery logic. */
+async function creep(fake, steps, dt = 0.2) {
+  for (let i = 0; i < steps; i += 1) {
+    fake.currentTime += dt;
+    await sleep(80);
+  }
+  await sleep(250); // let the 200 ms scheduler tick settle
+}
+
+test('V3/FIX-B (E5 P1): stall recovery skips missed bars — never retro-schedules', async () => {
+  const fake = FakeAudioContext.last;
+  assert.ok(fake, 'E15 singleton fake ctx present');
+  audio.music('home');
+  await creep(fake, 16); // ~3.2 s: bars 0+1 land on the normal look-ahead path
+  const before = audio.getStats().medley;
+  assert.equal(before.context, 'home');
+  assert.ok(before.bar >= 2, `grid established (bar ${before.bar})`);
+  // the stall: the audio clock jumps 60 s (crosses a 51.2 s phrase seam)
+  fake.currentTime += 60;
+  const jumpTo = fake.currentTime;
+  await sleep(300); // fast-forward tick
+  await creep(fake, 16); // then normal scheduling resumes
+  const after = audio.getStats().medley;
+  const skipped = after.barsSkipped - before.barsSkipped;
+  const scheduled = after.barsScheduled - before.barsScheduled;
+  assert.ok(skipped >= 15 && skipped <= 21, `missed bars were skipped, not scheduled (${skipped})`);
+  assert.ok(scheduled >= 1 && scheduled <= 4, `only look-ahead bars scheduled after the stall (${scheduled})`);
+  assert.equal(after.bar - before.bar, skipped + scheduled, 'bar counter = skipped + scheduled');
+  assert.ok(after.nextBarAt >= jumpTo, `grid fast-forwarded past the stall (${after.nextBarAt} ≥ ${jumpTo})`);
+  // ZERO retro-scheduling: every post-jump bar sits at/after the jump instant
+  for (const entry of after.schedule.filter((s) => s.bar >= before.bar)) {
+    assert.ok(entry.at >= jumpTo - 0.01, `bar ${entry.bar} scheduled at ${entry.at} ≥ ${jumpTo}`);
+  }
+  // the phrase is DERIVED from the bar counter across the skipped seam…
+  const last = after.schedule[after.schedule.length - 1];
+  assert.equal(after.phrase, Math.floor(last.bar / PHRASE_BARS), 'phrase derived from bar');
+  assert.ok(after.phrase >= 1, 'the skip crossed the phrase seam');
+  // …and the scheduled jingle matches the seeded reshuffle table for it
+  const expected = phraseBars('home', Math.floor(last.bar / PHRASE_BARS))[last.bar % PHRASE_BARS];
+  assert.equal(last.key, expected ? expected.split('/')[1] : 'R', 'reshuffle table in sync after the skip');
+  assert.equal(typeof audio.getMusicTime(), 'number', 'time base still live');
+  audio.music(null);
+});
+
+// E5 P2: a full-library preloadSamples() flood (251 keys) cycled the whole
+// 6 MB LRU (223 evictions) and evicted every warm set. Fixes under test:
+// the PRELOAD_BATCH_MAX cap and the live-medley pin (active context jingles
+// are never LRU-evicted; getStats().samples.pinned counts the resident ones).
+
+test('V3/FIX-B (E5 P2): live-medley jingles are pinned against LRU floods; batches are capped', async () => {
+  const fake = FakeAudioContext.last;
+  const origDecode = fake.decodeAudioData;
+  const origFetch = globalThis.fetch;
+  let decodedLen = 1000; // ~4 KB decoded per buffer
+  fake.decodeAudioData = () => Promise.resolve({ length: decodedLen, numberOfChannels: 1, duration: 1 });
+  globalThis.fetch = async () => ({ arrayBuffer: async () => new ArrayBuffer(8) });
+  try {
+    // 1) a live medley warms + pins its 10 jingles
+    audio.music('home');
+    await sleep(250); // startPlayer's loadBuffer warm-up settles
+    assert.equal(audio.getStats().samples.pinned, 10, 'all 10 home jingles resident + pinned');
+    // 2) flood with big decodes → LRU evicts, but the pinned set survives
+    decodedLen = 700_000; // ~2.8 MB decoded per buffer
+    await audio.preloadSamples([
+      'music-jingles/jingles_SAX00', 'music-jingles/jingles_SAX04',
+      'music-jingles/jingles_SAX05', 'music-jingles/jingles_SAX06',
+      'music-jingles/jingles_SAX08', 'music-jingles/jingles_SAX09',
+    ]);
+    const flooded = audio.getStats().samples;
+    assert.equal(flooded.pinned, 10, 'pinned medley jingles survive the flood');
+    assert.ok(
+      flooded.bytes <= SAMPLE_CACHE_BUDGET + 10 * 1000 * 4,
+      `unpinned entries evicted back to budget (${flooded.bytes} B)`
+    );
+    // 3) batch cap: a "preload the library" call is truncated at the cap
+    decodedLen = 1000;
+    const library = Array.from({ length: 60 }, (_, i) => `interface-sounds/flood_${String(i).padStart(3, '0')}`);
+    const before = audio.getStats().samples.cached;
+    await audio.preloadSamples(library);
+    const added = audio.getStats().samples.cached - before;
+    assert.ok(added <= PRELOAD_BATCH_MAX, `≤ ${PRELOAD_BATCH_MAX} keys loaded from a 60-key flood (${added})`);
+    assert.ok(added >= PRELOAD_BATCH_MAX - 4, `the cap still warms a full batch (${added})`);
+    assert.equal(audio.getStats().samples.pinned, 10, 'pins intact after the capped batch');
+  } finally {
+    fake.decodeAudioData = origDecode;
+    globalThis.fetch = origFetch;
+    audio.music(null);
   }
 });

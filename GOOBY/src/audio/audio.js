@@ -53,7 +53,7 @@ import { getStore } from '../core/store.js';
 import { DANCE } from '../data/constants.js';
 import { getSfxDef, busFor } from './sfxMap.js';
 import { VOICE_RECIPES } from './goobyVoice.js';
-import musicDirector, { MEDLEY_CONTEXTS } from './musicDirector.js';
+import musicDirector, { MEDLEY, MEDLEY_CONTEXTS } from './musicDirector.js';
 
 const DEV = !!import.meta.env?.DEV;
 
@@ -119,6 +119,10 @@ const stats = { nodesCreated: 0, plays: 0, errors: 0 };
 // ── V3/G32 (§B2.3): decoded-buffer LRU cache (≤ 6 MB decoded) ────────────────
 /** Decoded-bytes budget: LRU-evict beyond it (§B2.3). */
 export const SAMPLE_CACHE_BUDGET = 6 * 1024 * 1024;
+/** V3/FIX-B (E5 P2): max keys per preloadSamples() call — a full-library
+ * preload (251 keys) cycled the whole 6 MB LRU (223 evictions) and left only
+ * the tail warm; per-game `sfx: []` sets and medley warmups are all ≤ ~25. */
+export const PRELOAD_BATCH_MAX = 32;
 /** @type {Map<string, {promise: Promise<AudioBuffer|null>, buffer: AudioBuffer|null, bytes: number}>}
  * key → cache entry; Map insertion order IS the LRU order (touch = re-insert). */
 const bufferCache = new Map();
@@ -350,12 +354,28 @@ function decodedBytes(buffer) {
   return len * ch * 4;
 }
 
-/** Evict least-recently-used SETTLED entries beyond the budget (§B2.3). */
+/**
+ * V3/FIX-B (E5 P2) pin policy: the ACTIVE medley context's jingle keys are
+ * never LRU-evicted (≤ ~10 small buffers), so a preload flood can't silence
+ * the live medley until the reshuffle slowly re-warms each bar.
+ * @returns {Set<string>|null} pinned keys, or null when no medley is live
+ */
+function pinnedKeys() {
+  const context = musicDirector.activeContext();
+  if (!context || !MEDLEY[context]) return null;
+  return new Set(MEDLEY[context].bars.filter(Boolean));
+}
+
+/** Evict least-recently-used SETTLED entries beyond the budget (§B2.3).
+ * V3/FIX-B (E5 P2): pinned (active-medley) keys are skipped — the cache may
+ * transiently sit above budget by the pinned bytes, like in-flight loads. */
 function evictLru() {
   if (bufferCacheBytes <= SAMPLE_CACHE_BUDGET) return;
+  const pinned = pinnedKeys();
   for (const [key, entry] of bufferCache) {
     if (bufferCacheBytes <= SAMPLE_CACHE_BUDGET) break;
     if (entry.buffer == null) continue; // in-flight/failed loads are weightless
+    if (pinned?.has(key)) continue; // §B2.3 pin: the live medley stays warm
     bufferCache.delete(key);
     bufferCacheBytes -= entry.bytes;
     if (DEV) console.debug(`[audio] LRU-evicted '${key}' (${entry.bytes} B, cache now ${bufferCacheBytes} B)`);
@@ -393,6 +413,9 @@ function loadBuffer(key) {
     } catch (err) {
       stats.errors += 1;
       console.warn(`[audio] failed to load '${key}':`, err?.message);
+      // V3/FIX-B: drop the failed entry so a later request can RETRY — a
+      // cached null used to silence the key until the next full reload.
+      if (bufferCache.get(key) === entry) bufferCache.delete(key);
       return null;
     }
   })();
@@ -418,6 +441,10 @@ function getCachedBuffer(key) {
  * V3/G32 (§B2.3): warm samples into the decoded-buffer cache. Accepts sfx IDS
  * (resolved through sfxMap — the per-game `sfx: []` export convention) and/or
  * raw '<pack>/<file-no-ext>' asset keys. Safe pre-init (no-op) and repeatable.
+ * V3/FIX-B (E5 P2): batches are capped at PRELOAD_BATCH_MAX resolved keys —
+ * a "preload everything" call used to churn the whole LRU (223 evictions on
+ * a 251-key flood) and evict every warm set; the overflow is dropped (dev
+ * warning) since anything past the cap would only evict earlier batch keys.
  * @param {string[]} keysOrIds
  * @returns {Promise<void>}
  */
@@ -433,7 +460,12 @@ export async function preloadSamples(keysOrIds) {
       if (def?.kind === 'sample') for (const k of def.keys) keys.add(k);
     }
   }
-  await Promise.all([...keys].map((k) => loadBuffer(k)));
+  let list = [...keys];
+  if (list.length > PRELOAD_BATCH_MAX) {
+    if (DEV) console.warn(`[audio] preloadSamples: ${list.length}-key batch capped to ${PRELOAD_BATCH_MAX} (§B2.3 anti-thrash — preload per-context sets, not the library)`);
+    list = list.slice(0, PRELOAD_BATCH_MAX);
+  }
+  await Promise.all(list.map((k) => loadBuffer(k)));
 }
 
 /**
@@ -1337,11 +1369,13 @@ export function previewBus(busId) {
  *                 (bus gain = enabled ? (v/100)² : 0; master ×0.9 base §B2.2)
  *   volumes     — the live slider values 0–100 {master, sfx, music, voice, ambience}
  *   enabled     — the quick-mute booleans {sfx, music, haptics}
- *   samples     — §B2.3 decoded-buffer cache {cached, bytes, budgetBytes}
+ *   samples     — §B2.3 decoded-buffer cache {cached, bytes, budgetBytes,
+ *                 pinned} (V3/FIX-B: pinned = resident active-medley jingles)
  *   medley      — musicDirector.getStats(): {context, wantContext, base,
  *                 overlays, bar, phrase, sourcesLive, nextBarAt,
  *                 schedule[≤24 of {bar, key, at}], barsScheduled,
- *                 jinglesScheduled, contextSwitches, enabled, suppressed}
+ *                 jinglesScheduled, contextSwitches, barsSkipped (V3/FIX-B:
+ *                 bars fast-forwarded past after a stall), enabled, suppressed}
  *   masterPeakDb — instantaneous post-limiter peak (dBFS; null pre-init/stub)
  */
 export function getStats() {
@@ -1365,7 +1399,13 @@ export function getStats() {
       : null,
     volumes: { ...slider },
     enabled: { ...enabled },
-    samples: { cached: bufferCache.size, bytes: bufferCacheBytes, budgetBytes: SAMPLE_CACHE_BUDGET },
+    samples: {
+      cached: bufferCache.size,
+      bytes: bufferCacheBytes,
+      budgetBytes: SAMPLE_CACHE_BUDGET,
+      // V3/FIX-B (E5 P2): how many of the live medley's jingles are resident
+      pinned: [...(pinnedKeys() ?? [])].filter((k) => bufferCache.get(k)?.buffer != null).length,
+    },
     medley,
     masterPeakDb: masterPeakDb(),
   };

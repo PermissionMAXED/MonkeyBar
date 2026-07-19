@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { SFX_MAP, allSampleKeys } from '../src/audio/sfxMap.js';
+import { SFX_MAP, allSampleKeys, UI_INTERACTION_SOUNDS, uiSoundFor } from '../src/audio/sfxMap.js';
 import { MEDLEY, MEDLEY_CONTEXTS } from '../src/audio/musicDirector.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -109,4 +109,56 @@ test('§C3.3: medley tables reference only committed jingles (with loudness entr
   for (const key of ['jingles_HIT15', 'jingles_HIT10', 'jingles_HIT08', 'jingles_HIT00']) {
     assert.ok(fs.existsSync(oggPath(`music-jingles/${key}`)), `${key} not committed`);
   }
+});
+
+// ------------------------------- V3/FIX-B (E19): UI-interaction vocabulary
+
+test('V3/FIX-B (E19): every UI-interaction contract id is mapped + sample-backed', () => {
+  const expected = {
+    tap: 'ui.tap',
+    open: 'ui.open',
+    close: 'ui.close',
+    back: 'ui.close',
+    pick: 'ui.pick',
+    tab: 'ui.tabSwitch',
+    toggleOn: 'ui.toggleOn',
+    toggleOff: 'ui.toggleOff',
+    slider: 'ui.slider',
+    confirm: 'ui.confirmBig',
+    buy: 'coin.spend',
+    claim: 'quest.claim',
+    stepper: 'ui.count',
+    error: 'ui.error',
+  };
+  assert.deepEqual({ ...UI_INTERACTION_SOUNDS }, expected, 'the contract table is pinned');
+  for (const [interaction, id] of Object.entries(UI_INTERACTION_SOUNDS)) {
+    const def = SFX_MAP[id];
+    assert.ok(def, `contract '${interaction}' → '${id}' must be mapped`);
+    assert.equal(def.kind, 'sample', `'${id}' must be real-sample-backed`);
+  }
+  assert.equal(uiSoundFor('confirm'), 'ui.confirmBig');
+  assert.equal(uiSoundFor('nonsense'), 'ui.tap', 'unknown types fall back to ui.tap');
+});
+
+test('V3/FIX-B (E19): vocabulary aliases fire the SAME samples as their canonical ids', () => {
+  const aliases = {
+    'ui.tab': 'ui.tabSwitch',
+    'ui.confirm': 'ui.confirmBig',
+    'ui.back': 'ui.close',
+    'ui.toggle': 'ui.toggleOn',
+    'ui.buy': 'coin.spend',
+    'ui.claim': 'quest.claim',
+  };
+  for (const [alias, canonical] of Object.entries(aliases)) {
+    assert.ok(SFX_MAP[alias], `'${alias}' mapped`);
+    assert.deepEqual(SFX_MAP[alias].keys, SFX_MAP[canonical].keys, `'${alias}' keys = '${canonical}' keys`);
+    assert.equal(SFX_MAP[alias].volume, SFX_MAP[canonical].volume, `'${alias}' volume = '${canonical}' volume`);
+  }
+});
+
+test('V3/FIX-B (E19 P2): ui.confirmBig trimmed under the −6 dBFS peak bar', () => {
+  // E19 measured click-a peaks of −5.9 dBFS at volume 0.9 (default sliders) —
+  // 0.75 lands the worst frame ≈ −7.5 dBFS with margin.
+  assert.equal(SFX_MAP['ui.confirmBig'].volume, 0.75);
+  assert.equal(SFX_MAP['ui.confirm'].volume, 0.75);
 });

@@ -49,6 +49,11 @@ export const NO_REPEAT_BARS = 8;
 /** Scheduler tick / lookahead (same pattern as audio.js's sequencer). */
 const TICK_MS = 200;
 const LOOKAHEAD_SEC = 0.6;
+/** V3/FIX-B (E5 P1): a bar this late is STALE — skip it instead of retro-
+ * scheduling. 0.5 s still admits the normal slightly-late paths (the first
+ * bar lands ~0.1 s behind the first tick; background-tab timer throttling
+ * runs ≤ ~0.4 s behind), while real stalls (≥ ~1.5 s) fast-forward. */
+const STALE_BAR_GRACE_SEC = 0.5;
 
 /** @param {string} n @returns {string} full asset key of a jingle file */
 const J = (n) => `music-jingles/jingles_${n}`;
@@ -215,16 +220,34 @@ for (let i = 0; i < FADE_STEPS; i += 1) {
   FADE_OUT_CURVE[i] = Math.cos((t * Math.PI) / 2);
 }
 
-/** Equal-power fade on a gain AudioParam (linear-ramp fallback for stubs). */
+/**
+ * Equal-power fade on a gain AudioParam (linear-ramp fallback for stubs).
+ * V3/FIX-B (E5 P1): the fallback can never re-throw. Chrome clamps past-time
+ * param events to currentTime, so after a main-thread stall two curves could
+ * land on the same clamped instant and setValueCurveAtTime throws
+ * NotSupportedError; the old bare setValueAtTime fallback then hit the SAME
+ * overlapping curve and re-threw UNCAUGHT (the observed 36-exception cascade).
+ * Now the fallback re-anchors with cancelScheduledValues first and is fully
+ * try/caught — worst case it pins the endpoint value directly.
+ */
 function fade(param, dir, at, dur, scale = 1) {
+  const from = dir === 'in' ? 0.0001 : scale;
+  const to = dir === 'in' ? scale : 0.0001;
   try {
     const curve = new Float32Array(FADE_STEPS);
     const src = dir === 'in' ? FADE_IN_CURVE : FADE_OUT_CURVE;
     for (let i = 0; i < FADE_STEPS; i += 1) curve[i] = Math.max(0.0001, src[i] * scale);
     param.setValueCurveAtTime(curve, at, dur);
   } catch {
-    param.setValueAtTime?.(dir === 'in' ? 0.0001 : scale, at);
-    param.linearRampToValueAtTime?.(dir === 'in' ? scale : 0.0001, at + dur);
+    try {
+      param.cancelScheduledValues?.(at); // wipe the overlapping tail…
+      param.setValueAtTime?.(from, at); // …anchor…
+      param.linearRampToValueAtTime?.(to, at + dur); // …then ramp
+    } catch {
+      try {
+        param.value = to; // last resort: land the endpoint, no timeline
+      } catch { /* param stubs */ }
+    }
   }
 }
 
@@ -244,8 +267,9 @@ let baseCtx = null;
 let overlays = [];
 /** @type {object|null} the live medley player */
 let player = null;
-/** Diagnostics: total bars/jingles scheduled since attach (getStats). */
-const dstats = { barsScheduled: 0, jinglesScheduled: 0, contextSwitches: 0 };
+/** Diagnostics: total bars/jingles scheduled since attach (getStats).
+ * V3/FIX-B (E5 P1): + barsSkipped — bars fast-forwarded past after a stall. */
+const dstats = { barsScheduled: 0, jinglesScheduled: 0, contextSwitches: 0, barsSkipped: 0 };
 
 /** @returns {string|null} the context that SHOULD be audible right now */
 function effectiveContext() {
@@ -264,9 +288,13 @@ function scheduleBar(p) {
   const { ctx } = deps;
   const t = p.nextBarAt;
   const slot = p.bar % PHRASE_BARS;
-  if (slot === 0 && p.bar > 0) {
-    p.phrase += 1;
-    p.bars = phraseBars(p.context, p.phrase);
+  // V3/FIX-B (E5 P1): DERIVE the phrase from the bar counter instead of
+  // incrementing on slot 0 — stall recovery skips bars (possibly across a
+  // phrase seam), so the old ++-on-slot-0 scheme desynced the reshuffle table.
+  const phrase = Math.floor(p.bar / PHRASE_BARS);
+  if (phrase !== p.phrase) {
+    p.phrase = phrase;
+    p.bars = phraseBars(p.context, phrase);
     if (DEV) console.debug(`[medley] ${p.context} phrase ${p.phrase} reshuffled`);
   }
   // Glue bed (§B2.4): one soft bass sine per downbeat, −26 dBFS, 0.8 s decay.
@@ -343,7 +371,21 @@ function startPlayer(context) {
   };
   p.timer = setInterval(() => {
     if (!deps || player !== p) return;
-    while (p.nextBarAt < deps.ctx.currentTime + LOOKAHEAD_SEC) scheduleBar(p);
+    const now = deps.ctx.currentTime;
+    // V3/FIX-B (E5 P1): if the main thread stalled (asset preload, shader
+    // compile…) the grid fell behind — FAST-FORWARD past `now`, skipping the
+    // missed bars, and NEVER retro-schedule them. Chrome clamps past-time
+    // param events to the same instant, which stacked the out/in fade curves
+    // into a NotSupportedError cascade and re-created the stuck bar's nodes
+    // every 200 ms tick until the next context switch.
+    if (p.nextBarAt < now - STALE_BAR_GRACE_SEC) {
+      const missed = Math.ceil((now - p.nextBarAt) / BAR_SEC);
+      p.bar += missed;
+      p.nextBarAt += missed * BAR_SEC;
+      dstats.barsSkipped += missed;
+      if (DEV) console.debug(`[medley] ${p.context} stall recovery — skipped ${missed} bar(s) → bar ${p.bar} @${p.nextBarAt.toFixed(2)}`);
+    }
+    while (p.nextBarAt < now + LOOKAHEAD_SEC) scheduleBar(p);
   }, TICK_MS);
   player = p;
   dstats.contextSwitches += 1;

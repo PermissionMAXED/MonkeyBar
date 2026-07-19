@@ -106,7 +106,9 @@ export const SFX_MAP = Object.freeze({
   'ui.toggleOff': sample([`${UIA}/switch2`], { volume: 0.8, haptic: 'light' }),
   'ui.slider': sample(seqN(`${UIA}/rollover`, 3), { volume: 0.7, throttleMs: 80 }),
   'ui.tabSwitch': sample([`${UIP}/tap-a`, `${UIP}/tap-b`], { volume: 0.7, haptic: 'light' }),
-  'ui.confirmBig': sample([`${UIP}/click-a`], { volume: 0.9, haptic: 'light' }),
+  // V3/FIX-B (E19 P2): 0.9→0.75 — click-a peaked −5.9 dBFS at default sliders,
+  // breaching the §C3.5 −6 dBFS acceptance bar by one frame.
+  'ui.confirmBig': sample([`${UIP}/click-a`], { volume: 0.75, haptic: 'light' }),
 
   // --- coins / economy (V3/G32 §C3.1: real casino chips) ---
   'coin.get': sample(seqN(`${CAS}/chip-lay-`, 3), { volume: 0.9, haptic: 'light' }), // was synth coin
@@ -384,6 +386,18 @@ export const SFX_MAP = Object.freeze({
   'harbor.gullWarn': sample(seq(`${UI}/question`, 4), { volume: 0.6 }), // honk warning chirp
   'harbor.gullSteal': sample(seq(`${UI}/scratch`, 5), { volume: 0.5 }), // crate snatched
   // --- end V3/G42 ---
+
+  // --- V3/FIX-B (E19 P1): generic UI-vocabulary ALIASES — each resolves to
+  // the SAME real samples as its §D3.5 canonical id (see the UI-INTERACTION
+  // SOUND CONTRACT on UI_INTERACTION_SOUNDS below), so a play() call in
+  // either spelling fires the identical cue and never warns UNMAPPED ---
+  'ui.tab': sample([`${UIP}/tap-a`, `${UIP}/tap-b`], { volume: 0.7, haptic: 'light' }), // = ui.tabSwitch
+  'ui.confirm': sample([`${UIP}/click-a`], { volume: 0.75, haptic: 'light' }), // = ui.confirmBig (E19 P2 trim)
+  'ui.back': sample(seq(`${UI}/close`, 4), { volume: 0.55 }), // = ui.close (§D3.5: close/back share one cue)
+  'ui.toggle': sample([`${UIA}/switch1`], { volume: 0.8, haptic: 'light' }), // = ui.toggleOn — prefer the on/off pair
+  'ui.buy': sample(seq(`${UI}/drop`, 4), { volume: 0.6 }), // = coin.spend — buy taps outside economy.js
+  'ui.claim': sample([`${JIN}/jingles_HIT02`], { volume: 0.7, haptic: 'light' }), // = quest.claim stinger
+  // --- end V3/FIX-B ---
 });
 
 /**
@@ -422,4 +436,74 @@ export function allSampleKeys() {
     if (def.kind === 'sample') for (const k of def.keys) keys.add(k);
   }
   return [...keys];
+}
+
+// ---------------------------------------------------------------------------
+// V3/FIX-B (E19 P1) — UI-INTERACTION SOUND CONTRACT
+// ---------------------------------------------------------------------------
+// THE binding interaction-type → sfx-id map for every UI surface (extends the
+// PLAN3 §D3.5 table; E19 found 74 actionable silent surfaces + semantic
+// drift). UI agents: call `audio.play(UI_INTERACTION_SOUNDS.<type>)` — or the
+// literal id — per this table. All ids below are real-sample-backed.
+//
+//   tap        'ui.tap'        any generic button (dev-panel buttons, pause/
+//                              resume, HUD chips, reroll, filters…)
+//   open       'ui.open'       opening a panel/screen/sheet (incl. care sheet)
+//   close      'ui.close'      close/back/dismiss: Back buttons, panel ✕,
+//                              BACKDROP dismissals, travel "Später"/"Nein",
+//                              framework Quit, results → Home
+//   pick       'ui.pick'       selecting an item/tile in a grid or list:
+//                              ARCADE GAME TILES, food/outfit/skin/sticker
+//                              select, photo pose/emotion/frame, language +
+//                              uiScale + dev health/weather/band segments
+//   tab        'ui.tabSwitch'  tab strips + view switchers: shop/wardrobe/
+//                              album-collection tabs, ROOM-NAV dots + arrows
+//   toggleOn   'ui.toggleOn'   toggle flips ON  (settings + dev panel)
+//   toggleOff  'ui.toggleOff'  toggle flips OFF — for the SFX toggle call
+//                              play('ui.toggleOff') BEFORE writing
+//                              settings.sfx=false or the gate eats it (E19)
+//   slider     'ui.slider'     slider drag tick (80 ms throttle built in);
+//                              on release use audio.previewBus(bus) for the 5
+//                              volume sliders, 'ui.pick' for other sliders
+//   confirm    'ui.confirmBig' primary CTA: Kaufen/Los!/Play-Again/big claims
+//   buy        'coin.spend'    a purchase lands (economy.js already fires it;
+//                              don't double-fire on the same tap)
+//   claim      'quest.claim'   claiming an earned reward (quest/collection)
+//   stepper    'ui.count'      quantity −/+ steppers (shop buy bar)
+//   error      'ui.error'      refused/invalid action (can't afford, locked)
+//
+// Aliases 'ui.tab'/'ui.confirm'/'ui.back'/'ui.toggle'/'ui.buy'/'ui.claim'
+// (mapped above) fire the SAME samples as their canonical ids, so either
+// spelling is safe — prefer the canonical ids in new code.
+
+/**
+ * The contract table (frozen): interaction type → canonical sfx id.
+ * @type {Readonly<Record<string, string>>}
+ */
+export const UI_INTERACTION_SOUNDS = Object.freeze({
+  tap: 'ui.tap',
+  open: 'ui.open',
+  close: 'ui.close',
+  back: 'ui.close',
+  pick: 'ui.pick',
+  tab: 'ui.tabSwitch',
+  toggleOn: 'ui.toggleOn',
+  toggleOff: 'ui.toggleOff',
+  slider: 'ui.slider',
+  confirm: 'ui.confirmBig',
+  buy: 'coin.spend',
+  claim: 'quest.claim',
+  stepper: 'ui.count',
+  error: 'ui.error',
+});
+
+/**
+ * V3/FIX-B (E19 P1): tiny helper — the canonical sfx id for a UI interaction
+ * type (see the contract block above). Unknown types fall back to 'ui.tap' so
+ * a sound always fires.
+ * @param {string} interaction e.g. 'tab', 'confirm', 'back', 'stepper'
+ * @returns {string} a mapped sfx id — pass straight to audio.play()
+ */
+export function uiSoundFor(interaction) {
+  return UI_INTERACTION_SOUNDS[interaction] ?? 'ui.tap';
 }
