@@ -19,9 +19,8 @@ import {
   speedFovTarget,
   fovLerp,
   streakRate,
-  getStreakTextures,
   createSpeedLines,
-} from '../../gfx/speedFx.js';
+} from '../../gfx/speedLines.js';
 import { createGooby } from '../../character/gooby.js';
 import { applyEquippedOutfits } from '../../character/outfitAttach.js';
 import { clampFloatTextToView } from '../framework.js';
@@ -265,7 +264,6 @@ export default {
     // kicked frustum at every REACHABLE speed (75 s ramp tops out ≈ 15.5).
     this.baseFov = camera.fov;
     this.speedLines = createSpeedLines(scene, {
-      textures: getStreakTextures(),
       pool: HOPPER_FX.STREAK_POOL,
       size: HOPPER_FX.STREAK_SIZE,
       life: HOPPER_FX.STREAK_LIFE,

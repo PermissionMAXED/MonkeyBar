@@ -15,7 +15,7 @@ import { applyEquippedOutfits } from '../../character/outfitAttach.js'; // G14: 
 import { createParticles } from '../../gfx/particles.js';
 // V4/G67 (PLAN4-GAMES §G4.8 runner row): reduced-dose speed juice — FOV 60
 // base + 8 kick over the 6→13 m/s ramp, 16-streak pool, 0.03 top shake,
-// banners at the ramp thirds. Shared helpers in gfx/speedFx.js.
+// banners at the ramp thirds. Shared helpers in gfx/speedLines.js.
 import {
   RUNNER_FX,
   speedFovTarget,
@@ -23,9 +23,8 @@ import {
   streakRate,
   topSpeedShake,
   crossedMilestones,
-  getStreakTextures,
   createSpeedLines,
-} from '../../gfx/speedFx.js';
+} from '../../gfx/speedLines.js';
 import { clampFloatTextToView } from '../framework.js'; // F4 P2-3
 import {
   RUNNER,
@@ -238,10 +237,9 @@ export default {
     scene.add(S.shieldVis);
 
     // ── V4/G67 (PLAN4-GAMES §G4.8 runner row): reduced-dose juice state ────
-    // 16-streak pool as 2 InstancedMeshes (≤ 2 draw calls); the runner's
-    // world runs ahead = −z (rows spawn at −88), so forwardZ = −1.
+    // 16-streak pool as ONE atlas-backed InstancedMesh (1 draw call); the
+    // runner's world runs ahead = −z (rows spawn at −88), so forwardZ = −1.
     S.speedLines = createSpeedLines(scene, {
-      textures: getStreakTextures(),
       pool: RUNNER_FX.STREAK_POOL,
       radius: RUNNER_FX.STREAK_RADIUS,
       ahead: RUNNER_FX.STREAK_AHEAD,

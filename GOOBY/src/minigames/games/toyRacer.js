@@ -19,8 +19,8 @@ import { applyEquippedOutfits } from '../../character/outfitAttach.js';
 import { createParticles } from '../../gfx/particles.js';
 // V4/G67 (PLAN4-GAMES §G4.8 toyRacer row): +6 FOV during drift-boost only,
 // 10/s streaks for the boost duration, NO continuous shake (kart bob
-// exists). Shared helpers in gfx/speedFx.js.
-import { RACER_FX, fovLerp, getStreakTextures, createSpeedLines } from '../../gfx/speedFx.js';
+// exists). Shared helpers in gfx/speedLines.js.
+import { RACER_FX, fovLerp, createSpeedLines } from '../../gfx/speedLines.js';
 import { getAchievementsEngine } from '../../systems/achievementsEngine.js';
 import { clampFloatTextToView } from '../framework.js';
 import {
@@ -394,7 +394,6 @@ export default {
     // the fresh per-launch minigame scene/camera makes this leak-safe.
     scene.add(camera);
     this.speedLines = createSpeedLines(camera, {
-      textures: getStreakTextures(),
       pool: RACER_FX.STREAK_POOL,
       radius: RACER_FX.STREAK_RADIUS,
       ahead: RACER_FX.STREAK_AHEAD,

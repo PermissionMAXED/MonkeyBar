@@ -32,10 +32,9 @@ import {
   windGain,
   crossedMilestones,
   ghostStrength,
-  getStreakTextures,
   createSpeedLines,
   createGhostTrail,
-} from '../../gfx/speedFx.js';
+} from '../../gfx/speedLines.js';
 import { getSfxDef } from '../../audio/sfxMap.js'; // V4/G67 §G4.5 wind-loop probe
 import { clampFloatTextToView } from '../framework.js';
 import {
@@ -67,11 +66,14 @@ const WX = (x) => -x;
 const CAM_OFFSET = Object.freeze([0, 3.2, -5.5]);
 const CAM_LOOK_AHEAD = 8;
 const CAM_FOV = 62;
-// V4/G67 (§G4.5): wind-rush loop id — feature-probed via getSfxDef so the
-// layer stays dormant until a REAL loopable wind sample is committed and
-// mapped (no synth recipe per the §C-SYS1.9.2 direction; sample request
-// noted in public/assets/GoobyMusic/requests.md).
-const WIND_SFX_ID = 'ambience.windRun';
+// V4/G67 (§G4.5): wind-rush loop — EXISTING ambience/loop ids ONLY (sfxMap
+// is G78's this wave). Preferred id 'ambience.windRun' upgrades automatically
+// once G78 maps a real wind sample; until then the committed 'ambience.rain'
+// gust loop (brown noise → LP, slow swells — audio.js LOOP_RECIPES) doubles
+// as the wind-rush bed, the same existing-recipe reuse as 'rocket.thrust'.
+// It starts at gain 0 and only the §G4.5 speed curve ever raises it, so it
+// never reads as weather at base speed.
+const WIND_SFX_ID = getSfxDef('ambience.windRun') ? 'ambience.windRun' : 'ambience.rain';
 const SKY = 0xffe1ec; //        pastel pink sky (distinct look — §C10.1 rule)
 const LOOP_LEN = 132; //        scenery conveyor loop (m)
 const BUILDINGS = ['building_A', 'building_B', 'building_C', 'building_D', 'building_E', 'building_F'];
@@ -447,9 +449,8 @@ export default {
       windGainNow: 0,
       wind: false,
     };
-    // §G4.2: 24-streak pool as 2 InstancedMeshes (≤ 2 draw calls total)
+    // §G4.2: 24-streak pool as ONE atlas-backed InstancedMesh (1 draw call)
     S.speedLines = createSpeedLines(scene, {
-      textures: getStreakTextures(),
       pool: SURF_FX.STREAK_POOL,
       radius: SURF_FX.STREAK_RADIUS,
       ahead: SURF_FX.STREAK_AHEAD,
@@ -459,18 +460,18 @@ export default {
       forwardZ: 1, // render "ahead" = +z (§G3.1-b world)
       rng: ctx.rng,
     });
-    // motion-blur-ish ghost trail on Gooby, fades in ≥ 13 m/s
+    // motion-blur-ish ghost trail on Gooby, fades in ≥ 13 m/s (1 draw call —
+    // with the streak pool that's the whole ≤ +2 draw-call juice budget)
     S.ghosts = createGhostTrail(scene);
     // §G4.6 vignette flash element (styles.css .g67-vignette)
     S.vignette = document.createElement('div');
     S.vignette.className = 'g67-vignette';
     (document.getElementById('ui') ?? document.body).appendChild(S.vignette);
-    // §G4.5 wind layer: only when a real loop sample is mapped (see WIND_SFX_ID)
-    if (getSfxDef(WIND_SFX_ID)) {
-      ctx.audio.play(WIND_SFX_ID);
-      ctx.audio.setLoopGain?.(WIND_SFX_ID, 0);
-      S.fx.wind = true;
-    }
+    // §G4.5 wind layer: start the loop silent — update() rides the gain
+    // 0→0.5 over 10→16 m/s every 0.25 s via audio.setLoopGain (§E0.1-16).
+    ctx.audio.play(WIND_SFX_ID);
+    ctx.audio.setLoopGain?.(WIND_SFX_ID, 0);
+    S.fx.wind = true;
     // ── end V4/G67 init ─────────────────────────────────────────────────────
 
     ctx.hud.setScore(0);
@@ -1061,6 +1062,7 @@ export default {
         rate,
         streaks: S.speedLines.activeCount(),
         streakDrawCalls: S.speedLines.drawCalls(),
+        windId: WIND_SFX_ID,
         windGain: S.fx.windGainNow,
         slowMoT: S.fx.slowMoT,
         shake: jitter,

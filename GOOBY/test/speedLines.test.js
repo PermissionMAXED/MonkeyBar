@@ -1,6 +1,8 @@
-// V4/G67 — speedFx pure-math tests (PLAN4-GAMES §G4 numbers as shipped).
-// Only the pure helpers are exercised here (no renderer); the runtime
-// factories (createSpeedLines / createGhostTrail) are proven over CDP.
+// V4/G67 — speedLines pure-math tests (PLAN4-GAMES §G4 numbers as shipped):
+// FOV curve, streak-rate segments, top-speed shake envelope, wind gain,
+// milestone latch, ghost fade. Only the pure helpers run here (no renderer);
+// the runtime factories (createSpeedLines 1-draw-call atlas pool /
+// createGhostTrail 1-draw-call instanced ghosts) are proven over CDP.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -16,7 +18,7 @@ import {
   windGain,
   crossedMilestones,
   ghostStrength,
-} from '../src/gfx/speedFx.js';
+} from '../src/gfx/speedLines.js';
 
 // ------------------------------------------------------------ §G4.1 FOV kick
 

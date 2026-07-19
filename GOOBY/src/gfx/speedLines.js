@@ -5,15 +5,17 @@
 // Two halves:
 //   1. PURE MATH (no three.js state) — fov kick, streak spawn rates,
 //      top-speed shake fade, wind-loop gain, milestone crossings. These are
-//      unit-tested headlessly in test/speedFx.test.js.
-//   2. RUNTIME FACTORIES — createSpeedLines (pooled streak billboards as
-//      instanced meshes: the whole pool costs ≤ 2 draw calls — one per
-//      streak texture) and createGhostTrail (3 trailing ghost sprites for a
-//      cheap motion-blur read on Gooby at high speed).
+//      unit-tested headlessly in test/speedLines.test.js.
+//   2. RUNTIME FACTORIES — createSpeedLines (pooled streak billboards as ONE
+//      InstancedMesh over a runtime streak_a+streak_b atlas: the whole pool
+//      costs exactly 1 draw call) and createGhostTrail (3 trailing ghosts as
+//      ONE InstancedMesh — a cheap 1-draw-call motion-blur read on Gooby).
 //
 // The 2 streak textures are G50's committed Brackeys VFX picks (§G4.2):
 // public/assets/vfx/streak_a.png + streak_b.png (CC0, white-on-alpha),
-// tinted #FFF6EC at 0.55 opacity with additive blending.
+// tinted #FFF6EC at 0.55 opacity with additive blending. Both are composited
+// into one 512×1024 canvas atlas so a single material/mesh serves the whole
+// pool; each instance picks its half via the instanced `aSel` attribute.
 
 import * as THREE from 'three';
 
@@ -179,36 +181,49 @@ export function ghostStrength(speed, lo = 13, hi = 16) {
 }
 
 // ---------------------------------------------------------------------------
-// Streak textures (G50's committed Brackeys picks — shared app-wide)
+// Streak atlas (G50's committed Brackeys picks — shared app-wide)
 // ---------------------------------------------------------------------------
 
-/** @type {THREE.Texture[]|null} */
-let streakTextures = null;
+/** @type {THREE.CanvasTexture|null} */
+let streakAtlas = null;
 
-/** Lazy-load + cache the 2 streak textures (§G4.2). Never disposed. */
-export function getStreakTextures() {
-  if (!streakTextures) {
+/**
+ * Lazy-build + cache the 512×1024 streak atlas (§G4.2): streak_a on the top
+ * half, streak_b on the bottom — ONE texture so the whole pool renders as a
+ * single InstancedMesh (1 draw call). Never disposed (shared app-wide);
+ * instances stay invisible-black until the PNGs decode (additive blending).
+ */
+function getStreakAtlas() {
+  if (!streakAtlas) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 1024;
+    const g = canvas.getContext('2d');
+    streakAtlas = new THREE.CanvasTexture(canvas);
+    streakAtlas.colorSpace = THREE.SRGBColorSpace;
     const base = import.meta.env?.BASE_URL ?? '/';
-    const loader = new THREE.TextureLoader();
-    streakTextures = ['streak_a.png', 'streak_b.png'].map((file) => {
-      const tex = loader.load(`${base}assets/vfx/${file}`);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      return tex;
+    const loader = new THREE.ImageLoader();
+    ['streak_a.png', 'streak_b.png'].forEach((file, i) => {
+      loader.load(`${base}assets/vfx/${file}`, (img) => {
+        g.drawImage(img, 0, i * 512, 512, 512);
+        streakAtlas.needsUpdate = true;
+      });
     });
   }
-  return streakTextures;
+  return streakAtlas;
 }
 
 // ---------------------------------------------------------------------------
-// createSpeedLines — pooled streak billboards, ≤ 2 draw calls via instancing
+// createSpeedLines — pooled streak billboards, 1 draw call via instancing
 // ---------------------------------------------------------------------------
 
 const ZERO_SCALE = new THREE.Matrix4().makeScale(0, 0, 0);
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
 
 /**
- * Pooled speed-line system (§G4.2). One InstancedMesh per streak texture
- * (2 total) — the whole pool renders in ≤ 2 draw calls regardless of size.
+ * Pooled speed-line system (§G4.2). The whole pool is ONE InstancedMesh over
+ * the streak_a+streak_b atlas (per-instance texture pick via the instanced
+ * `aSel` attribute) — it renders in exactly 1 draw call regardless of size.
  *
  * Corridor mode (default): streaks spawn in a ring of `radius` around
  * (originX, originY), `ahead` metres down ±z (`forwardZ`), lie along z and
@@ -228,7 +243,6 @@ const Z_AXIS = new THREE.Vector3(0, 0, 1);
  */
 export function createSpeedLines(parent, opts = {}) {
   const {
-    textures = getStreakTextures(),
     pool = 24,
     color = 0xfff6ec, //   §G4.2 tint
     opacity = 0.55, //     §G4.2 opacity
@@ -247,37 +261,45 @@ export function createSpeedLines(parent, opts = {}) {
   group.name = 'speedLines';
   parent.add(group);
 
-  /** @type {Array<{geo: THREE.BufferGeometry, mat: THREE.Material, mesh: THREE.InstancedMesh}>} */
-  const owned = [];
-  /** @type {Array<{mesh: THREE.InstancedMesh, idx: number, active: boolean, age: number, x: number, y: number, z: number, angle: number}>} */
+  // ONE shared geometry + material (§G4.2) — the atlas half is chosen per
+  // instance by aSel (0 = streak_b bottom half, 0.5 = streak_a top half).
+  const geo = new THREE.PlaneGeometry(1, 1);
+  if (!planar) geo.rotateX(-Math.PI / 2); // long axis along z (motion)
+  const sel = new Float32Array(pool);
+  for (let i = 0; i < pool; i += 1) sel[i] = i % 2 === 0 ? 0.5 : 0;
+  geo.setAttribute('aSel', new THREE.InstancedBufferAttribute(sel, 1));
+  const mat = new THREE.MeshBasicMaterial({
+    map: getStreakAtlas(),
+    color,
+    transparent: true,
+    opacity,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    // additive blending is order-independent — skip the r156+ two-pass
+    // transparent-DoubleSide split so the pool stays at EXACTLY 1 draw call
+    forceSinglePass: true,
+    fog: false,
+  });
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float aSel;')
+      .replace(
+        '#include <uv_vertex>',
+        '#include <uv_vertex>\n#ifdef USE_MAP\n\tvMapUv = vMapUv * vec2( 1.0, 0.5 ) + vec2( 0.0, aSel );\n#endif'
+      );
+  };
+  const mesh = new THREE.InstancedMesh(geo, mat, pool);
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  mesh.frustumCulled = false; // instances stream past the frustum edges
+  /** @type {Array<{idx: number, active: boolean, age: number, x: number, y: number, z: number, angle: number}>} */
   const slots = [];
-  const perMesh = Math.max(1, Math.ceil(pool / Math.max(1, textures.length)));
-  for (const tex of textures) {
-    if (slots.length >= pool) break;
-    const geo = new THREE.PlaneGeometry(1, 1);
-    if (!planar) geo.rotateX(-Math.PI / 2); // long axis along z (motion)
-    const mat = new THREE.MeshBasicMaterial({
-      map: tex,
-      color,
-      transparent: true,
-      opacity,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      fog: false,
-    });
-    const capacity = Math.min(perMesh, pool - slots.length);
-    const mesh = new THREE.InstancedMesh(geo, mat, capacity);
-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    mesh.frustumCulled = false; // instances stream past the frustum edges
-    for (let i = 0; i < capacity; i += 1) {
-      mesh.setMatrixAt(i, ZERO_SCALE);
-      slots.push({ mesh, idx: i, active: false, age: 0, x: 0, y: 0, z: 0, angle: 0 });
-    }
-    mesh.instanceMatrix.needsUpdate = true;
-    group.add(mesh);
-    owned.push({ geo, mat, mesh });
+  for (let i = 0; i < pool; i += 1) {
+    mesh.setMatrixAt(i, ZERO_SCALE);
+    slots.push({ idx: i, active: false, age: 0, x: 0, y: 0, z: 0, angle: 0 });
   }
+  mesh.instanceMatrix.needsUpdate = true;
+  group.add(mesh);
 
   let debt = 0; //    fractional spawns carried between frames
   let active = 0;
@@ -320,15 +342,15 @@ export function createSpeedLines(parent, opts = {}) {
       return;
     }
     const step = velocityScale * speed * dt;
-    const dirty = new Set();
+    let dirty = false;
     for (const slot of slots) {
       if (!slot.active) continue;
       slot.age += dt;
       if (slot.age >= life) {
         slot.active = false;
         active -= 1;
-        slot.mesh.setMatrixAt(slot.idx, ZERO_SCALE);
-        dirty.add(slot.mesh);
+        mesh.setMatrixAt(slot.idx, ZERO_SCALE);
+        dirty = true;
         continue;
       }
       if (planar) slot.y -= step;
@@ -344,22 +366,20 @@ export function createSpeedLines(parent, opts = {}) {
         sc.set(size[0] * (0.4 + 0.6 * fade), 1, size[1]);
       }
       m4.compose(v, q, sc);
-      slot.mesh.setMatrixAt(slot.idx, m4);
-      dirty.add(slot.mesh);
+      mesh.setMatrixAt(slot.idx, m4);
+      dirty = true;
     }
-    for (const mesh of dirty) mesh.instanceMatrix.needsUpdate = true;
+    if (dirty) mesh.instanceMatrix.needsUpdate = true;
   }
 
   return {
     group,
     update,
     activeCount: () => active,
-    drawCalls: () => owned.length, // ≤ 2 — one per streak texture
+    drawCalls: () => 1, // the whole pool is ONE InstancedMesh
     dispose() {
-      for (const o of owned) {
-        o.geo.dispose();
-        o.mat.dispose(); // textures are shared app-wide — keep them
-      }
+      geo.dispose();
+      mat.dispose(); // the atlas texture is shared app-wide — keep it
       group.parent?.remove(group);
       slots.length = 0;
       active = 0;
@@ -368,7 +388,7 @@ export function createSpeedLines(parent, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// createGhostTrail — cheap motion-blur read: trailing ghost sprites
+// createGhostTrail — cheap motion-blur read: 1 InstancedMesh of ghost blobs
 // ---------------------------------------------------------------------------
 
 /** @type {THREE.CanvasTexture|null} soft-blob texture, shared app-wide */
@@ -391,14 +411,19 @@ function getGhostTexture() {
 }
 
 /**
- * Trailing ghost sprites — a subtle motion-blur read on the player at high
- * speed. Each ghost lerps toward the anchor at its own rate (staggered
- * catch-up = a smeared trail on lane changes/jumps) and sits progressively
- * further back along −z; opacity scales with `strength` (0 hides them).
+ * Trailing ghosts — a subtle motion-blur read on the player at high speed.
+ * Each ghost lerps toward the anchor at its own rate (staggered catch-up =
+ * a smeared trail on lane changes/jumps) and sits progressively further
+ * back along −z. ONE InstancedMesh (1 draw call): per-ghost brightness rides
+ * the instance color (additive blending ⇒ color scale ≡ opacity scale),
+ * driven by `strength` (0 zero-scales them away).
+ *
+ * The blob is radially symmetric and the runner cams look down a fixed axis,
+ * so a DoubleSide plane reads like the old camera-facing sprite.
  *
  * @param {THREE.Object3D} parent
  * @param {object} [opts]
- * @returns {{update: (dt: number, state: {x: number, y: number, strength: number}) => void, dispose: () => void}}
+ * @returns {{group: THREE.Group, update: (dt: number, state: {x: number, y: number, strength: number}) => void, dispose: () => void}}
  */
 export function createGhostTrail(parent, opts = {}) {
   const {
@@ -411,37 +436,54 @@ export function createGhostTrail(parent, opts = {}) {
   const group = new THREE.Group();
   group.name = 'ghostTrail';
   parent.add(group);
+  const geo = new THREE.PlaneGeometry(scale[0], scale[1]);
+  const mat = new THREE.MeshBasicMaterial({
+    map: getGhostTexture(),
+    transparent: true,
+    opacity: 1,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    forceSinglePass: true, // additive ⇒ no two-pass DoubleSide split needed
+    fog: false,
+  });
+  const mesh = new THREE.InstancedMesh(geo, mat, count);
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  mesh.frustumCulled = false;
+  const tint = new THREE.Color();
+  const m4 = new THREE.Matrix4();
   const ghosts = [];
   for (let i = 0; i < count; i += 1) {
-    const mat = new THREE.SpriteMaterial({
-      map: getGhostTexture(),
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
-    const sprite = new THREE.Sprite(mat);
-    sprite.scale.set(scale[0], scale[1], 1);
-    sprite.visible = false;
-    group.add(sprite);
-    ghosts.push({ sprite, mat, x: 0, y: 0 });
+    mesh.setMatrixAt(i, ZERO_SCALE);
+    mesh.setColorAt(i, tint.setScalar(0));
+    ghosts.push({ x: 0, y: 0 });
   }
+  mesh.instanceMatrix.needsUpdate = true;
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  group.add(mesh);
   return {
+    group,
     update(dt, { x = 0, y = 0, strength = 0 } = {}) {
+      const on = strength > 0.01;
       for (let i = 0; i < ghosts.length; i += 1) {
         const gh = ghosts[i];
         const k = Math.min(1, dt * lerpK[i % lerpK.length]);
         gh.x += (x - gh.x) * k;
         gh.y += (y - gh.y) * k;
-        const on = strength > 0.01;
-        gh.sprite.visible = on;
-        if (!on) continue;
-        gh.sprite.position.set(gh.x, gh.y, zStep * (i + 1) * strength);
-        gh.mat.opacity = maxOpacity[i % maxOpacity.length] * strength;
+        if (!on) {
+          mesh.setMatrixAt(i, ZERO_SCALE);
+          continue;
+        }
+        m4.identity().setPosition(gh.x, gh.y, zStep * (i + 1) * strength);
+        mesh.setMatrixAt(i, m4);
+        mesh.setColorAt(i, tint.setScalar(maxOpacity[i % maxOpacity.length] * strength));
       }
+      mesh.instanceMatrix.needsUpdate = true;
+      if (on && mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     },
     dispose() {
-      for (const gh of ghosts) gh.mat.dispose(); // shared texture kept
+      geo.dispose();
+      mat.dispose(); // shared texture kept
       group.parent?.remove(group);
       ghosts.length = 0;
     },
