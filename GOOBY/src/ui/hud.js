@@ -15,6 +15,11 @@ import { shouldShowAlbumBadge, gallerySeenStamp } from '../systems/gallery.logic
 // V4/G58: ×2-coins buff chip countdown math (§C-SYS5.2 'UpdateLiebe')
 import { buffRemainingMs, formatMmSs } from './settingsIa.logic.js';
 import * as g58Clock from '../core/clock.js';
+// V4/G76: HUD modifier chip + arcade nav dot (§C-SYS4.6) — §G8 accessor +
+// event signature for the once-per-event start toast
+import { getActiveFor } from '../systems/modifierEngine.js';
+import { eventSignature } from './modifierSurface.logic.js';
+import { getMinigame } from '../data/minigames.js';
 
 const RING_R = 20;
 const RING_C = 2 * Math.PI * RING_R;
@@ -539,6 +544,75 @@ export function createHud({ store, ui, audio, framework, sceneManager }) {
     syncBuff();
   }
   // ---- end V4/G58 buff chip ------------------------------------------------
+
+  // ══════════════════════════════════════════════════════════ V4/G76 ═══
+  // §C-SYS4.6 modifier surfacing: a small glowing HUD chip (type-tinted,
+  // „✨ {name} · mm:ss") while a modifier event is ACTIVE somewhere, a
+  // pulsing dot on the arcade nav button, and the once-per-event start
+  // toast `modifier.start` + jingle.short. The chip taps into the arcade
+  // with the modified tile scrolled into view (G68's glow marks it) and
+  // auto-hides when the event is consumed/expired — state read through
+  // G54's §G8 accessor only (event + 1 s countdown tick). Styles in the
+  // V4/G76 styles.css block. Cleanup rides the existing `offs` list.
+  {
+    const modRow = document.createElement('div');
+    modRow.className = 'g76-hud-mod-row';
+    const modChip = document.createElement('button');
+    modChip.className = 'g76-hud-mod';
+    modChip.dataset.hud = 'modifier';
+    modChip.innerHTML = '<span class="g76-hud-mod-icon" aria-hidden="true">✨</span><span class="g76-hud-mod-name"></span><span class="g76-hud-mod-t"></span>';
+    modRow.appendChild(modChip);
+    top.appendChild(modRow);
+    const modName = modChip.querySelector('.g76-hud-mod-name');
+    const modT = modChip.querySelector('.g76-hud-mod-t');
+    const modDot = document.createElement('span');
+    modDot.className = 'g76-dot';
+    btns.querySelector('[data-hud="arcade"]')?.appendChild(modDot);
+    modChip.addEventListener('click', () => {
+      const cur = store.get('modifiers')?.current;
+      audio.play('ui.tap');
+      ui.showScreen('arcade');
+      if (!cur) return;
+      // G68's glow/badge already highlight the modified tile — just make
+      // sure it is on screen (28-tile grid scrolls).
+      requestAnimationFrame(() => {
+        document.querySelector(`.g5-arcade-grid [data-game-id="${cur.gameId}"]`)
+          ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      });
+    });
+    let modSeenSig = null; // null = pre-boot (never toast the restored event)
+    const syncModChip = () => {
+      const state = store.get();
+      const cur = state.modifiers?.current;
+      const active = cur ? getActiveFor(state, cur.gameId, g58Clock.now()) : null;
+      modRow.classList.toggle('g76-show', !!active);
+      modDot.classList.toggle('g76-show', !!active);
+      if (active) {
+        const name = t(active.nameKey);
+        modChip.style.setProperty('--modifier-color', active.color);
+        modDot.style.setProperty('--modifier-color', active.color);
+        modName.textContent = name === active.nameKey ? '' : name;
+        modT.textContent = formatMmSs(Math.max(0, active.endsAt - g58Clock.now()));
+        modChip.setAttribute('aria-label', t('modifier.hud.open'));
+      }
+      // §C-SYS4.6: „when an event starts while playing" — toast + jingle
+      // exactly once per NEW event (boot restores stay silent).
+      const sig = active ? eventSignature(cur) : '';
+      if (sig && modSeenSig !== null && sig !== modSeenSig) {
+        const gameTitleKey = getMinigame(cur.gameId)?.titleKey;
+        ui.toast('modifier.start', {
+          game: gameTitleKey ? t(gameTitleKey) : cur.gameId,
+          name: t(active.nameKey),
+        });
+        audio.play('jingle.short');
+      }
+      modSeenSig = sig;
+    };
+    const modTimer = setInterval(syncModChip, 1000); // countdown + expiry sweep
+    offs.push(store.on('modifierChanged', syncModChip), () => clearInterval(modTimer));
+    syncModChip();
+  }
+  // ══════════════════════════════════════════════════════ end V4/G76 ═══
 
   return {
     el,

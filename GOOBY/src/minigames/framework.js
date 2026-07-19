@@ -55,6 +55,19 @@ import {
 import { wrapInvertInput } from '../core/inputInvert.js';
 import { EN as DIFF_EN, DE as DIFF_DE } from '../data/strings/v4-difficulty.js';
 // ── end V4/G56 imports ──
+// ── V4/G76 imports (§C-SYS4.2/4.4 modifier surfacing — results breakdown,
+// glueckspilz Glücksrolle, stickerChance forced drop; all pure helpers) ──
+import {
+  GLUECKSPILZ_ROLL,
+  rollFrameValue,
+  FORCED_DROP_SETS,
+  hasOrganicDrop,
+  pickForcedDrop,
+  modifierResultsValue,
+} from '../ui/modifierSurface.logic.js';
+import { getCollectionSet } from '../data/collections.js';
+import { countOf as stickerCountOf } from '../systems/collections.js';
+// ── end V4/G76 imports ──
 
 const awardMinigame = economy.awardMinigame; // V4/G56: unchanged call sites below
 
@@ -177,6 +190,8 @@ export function clampFloatTextToView(pos, camera, { halfW = 0.8, halfH = 0.3, pa
 export function createMinigameFramework({ sceneManager, store, ui, audio }) {
   /** Result of the last finished round, consumed by the results screen. */
   let lastResult = null;
+  /** V4/G76: interval handle of the results Glücksrolle animation. */
+  let glueckspilzRollTimer = 0;
   // F4 for F2: read-only "a minigame is on screen" flag — true from the
   // minigame scene's enter (countdown) through the results screen until the
   // scene exits. (sceneManager.currentId() === 'minigame' is the equivalent
@@ -209,20 +224,39 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
       // layout + „Laden/Shop" continue button — same arrival handoff.
       const isTrip = r.launchParams?.mode === 'shopTrip' || isSurfTravel(r.launchParams?.mode);
       // ── V4/G56 (§G5.6/§C-SYS4.4): endless-best extra row (+ newBest badge
-      // on improvement) and the "{name} aktiv" modifier chip row. The endless
-      // badge reuses .mg-badge-pink; the modifier name resolves through t()
-      // (G76's strings) with the raw key hidden until that module lands. ──
+      // on improvement). The endless badge reuses .mg-badge-pink. ──
       const isEndless = r.difficulty === 'endless';
       const endlessBadge = isEndless && r.endlessNewBest
         ? `<span class="mg-badge mg-badge-pink">${t('mg.results.newBest')}</span>` : '';
       const endlessRow = isEndless
         ? `<div class="mg-results-row"><span>${tx('mg.results.endlessBest')}</span><span class="mg-value">${r.endlessBest}${endlessBadge}</span></div>`
         : '';
-      const modifierName = r.modifierInfo?.nameKey ? t(r.modifierInfo.nameKey) : null;
-      const modifierRow = modifierName && modifierName !== r.modifierInfo.nameKey
-        ? `<div class="mg-results-row"><span>${tx('mg.results.modifierActive', { name: modifierName })}</span><span class="mg-value">${r.modifierBonus > 0 ? `+${r.modifierBonus} ${icon('coin', 16)}` : ''}</span></div>`
-        : '';
       // ── end V4/G56 ──
+      // ── V4/G76 (§C-SYS4.4/§G8-3 + §C-SYS4.2): modifier breakdown — the
+      // "{name} aktiv" chip row (kept per §C-SYS4.4) gains the per-type
+      // bonus line from the pure helper (doppelGold „+N extra" 🪙 with the
+      // §C-SYS11 „Tagesbonus erreicht" note when day-capped, turbo
+      // „Punkte ×1,5", stickerChance drop/quest-tick note); glueckspilz
+      // adds its own „Glücksrolle" row whose 900 ms slot-roll (started
+      // after mount below) lands on the bonus onEnd already PAID via
+      // economy.award('glueckspilz'). ──
+      const modifierName = r.modifierInfo?.nameKey ? t(r.modifierInfo.nameKey) : null;
+      let modifierRow = '';
+      if (modifierName && modifierName !== r.modifierInfo.nameKey) {
+        const detail = modifierResultsValue(r.modifierInfo.type, {
+          bonus: r.modifierBonus,
+          capped: r.modifierCapped,
+          stickerOutcome: r.stickerOutcome,
+        });
+        const detailText = detail
+          ? `${tx(detail.key, detail.vars)}${detail.coin ? ` ${icon('coin', 16)}` : ''}`
+          : '';
+        modifierRow = `<div class="mg-results-row g76-mod-row" style="--modifier-color:${r.modifierInfo.color}"><span>${tx('mg.results.modifierActive', { name: modifierName })}</span><span class="mg-value">${detailText}</span></div>`;
+        if (r.modifierInfo.type === 'glueckspilz') {
+          modifierRow += `<div class="mg-results-row g76-mod-row g76-roll-row" style="--modifier-color:${r.modifierInfo.color}"><span>🍀 ${tx('modifier.results.glueckspilz')}</span><span class="mg-value g76-roll-value">…</span></div>`;
+        }
+      }
+      // ── end V4/G76 (results breakdown) ──
       // V4/G56 (§G5.6): in endless mode the „Endlos-Best" row REPLACES the
       // Mittel „Best" row (r.best is mode-aware for easy/hard — §G5.5 boards).
       const bestRow = isEndless
@@ -268,8 +302,40 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
       burstConfettiDom(el); // G14: results confetti (§G14 polish)
       // G14: coins fly from the results row to the HUD counter corner
       flyCoinsDom({ fromEl: card.querySelector('.mg-results-row:last-child .mg-value'), count: Math.min(10, Math.max(3, Math.round(r.coins / 3))), onArrive: () => audio.play('coin.fly') });
+      // ── V4/G76 (§C-SYS4.2): glueckspilz 900 ms slot-roll — the reel
+      // cycles seeded 10–60 display values every tick, then LANDS on the
+      // bonus onEnd already paid (0 → the „Tagesbonus erreicht" note). ──
+      const rollEl = card.querySelector('.g76-roll-value');
+      if (rollEl) {
+        const rollSeed = Math.floor(Number(r.glueckspilzSeed) || 0);
+        let frame = 0;
+        rollEl.classList.add('g76-rolling');
+        rollEl.textContent = `+${rollFrameValue(frame, rollSeed)}`;
+        glueckspilzRollTimer = setInterval(() => {
+          frame += 1;
+          if (frame * GLUECKSPILZ_ROLL.TICK_MS < GLUECKSPILZ_ROLL.DURATION_MS) {
+            rollEl.textContent = `+${rollFrameValue(frame, rollSeed)}`;
+            return;
+          }
+          clearInterval(glueckspilzRollTimer);
+          glueckspilzRollTimer = 0;
+          rollEl.classList.remove('g76-rolling');
+          rollEl.classList.add('g76-roll-land');
+          if (r.glueckspilzBonus > 0) {
+            rollEl.innerHTML = `+${r.glueckspilzBonus} ${icon('coin', 16)}`;
+            audio.play('coin.fly');
+          } else {
+            rollEl.textContent = tx('modifier.results.capped');
+          }
+        }, GLUECKSPILZ_ROLL.TICK_MS);
+      }
+      // ── end V4/G76 (Glücksrolle) ──
     },
-    unmount() {},
+    unmount() {
+      // V4/G76: stop a still-spinning Glücksrolle on early screen close
+      clearInterval(glueckspilzRollTimer);
+      glueckspilzRollTimer = 0;
+    },
   });
 
   /** Shop-trip arrival hands off to G7's flow via params.onExit; default: home. */
@@ -320,9 +386,13 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
    * @param {object|undefined} gameMeta the game's §B3 onEnd meta
    * @param {object} launchParams framework launch params (mode detection)
    * @param {boolean} devGame dev-only games (_smoke) skip progression
+   * @returns {'drop'|'quest'|null} V4/G76: stickerChance round outcome
    */
   function forwardProgression(gameId, score, coins, gameMeta, launchParams, devGame) {
-    if (devGame) return;
+    if (devGame) return null;
+    // V4/G76 (§C-SYS4.2): stickerChance round outcome for the results row —
+    // 'drop' (a collection sticker landed) | 'quest' (+1 tick) | null.
+    let stickerOutcome = null;
     try {
       const engine = getAchievementsEngine();
       if (engine?.quests) {
@@ -366,6 +436,38 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
         }
         const hour = new Date(now()).getHours();
         if (hour >= 22 || hour < 6) engine.track('nightPlays');
+        // ── V4/G76 (§C-SYS4.2 stickerChance): forced collection drop —
+        // the consumed modifier guarantees a collection-eligible drop.
+        // Rounds that already dropped organically (fish `caught` /
+        // landmark meta) satisfy the guarantee; otherwise games with a
+        // §B3-v2 collection set (FORCED_DROP_SETS) get a seeded pick
+        // (unowned first) awarded through the SAME central path as every
+        // other sticker (awardSticker → first-time toast/XP watcher);
+        // games without drops instead guarantee the +1 quest-progress
+        // tick (an extra 'gameFinish' tick — the round counts double). ──
+        if (launchParams?.modifier?.type === 'stickerChance' && launchParams?.mode == null) {
+          if (hasOrganicDrop(gameMeta)) {
+            stickerOutcome = 'drop';
+          } else {
+            const setId = FORCED_DROP_SETS[gameId];
+            const setDef = setId ? getCollectionSet(setId) : null;
+            if (setDef) {
+              const c = store.get('collections');
+              const entryIds = setDef.entries.map((e) => e.id);
+              const owned = Object.fromEntries(entryIds.map((id) => [id, stickerCountOf(c, setId, id)]));
+              const pick = pickForcedDrop(entryIds, owned, now(), setId === 'fish');
+              if (pick) {
+                engine.collections.award(setId, pick, 1, { firstOnly: setId === 'landmarks' });
+                stickerOutcome = 'drop';
+              }
+            }
+            if (stickerOutcome == null) {
+              quests.track('gameFinish', 1);
+              stickerOutcome = 'quest';
+            }
+          }
+        }
+        // ── end V4/G76 (forced drop) ──
       }
     } catch (err) {
       console.warn('[minigames] V2/G23 progression forwarding error:', err);
@@ -374,6 +476,7 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
     store.update((state) => {
       state.weight = weightOnMinigameEnd(state.weight, gameId);
     });
+    return stickerOutcome; // V4/G76: feeds the results breakdown row
   }
   // ══════════════════════════════════════════════════════════ end V2/G23 ═══
 
@@ -654,8 +757,33 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
       // ── end V4/G56 payout plumbing ──
 
       // ── V2/G23: §B3 meta forwarding + progression wiring ─────────────────
-      forwardProgression(meta.id, reward.score, reward.coins, gameMeta, launchParams, devGame);
+      // V4/G76: returns the stickerChance round outcome (null without one)
+      const stickerOutcome = forwardProgression(meta.id, reward.score, reward.coins, gameMeta, launchParams, devGame);
       // ── end V2/G23 ────────────────────────────────────────────────────────
+
+      // ── V4/G76 (§C-SYS4.2/§E0.1-2): glueckspilz results-roll — ONE
+      // seeded 10–60 c roll per consumed play (G54's rollGlueckspilz
+      // advances the persisted seed stream) paid via
+      // economy.award('glueckspilz') so the §C-SYS11 day cap applies THERE
+      // (granted 0 → „Tagesbonus erreicht" on the results row). Rolled
+      // HERE in onEnd, never at results mount, so a re-mount cannot pay
+      // twice — the Glücksrolle animation only lands on this number. ──
+      let glueckspilzBonus = 0;
+      let glueckspilzSeed = 0;
+      if (launchParams?.modifierInfo?.type === 'glueckspilz' && !isTripEnd && !devGame
+        && typeof modifierApi?.rollGlueckspilz === 'function') {
+        try {
+          let rolled = 0;
+          store.update((state) => {
+            glueckspilzSeed = Math.floor(Number(state.modifiers?.seed) || 0);
+            rolled = modifierApi.rollGlueckspilz(state);
+          });
+          glueckspilzBonus = economy.award(store, rolled, 'glueckspilz');
+        } catch (err) {
+          console.warn('[minigames] glueckspilz roll failed:', err);
+        }
+      }
+      // ── end V4/G76 (glueckspilz payout) ──
 
       lastResult = {
         gameId: reward.gameId,
@@ -675,6 +803,11 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
         endlessNewBest: difficulty === 'endless' && modeNewBest,
         modifierInfo: launchParams?.modifierInfo ?? null, // §G8-1 descriptor (nameKey chip)
         modifierBonus: Math.max(0, Math.floor(Number(reward.modifierBonus) || 0)),
+        // V4/G76 (§C-SYS4.2/§C-SYS11): results-breakdown facts
+        modifierCapped: reward.dayCapReached === true,
+        stickerOutcome,
+        glueckspilzBonus,
+        glueckspilzSeed,
       };
       // V3/G32 (§C3.3): context-aware results stingers replace the blind
       // 'jingle.results' pick — best (HIT15) / normal (HIT10) / zero (HIT08).
@@ -816,6 +949,11 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
           try {
             if (snapshot && typeof modifierApi?.refund === 'function') {
               store.update((state) => modifierApi.refund(state, snapshot, now()));
+              // V4/G76 (§B10): announce the refunded slice like consume does
+              store.emit?.('modifierChanged', {
+                current: store.get('modifiers')?.current ?? null,
+                nextAt: Number(store.get('modifiers')?.nextAt) || 0,
+              });
             }
           } catch (err) {
             console.warn('[minigames] modifier refund failed:', err);
@@ -982,6 +1120,12 @@ export function createMinigameFramework({ sceneManager, store, ui, audio }) {
           if (consumed?.ok) {
             modifierRefundArmed = true; // early quit refunds ≤ 1× (§C-SYS4.4)
             modifierRefundSnapshot = consumed.modifier;
+            // V4/G76 (§B10): the consuming mutator announces the slice change
+            // — the HUD chip/badges hide instantly after the last play.
+            store.emit?.('modifierChanged', {
+              current: store.get('modifiers')?.current ?? null,
+              nextAt: Number(store.get('modifiers')?.nextAt) || 0,
+            });
           }
         }
       } catch (err) {
