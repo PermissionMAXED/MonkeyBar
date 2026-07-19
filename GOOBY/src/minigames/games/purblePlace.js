@@ -10,12 +10,13 @@
 // ENGINE SPLIT (§G1.9 contract): the pure simulation lives in G61's
 // purblePlace.logic.js rework — `createLine({rng, difficulty})` +
 // `stepLine(line, dt, input)` with `input = {belt: −1|0|1, press:
-// stationId|null, spawnShape, ship}`. G61 builds CONCURRENTLY, so this module
-// feature-detects those exports and falls back to a scene-local §G1.3–§G1.6
-// belt sim coded to the SAME contract (§E0.1-11 graceful degradation — the
-// fallback dies the moment G61's engine lands; joint verification at wave
-// end). Station positions/rules below are the binding §G1.5 table verbatim,
-// so both sides agree by construction.
+// stationId|null, spawnShape, ship}`. This module feature-detects those
+// exports and keeps a scene-local §G1.3–§G1.6 belt sim coded to the SAME
+// contract as the §E0.1-11 degradation path only (G61's engine is the bound
+// path — wave-end joint verification 2026-07-19: every CDP round reports
+// engine=g61, bot probe-validated, suite 1723/1723; evidence
+// /tmp/gooby-v4-g62/JOINT-VERIFICATION.md). Station positions/rules below
+// are the binding §G1.5 table verbatim, so both sides agree by construction.
 //
 // Layout/camera (§G1.4): belt s=0…6 → world x = s−3, belt top y 0.72, z 0;
 // camera FOV 40/44 at (camX, 1.9, 7.4) looking at (camX, 1.05, 0) — world +x
