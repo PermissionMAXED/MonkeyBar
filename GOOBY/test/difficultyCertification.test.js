@@ -74,11 +74,6 @@ const ADAPTERS = Object.freeze({
 // assertion re-arms automatically (the todo path only triggers on failure).
 // ---------------------------------------------------------------------------
 const KNOWN_GAPS = Object.freeze({
-  starHopper: {
-    hardBeatable:
-      'G72: Schwer target 190 unreached in 0/5 certification seeds (mean ≈ 140) — ' +
-      '§G5.4 says relax the PARAMS, never the target; filed with the coordinator',
-  },
   memoryMatch: {
     monotoneMeans:
       'G71: Schwer outscores Leicht/Mittel by design (Schwer-only +20 CLEAR_BONUS ' +
