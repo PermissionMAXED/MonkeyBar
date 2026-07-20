@@ -1,7 +1,8 @@
-// One-time What's-new panels: 2.0 (V2/G30) + 3.0 (V3/G48).
+// One-time What's-new panels: 2.0 (V2/G30), 3.0 (V3/G48) + 4.0 (V4/G82).
 // migrations[1] marks the 2.0 panel unseen for migrated v1 saves;
-// migrations[2] marks the 3.0 panel unseen for migrated v1/v2 saves. Fresh
-// saves default both flags true because their onboarding covers the basics.
+// migrations[2] marks the 3.0 panel unseen for migrated v1/v2 saves, and
+// migrations[3] marks 4.0 unseen for migrated v1/v2/v3 saves. Fresh saves
+// default all three flags true because their onboarding covers the basics.
 //
 // Two layers, mirroring ui/onboarding.js:
 //  1. PURE exports up top (predicates + bilingual bullet-tour data) — no
@@ -43,6 +44,13 @@ export const WHATSNEW3_BULLETS = Object.freeze([
   Object.freeze({ icon: '🎵', key: 'whatsnew3.b7' }), // sampled audio + medleys
 ]);
 
+/** V4/G82: the three §B1 headline highlights for migrated 4.0 veterans. */
+export const WHATSNEW4_BULLETS = Object.freeze([
+  Object.freeze({ icon: '📻', key: 'whatsnew4.b1' }), // real-music radio + track controls
+  Object.freeze({ icon: '🔐', key: 'whatsnew4.b2' }), // secret codes + herzGooby
+  Object.freeze({ icon: '📸', key: 'whatsnew4.b3' }), // persistent gallery + export
+]);
+
 /**
  * Should the one-time panel show for this save state? True only for migrated
  * v1 saves (flag explicitly false — §E0.1-6) that are not mid-tutorial.
@@ -64,6 +72,17 @@ export function shouldShowWhatsNew(state) {
 export function shouldShowWhatsNew3(state) {
   const ob = state?.onboarding;
   return ob?.whatsNew3Seen === false && ob?.done === true;
+}
+
+/**
+ * V4/G82: true only for migrated v1/v2/v3 veterans whose tutorial is complete.
+ * Fresh saves default whatsNew4Seen true and never qualify (PLAN4 §B1).
+ * @param {object} state save-schema state (§E3)
+ * @returns {boolean}
+ */
+export function shouldShowWhatsNew4(state) {
+  const ob = state?.onboarding;
+  return ob?.whatsNew4Seen === false && ob?.done === true;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,18 +130,25 @@ export function initWhatsNew({ store, ui, audio, sceneManager }) {
     document.head.appendChild(style);
   }
 
-  // V3/G48 dev demo: ?whatsnew=1 forces ONLY the 3.0 panel. ?whatsnew=2
-  // preserves the old 2.0 demo for regression/layout checks.
+  // V4/G82 dev demo: ?whatsnew=1 (or =4) forces ONLY the current 4.0 panel;
+  // =3 and =2 preserve the older panels for regression/layout checks.
   const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV;
   if (isDev && typeof location !== 'undefined') {
     const demo = new URLSearchParams(location.search).get('whatsnew');
-    if (demo === '1' || demo === '3') {
+    if (demo === '1' || demo === '4') {
+      store.set('onboarding.whatsNew2Seen', true);
+      store.set('onboarding.whatsNew3Seen', true);
+      store.set('onboarding.whatsNew4Seen', false);
+      store.set('onboarding.done', true);
+    } else if (demo === '3') {
       store.set('onboarding.whatsNew2Seen', true);
       store.set('onboarding.whatsNew3Seen', false);
+      store.set('onboarding.whatsNew4Seen', true);
       store.set('onboarding.done', true);
     } else if (demo === '2') {
       store.set('onboarding.whatsNew2Seen', false);
       store.set('onboarding.whatsNew3Seen', true);
+      store.set('onboarding.whatsNew4Seen', true);
       store.set('onboarding.done', true);
     }
   }
@@ -130,11 +156,13 @@ export function initWhatsNew({ store, ui, audio, sceneManager }) {
   ui.registerPanel('whatsNew', {
     /**
      * @param {HTMLElement} el
-     * @param {{version?: 2|3}} params
+     * @param {{version?: 2|3|4}} params
      */
     mount(el, params = {}) {
-      const version = params.version === 3 ? 3 : 2;
+      const version = params.version === 4 ? 4 : params.version === 3 ? 3 : 2;
       const isV3 = version === 3;
+      const isV4 = version === 4;
+      const prefix = isV4 ? 'whatsnew4' : isV3 ? 'whatsnew3' : 'whatsnew';
       // V3/FIX-D (E20 P1-1): the veteran greeting must not be buried under
       // the boot toast storm (offline summary + achievement/sticker queue) —
       // gate non-critical toasts while the panel is up; ui.releaseToasts()
@@ -148,14 +176,15 @@ export function initWhatsNew({ store, ui, audio, sceneManager }) {
 
       el.innerHTML = `
         <div class="g30-wn" data-version="${version}">
-          <h2 class="g30-wn-title">${t(isV3 ? 'whatsnew3.title' : 'whatsnew.title')}</h2>
-          <p class="g30-wn-sub">${t(isV3 ? 'whatsnew3.sub' : 'whatsnew.sub')}</p>
+          <h2 class="g30-wn-title">${t(`${prefix}.title`)}</h2>
+          <p class="g30-wn-sub">${t(`${prefix}.sub`)}</p>
           <div class="g30-wn-list"></div>
           <div class="mg-btn-row"></div>
         </div>`;
 
       const list = el.querySelector('.g30-wn-list');
-      for (const bullet of isV3 ? WHATSNEW3_BULLETS : WHATSNEW_BULLETS) {
+      const bullets = isV4 ? WHATSNEW4_BULLETS : isV3 ? WHATSNEW3_BULLETS : WHATSNEW_BULLETS;
+      for (const bullet of bullets) {
         const item = document.createElement('div');
         item.className = 'g30-wn-item';
         item.innerHTML = `<span class="g30-wn-ico">${bullet.icon}</span><span class="g30-wn-txt"></span>`;
@@ -165,7 +194,7 @@ export function initWhatsNew({ store, ui, audio, sceneManager }) {
 
       const cta = document.createElement('button');
       cta.className = 'btn btn-teal';
-      cta.textContent = t(isV3 ? 'whatsnew3.cta' : 'whatsnew.cta');
+      cta.textContent = t(`${prefix}.cta`);
       cta.addEventListener('click', () => {
         audio.play('ui.go');
         ui.closePanel('whatsNew');
@@ -180,14 +209,21 @@ export function initWhatsNew({ store, ui, audio, sceneManager }) {
   // ---- show-once boot poll (dailyBonusPopup.js pattern) ----
   // Wait for the home scene with no screen/panel up: never fights onboarding
   // (both predicates require done), harness ?open= routing, a running
-  // minigame, or the daily-bonus sheet. A direct v1→v3 migration legitimately
-  // has BOTH flags false; preserve the v2 contract by showing 2.0 first, then
-  // 3.0 after it closes.
+  // minigame, or the daily-bonus sheet. A direct v1→v4 migration legitimately
+  // can have all three flags false; preserve the contracts by showing 2.0,
+  // then 3.0, then 4.0 after each preceding panel closes.
   const poll = setInterval(() => {
     const state = store.get();
-    const version = shouldShowWhatsNew(state) ? 2 : shouldShowWhatsNew3(state) ? 3 : null;
+    const version = shouldShowWhatsNew(state)
+      ? 2
+      : shouldShowWhatsNew3(state)
+        ? 3
+        : shouldShowWhatsNew4(state)
+          ? 4
+          : null;
     const anyPending = state?.onboarding?.whatsNew2Seen === false
-      || state?.onboarding?.whatsNew3Seen === false;
+      || state?.onboarding?.whatsNew3Seen === false
+      || state?.onboarding?.whatsNew4Seen === false;
     if (!anyPending) {
       clearInterval(poll);
       return;

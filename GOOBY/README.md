@@ -1,18 +1,20 @@
-# GOOBY 🐰 — 3.0 „ECHT & GROSS"
+# GOOBY 🐰 — 4.0 „VOLLVERSION FINAL"
 
-Gooby is a fat, lovable rabbit who lives in a cozy 3D apartment with his own
-backyard garden. Feed him, wash him, tickle him, put him to bed, grow veggies,
-fill two sticker collections, decorate his rooms and dress him in 42 outfits.
-When the fridge is empty, drive through the low-poly city or run Shopping Surf
-to the shop. Twenty-seven arcade minigames earn the coins that fuel it all.
+GOOBY 4.0 is the “it sounds and feels finished” release: a real-music radio
+with per-track controls and cover art, beat-synced level recaps, transparent XP,
+timed arcade modifiers, secret codes, gyro parallax, a persistent photo gallery,
+hard economy guards and a complete settings/developer-tool pass — all on a
+lossless save v4. Gooby is still the same fat, lovable procedural rabbit to
+feed, wash, tickle, dress, photograph and play with across a cozy apartment,
+garden, city and 28 games.
 
 A Pou / Talking-Tom-style virtual-pet game: mobile-first three.js web app, wrapped
 with Capacitor for iOS. Fully offline, single-player, no server, no monetization.
 Bilingual EN + DE (auto-detected, switchable in settings).
 
-Returning from 1.0 or 2.0? Your save migrates losslessly, your home stays
-exactly as you left it, and a one-time “What’s new in 3.0” panel tours the
-additions.
+Returning from 1.0, 2.0 or 3.0? Your save migrates losslessly, your home stays
+exactly as you left it, and a one-time “What’s new in 4.0” panel introduces the
+radio, secret codes and photo gallery. Fresh saves never see this veteran panel.
 
 ## How to play
 
@@ -28,8 +30,9 @@ additions.
 - **Tummy & health (2.0):** junk food (donuts, cake, ice cream…) and neglect
   make Gooby queasy, then properly sick — green cheeks, sneezes, thermometer.
   Feed him healthy, give medicine (40c, shop Care row), or drive him to the
-  vet: full cure 120c, checkup 30c. Sick Gooby refuses minigames until cured;
-  nothing is ever fatal.
+  vet: full cure 120c, checkup 30c. Sick Gooby refuses arcade games until
+  cured, but 4.0 lets him drive or surf to the shop for medicine; nothing is
+  ever fatal.
 - **Weight (2.0, cosmetic only):** junk food rounds him out, active minigames
   and ball fetches slim him down — four silhouette tiers from Sleek to Maximum
   Floof. Zero gameplay penalty; both extremes earn achievements.
@@ -47,22 +50,34 @@ additions.
   shop: **Fahren** through the rebuilt low-poly city, or **Laufen** in a fixed
   Shopping Surf run. Both arrive at the same shop. The vet stays drive-only;
   six named landmarks still award stickers.
-- **Arcade — 27 minigames** (unlock by level): Carrot Catch, Bunny Hop,
+- **Arcade — 28 games** (unlock by level): Carrot Catch, Bunny Hop,
   Shopping Cruise, Carrot Guard, Gooby Says, Memory Match, Basket Bounce,
   Garden Rush, Pancake Tower, Burger Build, **Shopping Surf**, Gooby Runner,
   Veggie Chop, **Purble Place**, Bubble Pop, Delivery Rush, Fishing Pond,
   Dance Party, Mini Golf, Trampoline Tricks, Goalie Gooby, Star Hopper, Pipe
   Flow, **Toy Grand Prix**, **Ghost Hunt**, **Rocket Rescue** and **Harbor
-  Hopper**. First play of each game every day pays ×2 coins.
+  Hopper**, plus the chill Gaussian-splat special **Gooby Welt**. The 27
+  arcade games offer Leicht/Mittel/Schwer and unlock Endlos after
+  beating Schwer; first play of each game every day pays ×2 coins. New 3.0
+  games keep their first-play NEU ribbons, while Gooby Welt uses its own
+  SPECIAL ribbon.
+- **Modifier events (4.0):** every 50–120 minutes, one eligible arcade game
+  glows with one of six timed twists for 2–3 plays or 45 minutes. The badge,
+  countdown and result breakdown all use the same persisted event.
 - **Daily quests (2.0, level 2):** the HUD clipboard shows 3 quests each day
   (rolled from a 28-entry pool), each paying coins + XP; one free reroll per
   day, fresh quests at midnight.
-- **Albums:** the 2.0 album keeps its 4 collection sets totaling 32 stickers (fish,
+- **Albums & gallery:** the 2.0 album keeps its 4 collection sets totaling 32 stickers (fish,
   vegetables, landmarks, treats). The new **Stickerbuch (3.0)** adds 28
-  illustrated Gooby moments across five pages, with hints and NEU markers.
+  illustrated Gooby moments across five pages, with hints and NEU markers;
+  secret code rewards can add the 29th heart sticker without changing the
+  completion target. The Fotos tab stores up to 40 captures persistently and
+  can view, share/save or delete them.
 - **Progression:** everything grants XP; each level pays a coin bonus and
-  unlocks games/items up to level 40. 37 achievements pay coin rewards. A daily
-  bonus streak (20…100 coins + food from day 7) claims on the first open per day.
+  unlocks games/items up to level 40. Every grant shows `+N XP`, the info sheet
+  lists all sources, and levels 5/10/…/40 trigger a beat-synced recap through
+  eight biomes. 37 achievements pay coin rewards. A daily bonus streak
+  (20…100 coins + food from day 7) claims on the first open per day.
 - **Wardrobe & skins (3.0):** 42 outfits across hat, glasses, neck and the new
   back slot — Gooby wears them everywhere, including minigame cameos — plus 7
   fur-color skins (from level 5), from Snow to Golden.
@@ -71,17 +86,23 @@ additions.
   (clear/cloudy/rain) shows in the windows and the garden — rain waters your
   plots, and everyone gets the same weather on the same day.
 - **Stats & photo mode:** the profile screen shows vitals, lifetime totals and
-  per-game bests for all 27 games; the HUD camera opens photo mode —
-  pose, emotion, frame, snap — and saves/shares a UI-less PNG.
+  per-game bests; the HUD camera opens photo mode — pose, emotion, frame, snap —
+  then stores the UI-less PNG in the gallery with web download/share and native
+  iOS export.
 - **Nutella & Nougatschleuse (3.0):** buy Nutella as a snack, then install the
   kitchen’s Nougatschleuse to crank out messy chocolate globs.
-- **Audio (3.0):** sampled Kenney effects replace UI bleeps, while five
-  file-based jingle medleys cover home, garden, arcade, city and shop. Gooby’s
-  synthesized voice and Dance Party’s beat stay intact. Settings has separate
-  Master, SFX, Music, Gooby and Ambience sliders plus the quick mute.
-- **Display & developer tools (3.0):** UI scale switches live among 85, 100,
-  115 and 130 %. A hidden, persistent developer panel unlocks after five taps
-  on the language “Auto” segment; normal players see no entry or hint.
+- **Radio & audio (4.0):** the in-game radio streams real local songs from
+  stations, shows cover art/now-playing, and gives every track an on/off toggle
+  plus 0–150 % trim. Five file-jingle medleys remain as fallback; sampled
+  effects, Gooby’s synthesized voice and Dance Party’s beat stay intact.
+- **Secret codes (4.0):** Settings has an offline codes screen. Launch codes
+  redeem once per save, including a timed ×2-coin buff and the secret
+  `herzGooby` sticker; repeated wrong guesses trigger a short lockout.
+- **Display, controls & developer tools (4.0):** UI scale switches live among
+  85, 100, 115 and 130 %. Horizontal/vertical control inversion is global,
+  optional gyro/pointer parallax dresses the rooms, and settings is split into
+  focused subscreens with credits. Five taps on language “Auto” unlock the
+  persistent 18-card developer panel; normal players see no entry or hint.
 
 ## Quick start
 
@@ -107,40 +128,37 @@ the save and see it again.
 
 ## Dev harness
 
-URL params (dev builds): `?scene=home|gooby|roadtest`, `?room=…` (incl. `garden`),
-`?minigame=<id>`, `?open=shop|wardrobe|achievements|arcade|settings|questBoard|album|profile`,
-`?coins=N`, `?level=N`, `?energy=N`, `?hunger=N`, `?hygiene=N`, `?fun=N`,
-`?fast=N` (clock multiplier), `?now=<epochMs>`, `?reset=1`, `?lang=de|en`,
-`?sleep=1` (start a nap), `?autoplay=1` (bot-plays the launched minigame),
-`?onboarding=0` (suppress the tutorial), `?uiscale=85|100|115|130`,
-`?notch=1`, `?petdebug=1`, `?travel=surf|drive`, `?open=devPanel`.
-Harness routes (`scene`/`minigame`/`open`) also suppress onboarding so test
-surfaces stay clean. Feature demos:
-`?skin=<id>` (own + equip a fur skin), `?outfits=<id,id>` (own + equip
-outfits), `?dailydemo=N` (daily-bonus popup as streak day N), `?achdemo=1`
-(seeded achievements screen), `?whatsnew=1` (force the What's-new panel),
-`?autopilot=1` (bot-drives the shop trip), `?care=tray|wash|feed:<foodId>`
-(care-loop demos). See PLAN.md §E9 and PLAN3.md §E0.2; `window.__gooby` exposes
-store/ui/sceneManager/framework for console poking.
+`src/data/harnessParams.js` is the single source for dev-build URL params. Its
+complete generated table is in `AGENTS.md` and the developer panel’s card 18.
+Useful routes include `?reset=1`, `?scene=home`, `?room=garden`,
+`?minigame=carrotCatch&difficulty=hard`, `?open=settings`, `?lang=de`,
+`?uiscale=130`, `?notch=1`, `?travel=surf`, `?recappreview=meadow`,
+`?weltpreview=windmill` and `?whatsnew=1`. Harness routes suppress onboarding.
+For panel regression, `?whatsnew=3` forces 3.0 and `?whatsnew=2` forces 2.0.
+`window.__gooby` exposes store/ui/sceneManager/framework/clock/save for console
+poking.
 
 Try the framework smoke game: `http://localhost:5174/?minigame=_smoke`
 
 ## Project layout
 
-`src/` splits by system: `core/` (store, save v3, clock, scenes, input, assets,
-notifications), `character/` (procedural Gooby rig + outfits + fur skins),
+`src/` splits by system: `core/` (store, save v4, clock, scenes, input, assets,
+notifications, IndexedDB photos), `character/` (procedural Gooby rig + outfits + fur skins),
 `home/` (rooms incl. the garden, care interactions, decor), `city/` +
 `systems/shopTrip.js` (drive/surf + shop/vet flow), `minigames/` (framework + 27
-games, each with a pure `.logic.js`), `systems/` (stats, economy, leveling,
+arcade games + Gooby Welt, with pure `.logic.js` modules), `systems/` (stats, economy, leveling,
 achievements, daily bonus, plus the 2.0 engines: garden, quests, collections,
-health, weight, dayNight, weather, profileStats, plus stickerBook and nougat),
-`audio/` (five-bus WebAudio manager, music director, sfx map, Gooby voice),
+health, weight, dayNight, weather, profileStats, plus stickerBook/nougat and the
+4.0 modifier/codes/recap/radio/gallery engines),
+`audio/` (five-bus WebAudio manager, streaming radio, music director, sfx map, Gooby voice),
 `gfx/` (tweens, particles, sky, weather FX), `ui/`
-(HUD, screens, onboarding, What's-new), `data/` (constants = ALL design
-numbers, strings EN+DE + versioned per-feature string modules, catalogs). Tests
+(HUD, screens, onboarding, versioned What's-new), `data/` (frozen shared
+constants, strings EN+DE + versioned per-feature modules, catalogs and the
+harness table). Tests
 in `test/` run headlessly against the pure modules. `PLAN.md` is the binding
 v1 architecture contract (§E), `PLAN2.md` the binding 2.0 spec and `PLAN3.md`
-the binding 3.0 spec — read them before restructuring anything.
+the binding 3.0 spec; `PLAN4.md` + `PLAN4-GAMES.md` define 4.0 — read them
+before restructuring anything.
 
 <!-- ============ BEGIN G13 SECTION: Build & Sideload (owned by agent G13) ============ -->
 
@@ -247,10 +265,26 @@ splash (committed under `ios/App/App/Assets.xcassets/`) with `npm run icons`.
   one-time 3.0 veteran tour, NEU content ribbons, docs/version/integration
   sweep.
 
+### 4.0 „VOLLVERSION FINAL"
+
+- **Wave 1 — systems:** save v4 + lossless migrations; streaming radio/music
+  registry; codes, modifiers, recap and economy engines; gallery storage; gyro;
+  settings IA; complete 18-card developer panel and harness table.
+- **Wave 2 — signature experiences:** authentic Comfy Cakes, eight-biome recap
+  cinematic, Gooby Welt’s two Gaussian-splat scenes, cover-art pregame UI,
+  control-direction fixes, sick-shop travel and Shopping Surf speed feel.
+- **Wave 3 — game-wide depth:** Leicht/Mittel/Schwer/Endlos rollout, modifier
+  gameplay integration, input audit, room/food polish and sampled-audio sweep.
+- **Wave 4 — ship:** credits and attribution, app icon 2.0, one-time 4.0 veteran
+  tour, docs and end-to-end integration.
+
 ## Credits
 
-- 3D models & audio: [Kenney](https://kenney.nl) CC0 asset packs and
-  [KayKit](https://kaylousberg.itch.io/) asset packs (see committed licenses).
+- 3D models, UI and audio: [Kenney](https://kenney.nl), KayKit and the committed
+  itch.io packs under `public/assets/itch/` (CC0; see bundled license notes).
+- Bordmusik: Dylann Taylor, Tallbeard Studios/Abstraction and Ragnar Random
+  (CC0). Gooby Welt’s two modified splat scenes are CC BY 4.0; full authors,
+  source URLs and change notices are available in Settings → Credits.
 - The 28 sticker-book images are AI-generated originals created for this
   project (CC0-equivalent, no third-party IP).
 - Gooby’s body and voice remain procedural; no library model replaces him.
