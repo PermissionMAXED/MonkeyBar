@@ -101,6 +101,13 @@ export function applyDifficulty(tune = HOPPER, mode = 'normal') {
     SHOWER_TELEGRAPH_SEC: Math.max(0.35, tune.SHOWER_TELEGRAPH_SEC * windowMult),
     BOT_WINDOW_SEC: Math.max(0.35, tune.BOT_WINDOW_SEC * windowMult),
     RAMP_STEP_OFFSET: hard ? 1 : 0,
+    // §G5.4 beatability relax (V4/G72b): at Schwer's derived pace a full 75 s
+    // run tops out near 102 distance points + ~49 rows × 1.64 expected pickup
+    // points ≈ 182 — statistically below the 190 target even at 100 %
+    // collection. Per §G5.4 the PARAMS are relaxed, never the target: golden
+    // carrots spawn twice as often on Schwer/Endlos (ratio 2.0, inside the
+    // §G5.3 [0.55, 2.05] band), so a clean run has the points to beat 190.
+    GOLD_CHANCE: hard ? tune.GOLD_CHANCE * 2 : tune.GOLD_CHANCE,
     MAX_SPEED: mode === 'endless' ? Infinity : tune.MAX_SPEED,
     WORMHOLE_CHANCE: mode === 'endless' ? tune.WORMHOLE_CHANCE * 0.5 : tune.WORMHOLE_CHANCE,
     ENDLESS: mode === 'endless',
