@@ -6,6 +6,7 @@
 // (input listeners live on the canvas element — §E5).
 
 import { t } from '../data/strings.js';
+import { registerCreditsScreen } from './creditsScreen.js'; // V4/G81: §C-SYS12.4 feature-detected settings row
 
 /** @typedef {{mount: (el: HTMLElement, params?: object) => void, unmount: () => void}} UiModule */
 /** @typedef {{onTap?: () => void}} ToastOptions */
@@ -253,5 +254,6 @@ export function createUi() {
     },
   };
 
+  registerCreditsScreen(ui); // V4/G81: static screen has no store dependency
   return ui;
 }
