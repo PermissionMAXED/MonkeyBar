@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// GOOBY app icon + splash generator (§F2, agent G13).
+// GOOBY app icon + splash generator (§F2 agent G13; 4.0 layered look V4/G80).
 //
 // Pure-Node PNG encoder (node:zlib deflate + hand-rolled CRC32 — zero deps)
 // plus a tiny signed-distance-field rasterizer that paints a cute vector
@@ -8,15 +8,38 @@
 // (#FF7BA9-family) background for the icon and the cream brand background
 // (#FFF6EC) for the splash.
 //
-// Outputs (committed):
-//   ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png  (1024²)
-//   ios/App/App/Assets.xcassets/AppIcon.appiconset/Contents.json      (Xcode 16 single-size)
-//   ios/App/App/Assets.xcassets/Splash.imageset/splash-2732x2732[-1|-2].png (2732²)
+// V4/G80 (PLAN4 §C-SYS10.2/10.3): a minimal pure-Node PNG DECODER (zlib
+// inflate, 8-bit colorType 2/6, non-interlaced, all 5 scanline filters) and
+// the `--source <png>` bypass — when given the coordinator's layered art the
+// procedural face painter is SKIPPED: the source is flattened onto #FFF6EC
+// (the App-Store no-alpha rule stays enforced by emitting colorType 2) and
+// becomes the 1024² universal icon + the 2732² splash (cream field, source
+// centered at 38 % width). iOS-18 dark/tinted variants (§C-SYS10.3) are
+// derived deterministically from the universal icon and carry alpha on
+// purpose (dark icons NEED a transparent background — only the universal
+// 1024 must be opaque); Contents.json gains the `appearances` entries.
 //
-// Run: `npm run icons` (from GOOBY/).
+// §C-SYS10.3 CI fallback (documented): if the CI Xcode ever rejects the
+// `appearances` Contents.json syntax (CI runs Xcode 16.4 — appearances are
+// supported since Xcode 16.0, so this is not expected), rerun with
+// `--no-appearances` to regenerate the legacy single-image Contents.json
+// (no variant PNGs written), commit the dark/tinted PNGs as loose files
+// under art/ with a note, and the icon test keeps pinning only the
+// universal icon.
+//
+// Outputs (committed):
+//   ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png        (1024², colorType 2)
+//   ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-dark-512@2x.png   (1024², alpha)
+//   ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-tinted-512@2x.png (1024², grayscale)
+//   ios/App/App/Assets.xcassets/AppIcon.appiconset/Contents.json             (Xcode 16 single-size + appearances)
+//   ios/App/App/Assets.xcassets/Splash.imageset/splash-2732x2732[-1|-2].png  (2732²)
+//
+// Run (4.0 documented invocation, from GOOBY/):
+//   npm run icons -- --source art/icon-v4-source.png
+// Legacy procedural fallback: `npm run icons` (no flags).
 
-import { deflateSync } from 'node:zlib';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { deflateSync, inflateSync } from 'node:zlib';
+import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -114,6 +137,171 @@ export function encodePng(width, height, rgba, { colorType = 6, background = [25
     pngChunk('IDAT', deflateSync(raw, { level: 9 })),
     pngChunk('IEND', Buffer.alloc(0)),
   ]);
+}
+
+// ---------------------------------------------------------------------------
+// PNG decoder (V4/G80, §C-SYS10.2 — pure Node: zlib inflate + de-filtering)
+// ---------------------------------------------------------------------------
+
+/**
+ * Paeth predictor (PNG spec §9, filter type 4).
+ * @param {number} a left @param {number} b above @param {number} c upper-left
+ * @returns {number}
+ */
+function paeth(a, b, c) {
+  const p = a + b - c;
+  const pa = Math.abs(p - a);
+  const pb = Math.abs(p - b);
+  const pc = Math.abs(p - c);
+  if (pa <= pb && pa <= pc) return a;
+  return pb <= pc ? b : c;
+}
+
+/**
+ * Decode a PNG into RGBA pixels. Minimal BY DESIGN (§C-SYS10.2): 8-bit
+ * colorType 2 (RGB) or 6 (RGBA), non-interlaced, all 5 scanline filters,
+ * multiple IDAT chunks, CRC-verified; ancillary chunks are skipped.
+ * Anything else throws (interlaced, paletted, 16-bit, grayscale).
+ * @param {Buffer|Uint8Array} bytes complete PNG file
+ * @returns {Img} RGBA image (colorType-2 input gets alpha = 255)
+ */
+export function decodePng(bytes) {
+  const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  for (let i = 0; i < 8; i++) {
+    if (buf[i] !== SIG[i]) throw new Error('decodePng: bad PNG signature');
+  }
+  let width = 0;
+  let height = 0;
+  let colorType = 0;
+  let sawIhdr = false;
+  const idats = [];
+  let pos = 8;
+  while (pos + 12 <= buf.length) {
+    const len = buf.readUInt32BE(pos);
+    const type = buf.toString('ascii', pos + 4, pos + 8);
+    const data = buf.subarray(pos + 8, pos + 8 + len);
+    if (crc32(buf.subarray(pos + 4, pos + 8 + len)) !== buf.readUInt32BE(pos + 8 + len)) {
+      throw new Error(`decodePng: CRC mismatch in ${type} chunk`);
+    }
+    if (type === 'IHDR') {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      const bitDepth = data[8];
+      colorType = data[9];
+      if (bitDepth !== 8) throw new Error(`decodePng: unsupported bit depth ${bitDepth} (only 8)`);
+      if (colorType !== 2 && colorType !== 6) {
+        throw new Error(`decodePng: unsupported color type ${colorType} (only 2=RGB, 6=RGBA)`);
+      }
+      if (data[10] !== 0 || data[11] !== 0) throw new Error('decodePng: unsupported compression/filter method');
+      if (data[12] !== 0) throw new Error('decodePng: interlaced PNGs are unsupported');
+      sawIhdr = true;
+    } else if (type === 'IDAT') {
+      idats.push(data);
+    } else if (type === 'IEND') {
+      break;
+    }
+    // ancillary chunks (pHYs, tEXt, iCCP, …) are skipped
+    pos += 12 + len;
+  }
+  if (!sawIhdr || idats.length === 0) throw new Error('decodePng: missing IHDR/IDAT');
+  const channels = colorType === 6 ? 4 : 3;
+  const stride = width * channels;
+  const raw = inflateSync(Buffer.concat(idats));
+  if (raw.length !== (stride + 1) * height) {
+    throw new Error(`decodePng: expected ${(stride + 1) * height} filtered bytes, got ${raw.length}`);
+  }
+  // De-filter (PNG spec §9: predictors read the RECONSTRUCTED row above).
+  const pix = Buffer.alloc(stride * height);
+  for (let y = 0; y < height; y++) {
+    const filter = raw[y * (stride + 1)];
+    const rs = y * (stride + 1) + 1;
+    const os = y * stride;
+    for (let x = 0; x < stride; x++) {
+      const v = raw[rs + x];
+      const left = x >= channels ? pix[os + x - channels] : 0;
+      const up = y > 0 ? pix[os - stride + x] : 0;
+      const upLeft = y > 0 && x >= channels ? pix[os - stride + x - channels] : 0;
+      let rec;
+      if (filter === 0) rec = v;
+      else if (filter === 1) rec = v + left;
+      else if (filter === 2) rec = v + up;
+      else if (filter === 3) rec = v + ((left + up) >> 1);
+      else if (filter === 4) rec = v + paeth(left, up, upLeft);
+      else throw new Error(`decodePng: unknown filter ${filter} on row ${y}`);
+      pix[os + x] = rec & 0xff;
+    }
+  }
+  const img = makeImage(width, height);
+  if (colorType === 6) {
+    img.data.set(pix);
+  } else {
+    for (let i = 0, s = 0; s < pix.length; i += 4, s += 3) {
+      img.data[i] = pix[s];
+      img.data[i + 1] = pix[s + 1];
+      img.data[i + 2] = pix[s + 2];
+      img.data[i + 3] = 255;
+    }
+  }
+  return img;
+}
+
+/**
+ * Flatten an RGBA image onto an opaque background — kills ANY alpha, which
+ * is how the §C-SYS10.2 App-Store no-alpha rule stays enforced regardless of
+ * what the coordinator's art carries.
+ * @param {Img} img
+ * @param {[number, number, number]} background
+ * @returns {Img} fully opaque copy
+ */
+export function flattenRgba(img, background) {
+  const out = makeImage(img.w, img.h);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const a = img.data[i + 3] / 255;
+    const ia = 1 - a;
+    out.data[i] = Math.round(img.data[i] * a + background[0] * ia);
+    out.data[i + 1] = Math.round(img.data[i + 1] * a + background[1] * ia);
+    out.data[i + 2] = Math.round(img.data[i + 2] * a + background[2] * ia);
+    out.data[i + 3] = 255;
+  }
+  return out;
+}
+
+/**
+ * Bilinear-resample an RGBA image to w×h. Pure deterministic math — keeps
+ * `npm run icons -- --source …` byte-stable across re-runs (§C-SYS10.2).
+ * Scales used here stay near 1 (0.88×–1.02×), where bilinear is clean.
+ * @param {Img} img @param {number} w @param {number} h
+ * @returns {Img}
+ */
+export function resample(img, w, h) {
+  if (img.w === w && img.h === h) return img;
+  const out = makeImage(w, h);
+  const sx = img.w / w;
+  const sy = img.h / h;
+  for (let y = 0; y < h; y++) {
+    const fy = Math.min(img.h - 1, Math.max(0, (y + 0.5) * sy - 0.5));
+    const y0 = Math.floor(fy);
+    const y1 = Math.min(img.h - 1, y0 + 1);
+    const ty = fy - y0;
+    for (let x = 0; x < w; x++) {
+      const fx = Math.min(img.w - 1, Math.max(0, (x + 0.5) * sx - 0.5));
+      const x0 = Math.floor(fx);
+      const x1 = Math.min(img.w - 1, x0 + 1);
+      const tx = fx - x0;
+      const d = (y * w + x) * 4;
+      for (let c = 0; c < 4; c++) {
+        const p00 = img.data[(y0 * img.w + x0) * 4 + c];
+        const p10 = img.data[(y0 * img.w + x1) * 4 + c];
+        const p01 = img.data[(y1 * img.w + x0) * 4 + c];
+        const p11 = img.data[(y1 * img.w + x1) * 4 + c];
+        out.data[d + c] = Math.round(
+          p00 * (1 - tx) * (1 - ty) + p10 * tx * (1 - ty) + p01 * (1 - tx) * ty + p11 * tx * ty
+        );
+      }
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -320,36 +508,207 @@ export function renderSplash(size = 2732) {
 }
 
 // ---------------------------------------------------------------------------
+// 4.0 source pipeline (V4/G80, §C-SYS10.2/10.3)
+// ---------------------------------------------------------------------------
+
+/** Frozen 4.0 icon-pipeline numbers (§E0.1-2 pattern: consts live in the owning module). */
+export const V4_ICON = Object.freeze({
+  SIZE: 1024, // universal icon (§C-SYS10.2)
+  SPLASH_SIZE: 2732, // existing splash dimension
+  SPLASH_ART_FRAC: 0.38, // source image centered at 38 % width (§C-SYS10.2)
+  BG: '#FFF6EC', // brand cream flatten target (§C-SYS10.2)
+  // The coordinator art bakes a rounded-rect card into the square canvas —
+  // measured corner radius ≈ 242 px at 1024² (corner-diagonal scan). The dark
+  // variant cuts the near-cream area OUTSIDE that card to transparency, per
+  // Apple's "transparent background so the system background shows through".
+  DARK_CARD_RADIUS_FRAC: 242 / 1024,
+  DARK_DIM: 0.85, // dark-variant RGB multiplier (softens glare on dark home screens)
+});
+
+/**
+ * Build the 1024² universal icon from decoded source art: flatten onto the
+ * brand cream (kills any alpha) and resample to 1024² if needed.
+ * @param {Img} src decoded coordinator art
+ * @returns {Img} opaque 1024² icon
+ */
+export function renderIconFromSource(src) {
+  return resample(flattenRgba(src, rgb(V4_ICON.BG)), V4_ICON.SIZE, V4_ICON.SIZE);
+}
+
+/**
+ * Build the 2732² splash from decoded source art: cream #FFF6EC field with
+ * the source image centered at 38 % width (§C-SYS10.2).
+ * @param {Img} src decoded coordinator art
+ * @param {number} [size]
+ * @returns {Img} opaque splash
+ */
+export function renderSplashFromSource(src, size = V4_ICON.SPLASH_SIZE) {
+  const img = makeImage(size, size);
+  const [r, g, b] = rgb(V4_ICON.BG);
+  for (let i = 0; i < img.data.length; i += 4) {
+    img.data[i] = r;
+    img.data[i + 1] = g;
+    img.data[i + 2] = b;
+    img.data[i + 3] = 255;
+  }
+  const artSize = Math.round(size * V4_ICON.SPLASH_ART_FRAC);
+  const art = resample(flattenRgba(src, rgb(V4_ICON.BG)), artSize, artSize);
+  const off = Math.round((size - artSize) / 2);
+  for (let y = 0; y < artSize; y++) {
+    const srcRow = art.data.subarray(y * artSize * 4, (y + 1) * artSize * 4);
+    img.data.set(srcRow, ((off + y) * size + off) * 4);
+  }
+  return img;
+}
+
+/**
+ * iOS-18 DARK icon variant (§C-SYS10.3): same artwork gently dimmed, with the
+ * near-cream canvas outside the art's baked rounded-rect card cut to
+ * transparency (anti-aliased) — dark icons REQUIRE a transparent background
+ * (the deliberate exception to the no-alpha rule; only the universal 1024
+ * must be opaque).
+ * @param {Img} icon opaque universal icon
+ * @returns {Img} RGBA variant (carries alpha)
+ */
+export function deriveDarkVariant(icon) {
+  const out = makeImage(icon.w, icon.h);
+  const half = icon.w / 2;
+  const radius = icon.w * V4_ICON.DARK_CARD_RADIUS_FRAC;
+  const sdf = roundRect(half, half, half, half, radius);
+  for (let y = 0; y < icon.h; y++) {
+    for (let x = 0; x < icon.w; x++) {
+      const i = (y * icon.w + x) * 4;
+      out.data[i] = Math.round(icon.data[i] * V4_ICON.DARK_DIM);
+      out.data[i + 1] = Math.round(icon.data[i + 1] * V4_ICON.DARK_DIM);
+      out.data[i + 2] = Math.round(icon.data[i + 2] * V4_ICON.DARK_DIM);
+      const cov = Math.min(1, Math.max(0, 0.5 - sdf(x + 0.5, y + 0.5)));
+      out.data[i + 3] = Math.round(cov * 255);
+    }
+  }
+  return out;
+}
+
+/**
+ * iOS-18 TINTED icon variant (§C-SYS10.3): fully opaque grayscale (Rec. 709
+ * luma) — the system multiplies the user's tint gradient over it.
+ * @param {Img} icon opaque universal icon
+ * @returns {Img} grayscale opaque variant
+ */
+export function deriveTintedVariant(icon) {
+  const out = makeImage(icon.w, icon.h);
+  for (let i = 0; i < icon.data.length; i += 4) {
+    const l = Math.round(0.2126 * icon.data[i] + 0.7152 * icon.data[i + 1] + 0.0722 * icon.data[i + 2]);
+    out.data[i] = l;
+    out.data[i + 1] = l;
+    out.data[i + 2] = l;
+    out.data[i + 3] = 255;
+  }
+  return out;
+}
+
+/**
+ * AppIcon.appiconset Contents.json (Xcode 16 single-size). With
+ * `appearances` (the shipped §C-SYS10.3 state) the dark/tinted luminosity
+ * entries are included; without (the documented CI fallback) only the
+ * universal image is referenced.
+ * @param {boolean} appearances
+ * @returns {string} JSON text
+ */
+export function iconContentsJson(appearances) {
+  const images = [
+    { filename: 'AppIcon-512@2x.png', idiom: 'universal', platform: 'ios', size: '1024x1024' },
+  ];
+  if (appearances) {
+    images.push(
+      {
+        appearances: [{ appearance: 'luminosity', value: 'dark' }],
+        filename: 'AppIcon-dark-512@2x.png',
+        idiom: 'universal',
+        platform: 'ios',
+        size: '1024x1024',
+      },
+      {
+        appearances: [{ appearance: 'luminosity', value: 'tinted' }],
+        filename: 'AppIcon-tinted-512@2x.png',
+        idiom: 'universal',
+        platform: 'ios',
+        size: '1024x1024',
+      }
+    );
+  }
+  return JSON.stringify({ images, info: { author: 'xcode', version: 1 } }, null, 2) + '\n';
+}
+
+// ---------------------------------------------------------------------------
 // Main: write the asset-catalog files
 // ---------------------------------------------------------------------------
 
+/**
+ * Parse CLI flags: `--source <png>` (§C-SYS10.2 bypass) and
+ * `--no-appearances` (§C-SYS10.3 documented CI fallback).
+ * @param {string[]} argv
+ * @returns {{source: string|null, appearances: boolean}}
+ */
+function parseArgs(argv) {
+  let source = null;
+  let appearances = true;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--source') {
+      source = argv[i + 1];
+      if (!source) throw new Error('gen-icons: --source needs a PNG path');
+      i++;
+    } else if (argv[i] === '--no-appearances') {
+      appearances = false;
+    } else {
+      throw new Error(`gen-icons: unknown argument ${argv[i]}`);
+    }
+  }
+  return { source, appearances };
+}
+
 function main() {
+  const { source, appearances } = parseArgs(process.argv.slice(2));
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const iconDir = join(root, 'ios/App/App/Assets.xcassets/AppIcon.appiconset');
   const splashDir = join(root, 'ios/App/App/Assets.xcassets/Splash.imageset');
   mkdirSync(iconDir, { recursive: true });
   mkdirSync(splashDir, { recursive: true });
 
+  // §C-SYS10.2 bypass: with --source the procedural face painter is skipped
+  // and the decoded art drives both the icon and the splash.
+  let icon;
+  let splash;
+  if (source) {
+    const src = decodePng(readFileSync(resolve(process.cwd(), source)));
+    console.log(`source ${source} (${src.w}×${src.h}) → layered-art bypass`);
+    icon = renderIconFromSource(src);
+    splash = renderSplashFromSource(src);
+  } else {
+    icon = renderIcon();
+    splash = renderSplash();
+  }
+
   // App Store Connect rejects the 1024² marketing icon if the PNG has an
   // alpha channel → encode as opaque RGB (color type 2), flattened onto the
   // brand cream just in case any pixel were ever non-opaque.
-  const icon = renderIcon();
-  const iconPng = encodePng(icon.w, icon.h, icon.data, { colorType: 2, background: rgb('#FFF6EC') });
+  const iconPng = encodePng(icon.w, icon.h, icon.data, { colorType: 2, background: rgb(V4_ICON.BG) });
   writeFileSync(join(iconDir, 'AppIcon-512@2x.png'), iconPng);
-  writeFileSync(
-    join(iconDir, 'Contents.json'),
-    JSON.stringify(
-      {
-        images: [{ filename: 'AppIcon-512@2x.png', idiom: 'universal', platform: 'ios', size: '1024x1024' }],
-        info: { author: 'xcode', version: 1 },
-      },
-      null,
-      2
-    ) + '\n'
-  );
   console.log(`icon   1024×1024 → ${iconPng.length.toLocaleString()} B`);
 
-  const splash = renderSplash();
+  if (appearances) {
+    // §C-SYS10.3: dark carries alpha (required by iOS dark icons), tinted is
+    // opaque grayscale. Both derive deterministically from the universal icon.
+    const dark = deriveDarkVariant(icon);
+    const darkPng = encodePng(dark.w, dark.h, dark.data, { colorType: 6 });
+    writeFileSync(join(iconDir, 'AppIcon-dark-512@2x.png'), darkPng);
+    console.log(`dark   1024×1024 → ${darkPng.length.toLocaleString()} B`);
+    const tinted = deriveTintedVariant(icon);
+    const tintedPng = encodePng(tinted.w, tinted.h, tinted.data, { colorType: 2 });
+    writeFileSync(join(iconDir, 'AppIcon-tinted-512@2x.png'), tintedPng);
+    console.log(`tinted 1024×1024 → ${tintedPng.length.toLocaleString()} B`);
+  }
+  writeFileSync(join(iconDir, 'Contents.json'), iconContentsJson(appearances));
+
   const splashPng = encodePng(splash.w, splash.h, splash.data);
   // Capacitor's default Splash.imageset references three same-size files
   // (1x/2x/3x); keep that Contents.json shape and write identical PNGs.
