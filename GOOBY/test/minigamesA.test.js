@@ -519,18 +519,18 @@ test('memoryMatch: time bonus clamps 0–8 (§C6.1)', () => {
   assert.ok(timeBonus(MEMORY.PAR_SEC_BIG, small) < 8);
 });
 
-test('memoryMatch: score = 20 − misses + timeBonus, floored at 0 (§C6.1 verbatim)', () => {
-  assert.equal(memoryScore(0, 0, MEMORY.SMALL), 28, 'perfect: 20 − 0 + 8');
-  assert.equal(memoryScore(6, MEMORY.PAR_SEC_SMALL, MEMORY.SMALL), 22);
-  assert.equal(memoryScore(6, 10000, MEMORY.SMALL), 14, 'no time bonus');
-  assert.equal(memoryScore(40, 10000, MEMORY.SMALL), 0, 'floored at 0 (no fail state)');
+test('memoryMatch: score = 20 − misses + timeBonus + 20 clear bonus, floored at 0 (§C6.1 + V4/G71b)', () => {
+  assert.equal(memoryScore(0, 0, MEMORY.SMALL), 48, 'perfect: 20 − 0 + 8 + 20 = §G5.4 cap');
+  assert.equal(memoryScore(6, MEMORY.PAR_SEC_SMALL, MEMORY.SMALL), 42);
+  assert.equal(memoryScore(6, 10000, MEMORY.SMALL), 34, 'no time bonus');
+  assert.equal(memoryScore(48, 10000, MEMORY.SMALL), 0, 'floored at 0 (no fail state)');
 });
 
 test('memoryMatch: typical scores clamp into the §C6 coin row (min 5)', () => {
-  // decent round: 5 misses under par → 23 → 11c; bad round still pays min 5
-  assert.equal(computeCoins(COIN_TABLE.memoryMatch, memoryScore(5, 40, MEMORY.SMALL), false), 11);
+  // decent round: 5 misses under par → 43 → 21c; bad round still pays min 5
+  assert.equal(computeCoins(COIN_TABLE.memoryMatch, memoryScore(5, 40, MEMORY.SMALL), false), 21);
   assert.equal(computeCoins(COIN_TABLE.memoryMatch, 0, false), 5);
-  assert.equal(computeCoins(COIN_TABLE.memoryMatch, 28, false), 14, 'perfect = 14c');
+  assert.equal(computeCoins(COIN_TABLE.memoryMatch, 48, false), 24, 'perfect = 24c (row max)');
 });
 
 test('memoryMatch: isMatch compares pair ids', () => {
@@ -682,18 +682,35 @@ test('V4/G71 memoryMatch: puzzle modes, window guardrail and endless misses', ()
   assert.equal(hard.REVEAL_SEC, MEMORY.REVEAL_SEC * 0.8);
   assert.equal(hard.RAMP_FLOOR_STEP, -1);
   assert.ok(hard.REVEAL_SEC >= 0.35 && hard.PEEK_SEC >= 0.35);
-  assert.equal(memoryScore(0, 0, MEMORY.BIG, hard), 48, 'Schwer clear bonus reaches §G5 cap');
+  // V4/G71b: the +20 clear bonus is mode-INDEPENDENT — every mode reaches
+  // the §G5.4 cap 48, so the shared target 40 (Leicht/Mittel §G5.5
+  // „cleared" ticks) is reachable everywhere and no mode outscores another
+  // by construction.
+  for (const tune of [MEMORY, easy, hard]) {
+    assert.equal(tune.CLEAR_BONUS, 20, 'clear bonus identical across modes');
+    assert.equal(memoryScore(0, 0, MEMORY.BIG, tune), 48, 'perfect clear reaches §G5 cap 48');
+  }
 
   const endless = applyMemoryDifficulty(MEMORY, 'endless');
+  assert.equal(endless.CLEAR_BONUS, 20);
   assert.equal(isMemoryEndlessOver(11, endless), false);
   assert.equal(isMemoryEndlessOver(12, endless), true);
 });
 
-test('V4/G71 memoryMatch: hard target is beatable; raw bot skill gets harder', () => {
+test('V4/G71 memoryMatch: hard target is beatable; bot means monotone E≥N≥H', () => {
   const hard = Array.from({ length: 5 }, (_, i) => simulateMemoryAutoplay('hard', i + 1).score);
   assert.ok(hard.some((score) => score >= 40), `Schwer target 40 missed: ${hard}`);
-  assert.ok(botMean(simulateMemoryAutoplay, 'easy', 'rawScore') >=
-    botMean(simulateMemoryAutoplay, 'normal', 'rawScore'));
-  assert.ok(botMean(simulateMemoryAutoplay, 'normal', 'rawScore') >=
-    botMean(simulateMemoryAutoplay, 'hard', 'rawScore'));
+  // V4/G71b: Leicht/Mittel reach their shared §G5.5 target 40 too.
+  const easy = Array.from({ length: 5 }, (_, i) => simulateMemoryAutoplay('easy', i + 1).score);
+  const normal = Array.from({ length: 5 }, (_, i) => simulateMemoryAutoplay('normal', i + 1).score);
+  assert.ok(easy.some((score) => score >= 40), `Leicht target 40 missed: ${easy}`);
+  assert.ok(normal.some((score) => score >= 40), `Mittel target 40 missed: ${normal}`);
+  // Monotone on the full score (the §G5.4 certification check) AND on the
+  // raw bonus-free skill measure.
+  for (const field of ['score', 'rawScore']) {
+    assert.ok(botMean(simulateMemoryAutoplay, 'easy', field) >=
+      botMean(simulateMemoryAutoplay, 'normal', field), `easy ≥ normal (${field})`);
+    assert.ok(botMean(simulateMemoryAutoplay, 'normal', field) >=
+      botMean(simulateMemoryAutoplay, 'hard', field), `normal ≥ hard (${field})`);
+  }
 });

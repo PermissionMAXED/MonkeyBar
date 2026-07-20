@@ -1,8 +1,9 @@
 // Memory Match (§C6.1 #5, agent G8): 4×4 card grid (8 pairs; 6×4 with 12
 // pairs at level ≥6 — §C1.5). Card backs are a procedural pastel pattern,
 // faces are mini food GLBs parented to the cards, revealed by a flip
-// animation. Score = 20 − misses + timeBonus(0–8). No fail state. Pure
-// layout/deck/score logic in memoryMatch.logic.js. Dev-only ?autoplay=1.
+// animation. Score = 20 − misses + timeBonus(0–8) + 20 clear bonus in every
+// mode (V4/G71b — §G5.4 cap 48). No fail state. Pure layout/deck/score
+// logic in memoryMatch.logic.js. Dev-only ?autoplay=1.
 //
 // Level source: ctx.params.level when the launcher provides it; otherwise the
 // dev-harness store handle (§E9 window.__gooby — games must not import the

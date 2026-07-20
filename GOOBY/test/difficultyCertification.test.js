@@ -74,12 +74,6 @@ const ADAPTERS = Object.freeze({
 // assertion re-arms automatically (the todo path only triggers on failure).
 // ---------------------------------------------------------------------------
 const KNOWN_GAPS = Object.freeze({
-  memoryMatch: {
-    monotoneMeans:
-      'G71: Schwer outscores Leicht/Mittel by design (Schwer-only +20 CLEAR_BONUS ' +
-      'reaches cap 48) — Leicht/Mittel cap at 28 < target 40, so their §G5.5 ' +
-      '„cleared" ticks are unreachable; filed with the coordinator',
-  },
 });
 
 const CERT_GAMES = Object.keys(TARGETS);

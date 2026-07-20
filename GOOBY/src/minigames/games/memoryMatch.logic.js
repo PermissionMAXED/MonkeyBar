@@ -2,7 +2,8 @@
 // three.js/DOM imports (§B rule); the game module (memoryMatch.js) imports
 // from here. Binding numbers: 4×4 grid with 8 pairs (6×4 with 12 pairs at
 // level ≥ MINIGAME.MEMORY_BIG_LAYOUT_LEVEL — §C1.5), score = 20 − misses +
-// timeBonus(0–8), no fail state. Coin row (§C6): divisor 2, min 5, max 24.
+// timeBonus(0–8) + 20 board-clear bonus (V4/G71b — every mode; reaches the
+// §G5.4 cap-score 48), no fail state. Coin row (§C6): divisor 2, min 5, max 24.
 
 import { MINIGAME } from '../../data/constants.js';
 
@@ -35,17 +36,23 @@ export const MEMORY = Object.freeze({
   PREVIEW_SPEED_MULT: 1,
   WINDOW_MULT: 1,
   RAMP_FLOOR_STEP: 0,
-  CLEAR_BONUS: 0,
+  /**
+   * V4/G71b: mode-INDEPENDENT board-clear bonus. The legacy §C6.1 formula
+   * tops out at 28 while the §G5.4 cap-score is 48 (divisor 2 × row max 24)
+   * and the shared target is 40; a Schwer-only bonus made Schwer outscore
+   * Leicht/Mittel (non-monotone means) and left the Leicht/Mittel §G5.5
+   * „cleared" ticks unreachable. Every mode clears its board (no fail
+   * state), so every mode earns the same +20 — difficulty separates through
+   * the §G5.3 preview/window/ramp params, never through the score ceiling.
+   */
+  CLEAR_BONUS: 20,
   ENDLESS: false,
   ENDLESS_MISS_FLIPS: 12,
 });
 
 export const MEMORY_DIFFICULTY = Object.freeze({
-  easy: Object.freeze({ previewSpeed: 0.85, window: 1.25, rampFloor: 0, bonus: 0, endless: false }),
-  normal: Object.freeze({ previewSpeed: 1, window: 1, rampFloor: 0, bonus: 0, endless: false }),
-  // The frozen target is 40 while the legacy formula tops out at 28. A
-  // Schwer-only +20 clear bonus reaches the §G5.4 cap-score of 48 and closes
-  // that inherited reachability gap without changing Mittel or its coin row.
+  easy: Object.freeze({ previewSpeed: 0.85, window: 1.25, rampFloor: 0, bonus: 20, endless: false }),
+  normal: Object.freeze({ previewSpeed: 1, window: 1, rampFloor: 0, bonus: 20, endless: false }),
   hard: Object.freeze({ previewSpeed: 1.15, window: 0.8, rampFloor: -1, bonus: 20, endless: false }),
   endless: Object.freeze({ previewSpeed: 1.15, window: 0.8, rampFloor: -1, bonus: 20, endless: true }),
 });
@@ -118,8 +125,9 @@ export function timeBonus(elapsed, layout) {
 }
 
 /**
- * Final score (§C6.1, verbatim): `20 − misses + timeBonus(0–8)`, floored at 0
- * (no fail state; the §C6 coin clamp min 5 guarantees a payout).
+ * Final score: `20 − misses + timeBonus(0–8)` (§C6.1) `+ CLEAR_BONUS` (20 in
+ * every mode — V4/G71b, see MEMORY.CLEAR_BONUS), floored at 0 (no fail
+ * state; the §C6 coin clamp min 5 guarantees a payout). Cap = 48 = §G5.4.
  * @param {number} misses non-matching reveals
  * @param {number} elapsed seconds to clear the board
  * @param {{pairs: number}} layout
